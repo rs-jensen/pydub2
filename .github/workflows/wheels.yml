@@ -3,7 +3,6 @@ name: wheels
 on:
   workflow_dispatch:
   push:
-    branches: [ci]
     tags: ["v*"]
 
 jobs:
