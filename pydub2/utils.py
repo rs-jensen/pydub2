@@ -3,15 +3,21 @@ from __future__ import division
 import json
 import os
 import re
+import struct
 import sys
+import subprocess
 from subprocess import Popen, PIPE
 from math import log, ceil
 from tempfile import TemporaryFile
 from warnings import warn
 from functools import wraps
 
+import _pydub2
+
 if sys.version_info >= (3, 0):
     basestring = str
+
+NOWINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 FRAME_WIDTHS = {
     8: 1,
@@ -239,9 +245,7 @@ def get_extra_info(stderr):
     return extra_info
 
 
-def mediainfo_json(filepath, read_ahead_limit=-1):
-    """Return json dictionary with media info(codec, duration, size, bitrate...) from filepath
-    """
+def _run_prober(filepath, read_ahead_limit):
     prober = get_prober_name()
     command_args = [
         "-v", "info",
@@ -249,7 +253,7 @@ def mediainfo_json(filepath, read_ahead_limit=-1):
         "-show_streams",
     ]
     try:
-        command_args += [fsdecode(filepath)]
+        command_args += ["-i", fsdecode(filepath)]
         stdin_parameter = None
         stdin_data = None
     except TypeError:
@@ -266,19 +270,98 @@ def mediainfo_json(filepath, read_ahead_limit=-1):
             file.close()
 
     command = [prober, '-of', 'json'] + command_args
-    res = Popen(command, stdin=stdin_parameter, stdout=PIPE, stderr=PIPE)
+    res = Popen(command, stdin=stdin_parameter, stdout=PIPE, stderr=PIPE, creationflags=NOWINDOW)
     output, stderr = res.communicate(input=stdin_data)
     output = output.decode("utf-8", 'ignore')
     stderr = stderr.decode("utf-8", 'ignore')
 
-    info = json.loads(output)
+    return json.loads(output), stderr
 
-    if not info:
-        # If ffprobe didn't give any information, just return it
-        # (for example, because the file doesn't exist)
-        return info
+def _native_info(data):
+    try:
+        d = _pydub2.Decoder(data)
+        frames = d.frames or len(d.read()) // (d.channels * d.width)
+    except RuntimeError:
+        return None
+    rate, channels = d.rate, d.channels
+    raw = "N/A"
+    bits = "0"
+    tag = 0
+    if data[:4] in (b"RIFF", b"RF64"):
+        i = data.find(b"fmt ")
+        tag, _, _, _, _, bits = struct.unpack_from("<HHIIHH", data, i + 8)
+        if tag == 0xFFFE:
+            tag = struct.unpack_from("<H", data, i + 32)[0]
+        if tag == 3:
+            name, fmt = "pcm_f%dle" % bits, "flt" if bits == 32 else "dbl"
+        elif bits == 8:
+            name, fmt = "pcm_u8", "u8"
+        else:
+            name, fmt = "pcm_s%dle" % bits, "s16" if bits == 16 else "s32"
+        format_name = "wav"
+        if tag == 1 and bits in (24, 32):
+            raw = str(bits)
+        bits = str(bits)
+    elif data[:4] == b"fLaC":
+        raw = str((((data[20] & 1) << 4) | (data[21] >> 4)) + 1)
+        name, fmt, format_name = "flac", "s16" if int(raw) <= 16 else "s32", "flac"
+    elif data[:4] == b"OggS":
+        name = "opus" if b"OpusHead" in data[:200] else "vorbis"
+        fmt, format_name = "fltp", "ogg"
+    else:
+        name, fmt, format_name = "mp3", "fltp", "mp3"
+    stream = {
+        "index": "0", "codec_name": name, "codec_type": "audio",
+        "codec_tag_string": "[%d][0][0][0]" % tag, "codec_tag": "0x%04x" % tag,
+        "sample_fmt": fmt, "sample_rate": str(rate), "channels": str(channels),
+        "bits_per_sample": bits, "bits_per_raw_sample": raw,
+        "duration": "%.6f" % (frames / rate),
+    }
+    return stream, {"nb_streams": "1", "format_name": format_name, "size": str(len(data))}
 
-    extra_info = get_extra_info(stderr)
+
+def _read_all(filepath):
+    try:
+        with open(fsdecode(filepath), "rb") as f:
+            return f.read()
+    except TypeError:
+        filepath.seek(0)
+        return filepath.read()
+    except OSError:
+        return None
+
+
+def _has_prober():
+    return which("ffprobe") or which("avprobe")
+
+
+def mediainfo_json(filepath, read_ahead_limit=-1):
+    """Return json dictionary with media info(codec, duration, size, bitrate...) from filepath
+    """
+    if _has_prober():
+        info, stderr = _run_prober(filepath, read_ahead_limit)
+        if not info:
+            return info
+        extra_info = get_extra_info(stderr)
+    else:
+        data = _read_all(filepath)
+        if data is None:
+            return {}
+        native = _native_info(data)
+        if native:
+            stream, fmt = native
+            for k in ("index", "channels", "bits_per_sample"):
+                stream[k] = int(stream[k])
+            raw = stream["bits_per_raw_sample"]
+            info = {"streams": [{k: v for k, v in stream.items() if v != "N/A"}], "format": dict(fmt, nb_streams=1)}
+            extra_info = {0: [stream["sample_fmt"] + (" (%s bit)" % raw if raw != "N/A" else "")]}
+        else:
+            p = Popen([get_encoder_name(), "-read_ahead_limit", "-1", "-i", "cache:pipe:0"],
+                      stdin=PIPE, stdout=PIPE, stderr=PIPE, creationflags=NOWINDOW)
+            extra_info = get_extra_info(p.communicate(input=data)[1].decode("utf-8", "ignore"))
+            info = {"streams": [
+                {"index": i, "codec_type": "audio", "codec_name": t[t.index("Audio") + 1].split()[0],
+                 "bits_per_sample": 0} for i, t in extra_info.items() if "Audio" in t[:2]]}
 
     audio_streams = [x for x in info['streams'] if x['codec_type'] == 'audio']
     if len(audio_streams) == 0:
@@ -292,8 +375,8 @@ def mediainfo_json(filepath, read_ahead_limit=-1):
             stream[prop] = value
 
     for token in extra_info[stream['index']]:
-        m = re.match('([su]([0-9]{1,2})p?) \(([0-9]{1,2}) bit\)$', token)
-        m2 = re.match('([su]([0-9]{1,2})p?)( \(default\))?$', token)
+        m = re.match(r'([su]([0-9]{1,2})p?) \(([0-9]{1,2}) bit\)$', token)
+        m2 = re.match(r'([su]([0-9]{1,2})p?)( \(default\))?$', token)
         if m:
             set_property(stream, 'sample_fmt', m.group(1))
             set_property(stream, 'bits_per_sample', int(m.group(2)))
@@ -302,11 +385,11 @@ def mediainfo_json(filepath, read_ahead_limit=-1):
             set_property(stream, 'sample_fmt', m2.group(1))
             set_property(stream, 'bits_per_sample', int(m2.group(2)))
             set_property(stream, 'bits_per_raw_sample', int(m2.group(2)))
-        elif re.match('(flt)p?( \(default\))?$', token):
+        elif re.match(r'(flt)p?( \(default\))?$', token):
             set_property(stream, 'sample_fmt', token)
             set_property(stream, 'bits_per_sample', 32)
             set_property(stream, 'bits_per_raw_sample', 32)
-        elif re.match('(dbl)p?( \(default\))?$', token):
+        elif re.match(r'(dbl)p?( \(default\))?$', token):
             set_property(stream, 'sample_fmt', token)
             set_property(stream, 'bits_per_sample', 64)
             set_property(stream, 'bits_per_raw_sample', 64)
@@ -316,22 +399,28 @@ def mediainfo_json(filepath, read_ahead_limit=-1):
 def mediainfo(filepath):
     """Return dictionary with media info(codec, duration, size, bitrate...) from filepath
     """
+    if not _has_prober():
+        data = _read_all(filepath)
+        native = data and _native_info(data)
+        if native:
+            return {**native[0], **native[1]}
 
     prober = get_prober_name()
-    command_args = [
-        "-v", "quiet",
-        "-show_format",
-        "-show_streams",
-        filepath
-    ]
+    try:
+        source, data = ["-i", fsdecode(filepath)], None
+    except TypeError:
+        filepath.seek(0)
+        source, data = ["-read_ahead_limit", "-1", "-i", "cache:pipe:0"], filepath.read()
+    command_args = ["-v", "quiet", "-show_format", "-show_streams"] + source
+    stdin = PIPE if data else None
 
     command = [prober, '-of', 'old'] + command_args
-    res = Popen(command, stdout=PIPE)
-    output = res.communicate()[0].decode("utf-8")
+    res = Popen(command, stdin=stdin, stdout=PIPE, creationflags=NOWINDOW)
+    output = res.communicate(data)[0].decode("utf-8", "ignore")
 
     if res.returncode != 0:
         command = [prober] + command_args
-        output = Popen(command, stdout=PIPE).communicate()[0].decode("utf-8")
+        output = Popen(command, stdin=stdin, stdout=PIPE, creationflags=NOWINDOW).communicate(data)[0].decode("utf-8", "ignore")
 
     rgx = re.compile(r"(?:(?P<inner_dict>.*?):)?(?P<key>.*?)\=(?P<value>.*?)$")
     info = {}
@@ -340,11 +429,9 @@ def mediainfo(filepath):
         output = output.replace("\r", "")
 
     for line in output.split("\n"):
-        # print(line)
         mobj = rgx.match(line)
 
         if mobj:
-            # print(mobj.groups())
             inner_dict, key, value = mobj.groups()
 
             if inner_dict:
@@ -377,8 +464,8 @@ def cache_codecs(function):
 def get_supported_codecs():
     encoder = get_encoder_name()
     command = [encoder, "-codecs"]
-    res = Popen(command, stdout=PIPE, stderr=PIPE)
-    output = res.communicate()[0].decode("utf-8")
+    res = Popen(command, stdout=PIPE, stderr=PIPE, creationflags=NOWINDOW)
+    output = res.communicate()[0].decode("utf-8", "ignore")
     if res.returncode != 0:
         return []
 
@@ -412,18 +499,20 @@ def get_supported_encoders():
     return get_supported_codecs()[1]
 
 def stereo_to_ms(audio_segment):
-	'''
-	Left-Right -> Mid-Side
-	'''
-	channel = audio_segment.split_to_mono()
-	channel = [channel[0].overlay(channel[1]), channel[0].overlay(channel[1].invert_phase())]
-	return AudioSegment.from_mono_audiosegments(channel[0], channel[1])
+    '''
+    Left-Right -> Mid-Side
+    '''
+    from .audio_segment import AudioSegment
+    channel = audio_segment.split_to_mono()
+    channel = [channel[0].overlay(channel[1]), channel[0].overlay(channel[1].invert_phase())]
+    return AudioSegment.from_mono_audiosegments(channel[0], channel[1])
 
 def ms_to_stereo(audio_segment):
-	'''
-	Mid-Side -> Left-Right
-	'''
-	channel = audio_segment.split_to_mono()
-	channel = [channel[0].overlay(channel[1]) - 3, channel[0].overlay(channel[1].invert_phase()) - 3]
-	return AudioSegment.from_mono_audiosegments(channel[0], channel[1])
+    '''
+    Mid-Side -> Left-Right
+    '''
+    from .audio_segment import AudioSegment
+    channel = audio_segment.split_to_mono()
+    channel = [channel[0].overlay(channel[1]) - 3, channel[0].overlay(channel[1].invert_phase()) - 3]
+    return AudioSegment.from_mono_audiosegments(channel[0], channel[1])
 
