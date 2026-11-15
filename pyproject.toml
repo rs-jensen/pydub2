@@ -20,5 +20,5 @@ build-dir = "build/{wheel_tag}"
 build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-* cp314t-*"
 skip = "*-win32 *_i686"
 archs = ["auto64"]
-test-requires = ["pytest", "audioop-lts"]
-test-command = "pytest {project}/tests/test_build.py {project}/tests/test_pcm.py"
+test-requires = ["pytest", "numpy", "pydub", "audioop-lts"]
+test-command = "pytest {project}/tests"
