@@ -1,0 +1,24 @@
+[build-system]
+requires = ["scikit-build-core>=0.11", "nanobind>=2.0"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "pydub2"
+version = "0.1.0"
+description = "Drop-in replacement for pydub that reads and writes audio without ffmpeg"
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY.md"]
+requires-python = ">=3.9"
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+wheel.packages = ["pydub2"]
+install.components = ["python"]
+build-dir = "build/{wheel_tag}"
+
+[tool.cibuildwheel]
+build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-* cp314t-*"
+skip = "*-win32 *_i686"
+archs = ["auto64"]
+test-requires = ["pytest", "audioop-lts"]
+test-command = "pytest {project}/tests/test_build.py {project}/tests/test_pcm.py"
