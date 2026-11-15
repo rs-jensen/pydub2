@@ -19,7 +19,7 @@ static Audio audio(nb::bytes data, int rate, int channels, int width) {
         throw std::invalid_argument("bad rate, channels or sample width");
     Audio a;
     a.data = str(data);
-    if (a.data.size() % (channels * width))
+    if (a.data.size() % ((size_t)channels * width))
         throw std::invalid_argument("data is not a whole number of frames");
     a.rate = rate;
     a.channels = channels;
@@ -40,11 +40,13 @@ static nb::list ranges(const Ranges &r) {
 
 NB_MODULE(_pydub2, m) {
     m.def("decode", [](nb::bytes data) {
-        std::string buf = str(data);
         Audio a;
         {
+            // bytes cant change under us, no copy needed
+            const uint8_t *buf = (const uint8_t *)data.c_str();
+            size_t len = data.size();
             nb::gil_scoped_release g;
-            a = decode((const uint8_t *)buf.data(), buf.size());
+            a = decode(buf, len);
         }
         return nb::make_tuple(bytes(a.data), a.rate, a.channels, a.width);
     });
@@ -162,6 +164,8 @@ NB_MODULE(_pydub2, m) {
 
     m.def("resample", [](nb::bytes data, int rate, int channels, int width, int new_rate) {
         Audio a = audio(data, rate, channels, width);
+        if (new_rate < 1)
+            throw std::invalid_argument("bad rate");
         {
             nb::gil_scoped_release g;
             a = resample(a, new_rate);

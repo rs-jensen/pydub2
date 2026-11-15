@@ -185,6 +185,9 @@ class AudioSegment(object):
             except:
                 data = data.tostring()
 
+        if isinstance(data, (bytearray, memoryview)):
+            data = bytes(data)
+
         # prevent partial specification of arguments
         if any(audio_params) and None in audio_params:
             raise MissingAudioParameter("Either all audio parameters or no parameter must be specified")
@@ -508,6 +511,8 @@ class AudioSegment(object):
             filename = fsdecode(file)
         except TypeError:
             filename = None
+        if isinstance(file, bytes):
+            file = filename
         file, close_file = _fd_or_path_or_tempfile(file, 'rb', tempfile=False)
 
         if format:
@@ -552,6 +557,9 @@ class AudioSegment(object):
             else:
                 return cls(data=file.read(), metadata=metadata)[start_second*1000:(start_second+duration)*1000]
 
+        if is_format("wav"):
+            # pydub rewinds a wav
+            file.seek(0)
         data = file.read()
         if close_file:
             file.close()
@@ -670,7 +678,8 @@ class AudioSegment(object):
             rate = 0
             if bitrate:
                 bitrate = str(bitrate).lower()
-                rate = int(float(bitrate[:-1]) * 1000) if bitrate.endswith("k") else int(bitrate)
+                unit = {"k": 1000, "m": 1000000}.get(bitrate[-1])
+                rate = int(float(bitrate[:-1]) * unit) if unit else int(bitrate)
             out_f.write(_pydub2.encode(self._data, self.frame_rate, self.channels, self.sample_width, format, rate))
             out_f.seek(0)
             return out_f

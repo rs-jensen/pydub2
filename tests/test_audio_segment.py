@@ -168,3 +168,23 @@ def test_export_native(fmt):
     assert out.channels == 2 and abs(len(out) - len(s)) <= 30
     if fmt == "flac":
         same(s, out)
+
+
+def test_export_bitrate_units():
+    s = pydub2.AudioSegment(make_wav(2, 2, rate=48000))
+    sizes = [len(s.export(format="opus", bitrate=b).read()) for b in ("0.064M", "64K", 64000, None)]
+    assert sizes[0] == sizes[1] == sizes[2] < sizes[3]
+
+
+def test_from_file_bytes_path(tmp_path):
+    path = tmp_path / "x.flac"
+    s = pydub2.AudioSegment(make_wav(2, 2))
+    s.export(str(path), format="flac").close()
+    same(s, pydub2.AudioSegment.from_file(str(path).encode()))
+
+
+def test_from_file_rewinds_wav():
+    wav = make_wav(2, 2)
+    f = io.BytesIO(wav)
+    f.seek(10)
+    same(pydub.AudioSegment.from_file(io.BytesIO(wav), format="wav"), pydub2.AudioSegment.from_file(f, format="wav"))

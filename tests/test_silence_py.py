@@ -1,7 +1,7 @@
 import array
 import math
-import os
 
+import numpy as np
 import pytest
 
 pydub = pytest.importorskip("pydub")
@@ -10,6 +10,7 @@ from pydub import AudioSegment as OldSegment
 
 from pydub2 import AudioSegment
 from pydub2 import silence
+from test_vad import rate, talk
 
 
 def make(rate=8000, channels=1):
@@ -63,21 +64,39 @@ def test_all_silent():
     assert silence.split_on_speech(new) == []
 
 
-def speech():
-    path = os.path.join(os.path.dirname(__file__), "speech.wav")
-    if not os.path.exists(path):
-        pytest.skip("no speech.wav")
-    return AudioSegment.from_file(path)
+def voice(frame_rate=16000, channels=1):
+    x = np.concatenate([np.zeros(rate * 2), talk(2), np.zeros(rate * 2)])
+    seg = AudioSegment((x * 32767).astype("<i2").tobytes(), sample_width=2, frame_rate=rate, channels=1)
+    return seg.set_frame_rate(frame_rate).set_channels(channels)
 
 
 def test_detect_speech():
-    seg = speech()
+    seg = voice()
     r = silence.detect_speech(seg)
-    assert r
+    assert len(r) == 1
     assert all(0 <= s < e <= len(seg) for s, e in r)
+    assert abs(r[0][0] - 2000) < 100
+    assert abs(r[0][1] - 4000) < 300
+
+
+def test_detect_speech_44100_stereo():
+    a = silence.detect_speech(voice())
+    b = silence.detect_speech(voice(44100, 2))
+    assert len(a) == len(b) == 1
+    assert abs(a[0][0] - b[0][0]) < 100
+    assert abs(a[0][1] - b[0][1]) < 100
 
 
 def test_split_on_speech():
-    seg = speech()
+    seg = voice()
     parts = silence.split_on_speech(seg, keep_silence=0)
     assert len(parts) == len(silence.detect_speech(seg))
+
+
+@pytest.mark.parametrize("wrap", [bytearray, memoryview])
+def test_bytearray_and_memoryview_data(wrap):
+    raw = b"\x01\x00\x02\x00" * 100
+    seg = AudioSegment(wrap(raw), sample_width=2, frame_rate=8000, channels=1)
+    assert seg.raw_data == raw
+    assert (seg + seg).raw_data == raw * 2
+    assert seg.max == 2

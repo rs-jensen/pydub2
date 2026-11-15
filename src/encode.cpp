@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cstring>
+#include <exception>
 #include <stdexcept>
 
 #include <FLAC/stream_encoder.h>
@@ -45,6 +46,8 @@ static void put16(std::string &s, uint16_t v) {
 
 // same bytes as the wave module writes for pydub
 static std::string wav(const Audio &a) {
+    if (a.data.size() > UINT32_MAX - 36)
+        throw std::runtime_error("too long for wav");
     uint32_t n = a.data.size();
     std::string out = "RIFF";
     put32(out, 36 + n + (n & 1));
@@ -77,8 +80,12 @@ struct Sink {
 static FLAC__StreamEncoderWriteStatus flac_write(const FLAC__StreamEncoder *, const FLAC__byte buf[], size_t len,
                                                  uint32_t, uint32_t, void *user) {
     Sink *s = (Sink *)user;
-    if (s->pos + len > s->out.size())
-        s->out.resize(s->pos + len);
+    try {
+        if (s->pos + len > s->out.size())
+            s->out.resize(s->pos + len);
+    } catch (...) {
+        return FLAC__STREAM_ENCODER_WRITE_STATUS_FATAL_ERROR;
+    }
     memcpy(&s->out[s->pos], buf, len);
     s->pos += len;
     return FLAC__STREAM_ENCODER_WRITE_STATUS_OK;
@@ -96,6 +103,7 @@ static FLAC__StreamEncoderTellStatus flac_tell(const FLAC__StreamEncoder *, FLAC
 
 static std::string flac(const Audio &a) {
     size_t frames = a.data.size() / a.width / a.channels;
+    std::vector<FLAC__int32> buf(4096 * a.channels);
     FLAC__StreamEncoder *enc = FLAC__stream_encoder_new();
     FLAC__stream_encoder_set_channels(enc, a.channels);
     FLAC__stream_encoder_set_bits_per_sample(enc, a.width * 8);
@@ -104,7 +112,6 @@ static std::string flac(const Audio &a) {
     Sink s;
     bool ok = FLAC__stream_encoder_init_stream(enc, flac_write, flac_seek, flac_tell, nullptr, &s) ==
               FLAC__STREAM_ENCODER_INIT_STATUS_OK;
-    std::vector<FLAC__int32> buf(4096 * a.channels);
     for (size_t f = 0; ok && f < frames; f += 4096) {
         size_t n = std::min(frames - f, (size_t)4096);
         for (size_t i = 0; i < n * a.channels; i++)
@@ -139,6 +146,7 @@ static void blocks(vorbis_dsp_state *vd, vorbis_block *vb, ogg_stream_state *os,
 }
 
 static std::string ogg(const Audio &a, int bitrate) {
+    std::vector<float> pcm = floats(a);
     vorbis_info vi;
     vorbis_info_init(&vi);
     // q 3 like ffmpeg when no bitrate is given
@@ -158,38 +166,48 @@ static std::string ogg(const Audio &a, int bitrate) {
     ogg_stream_init(&os, 1);
 
     std::string out;
-    ogg_packet h1, h2, h3;
-    vorbis_analysis_headerout(&vd, &vc, &h1, &h2, &h3);
-    ogg_stream_packetin(&os, &h1);
-    ogg_stream_packetin(&os, &h2);
-    ogg_stream_packetin(&os, &h3);
-    pages(&os, out, true);
+    std::exception_ptr ex;
+    try {
+        ogg_packet h1, h2, h3;
+        vorbis_analysis_headerout(&vd, &vc, &h1, &h2, &h3);
+        ogg_stream_packetin(&os, &h1);
+        ogg_stream_packetin(&os, &h2);
+        ogg_stream_packetin(&os, &h3);
+        pages(&os, out, true);
 
-    std::vector<float> pcm = floats(a);
-    size_t frames = pcm.size() / a.channels;
-    for (size_t f = 0; f < frames; f += 4096) {
-        int n = std::min(frames - f, (size_t)4096);
-        float **buf = vorbis_analysis_buffer(&vd, n);
-        for (int i = 0; i < n; i++)
-            for (int c = 0; c < a.channels; c++)
-                buf[c][i] = pcm[(f + i) * a.channels + c];
-        vorbis_analysis_wrote(&vd, n);
+        size_t frames = pcm.size() / a.channels;
+        for (size_t f = 0; f < frames; f += 4096) {
+            int n = std::min(frames - f, (size_t)4096);
+            float **buf = vorbis_analysis_buffer(&vd, n);
+            for (int i = 0; i < n; i++)
+                for (int c = 0; c < a.channels; c++)
+                    buf[c][i] = pcm[(f + i) * a.channels + c];
+            vorbis_analysis_wrote(&vd, n);
+            blocks(&vd, &vb, &os, out);
+        }
+        vorbis_analysis_wrote(&vd, 0);
         blocks(&vd, &vb, &os, out);
+        pages(&os, out, true);
+    } catch (...) {
+        ex = std::current_exception();
     }
-    vorbis_analysis_wrote(&vd, 0);
-    blocks(&vd, &vb, &os, out);
-    pages(&os, out, true);
 
     ogg_stream_clear(&os);
     vorbis_block_clear(&vb);
     vorbis_dsp_clear(&vd);
     vorbis_comment_clear(&vc);
     vorbis_info_clear(&vi);
+    if (ex)
+        std::rethrow_exception(ex);
     return out;
 }
 
 static int opus_write(void *user, const unsigned char *p, opus_int32 len) {
-    ((std::string *)user)->append((const char *)p, len);
+    try {
+        ((std::string *)user)->append((const char *)p, len);
+    } catch (...) {
+        return 1;
+    }
     return 0;
 }
 
@@ -199,6 +217,7 @@ static int opus_close(void *) {
 
 static std::string opus(const Audio &a, int bitrate) {
     std::string out;
+    std::vector<float> pcm = floats(a);
     OpusEncCallbacks cb = {opus_write, opus_close};
     OggOpusComments *com = ope_comments_create();
     int err = 0;
@@ -208,9 +227,10 @@ static std::string opus(const Audio &a, int bitrate) {
         throw std::runtime_error("cant encode this");
     if (bitrate)
         err = ope_encoder_ctl(enc, OPUS_SET_BITRATE(bitrate));
-    std::vector<float> pcm = floats(a);
-    if (!err)
-        err = ope_encoder_write_float(enc, pcm.data(), pcm.size() / a.channels);
+    // it takes the frame count as an int
+    size_t frames = pcm.size() / a.channels, step = 1 << 20;
+    for (size_t f = 0; !err && f < frames; f += step)
+        err = ope_encoder_write_float(enc, pcm.data() + f * a.channels, std::min(frames - f, step));
     if (!err)
         err = ope_encoder_drain(enc);
     ope_encoder_destroy(enc);

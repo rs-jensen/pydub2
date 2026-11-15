@@ -113,13 +113,13 @@ Ranges detect_speech(const Audio &in, double threshold, int min_speech_ms, int m
     std::vector<float> probs = speech_probs(x);
 
     // get_speech_timestamps from silero with no padding and no max speech length, in samples
-    long min_speech = 16L * min_speech_ms, min_silence = 16L * min_silence_ms;
+    long long min_speech = 16LL * min_speech_ms, min_silence = 16LL * min_silence_ms;
     double neg = threshold - 0.15;
     Ranges out;
     bool on = false;
-    long start = 0, temp_end = 0;
+    long long start = 0, temp_end = 0;
     for (size_t i = 0; i < probs.size(); i++) {
-        long pos = 512L * i;
+        long long pos = 512LL * i;
         if (probs[i] >= threshold)
             temp_end = 0;
         if (probs[i] >= threshold && !on) {
@@ -138,7 +138,7 @@ Ranges detect_speech(const Audio &in, double threshold, int min_speech_ms, int m
             temp_end = 0;
         }
     }
-    if (on && (long)n - start > min_speech)
+    if (on && (long long)n - start > min_speech)
         out.push_back({(int)(start / 16), (int)(n / 16)});
     return out;
 }

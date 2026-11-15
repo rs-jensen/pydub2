@@ -39,16 +39,18 @@ def to_wav(converter, path=None, data=None, format=None, codec=None, parameters=
         p = run(converter, opts + ["-i", "pipe:0"] + out, data, format or "this file")
         if p.returncode != 0 or not p.stdout:
             # mp4 with moov at the end cant be read from a pipe
-            with tempfile.NamedTemporaryFile(delete=False) as f:
-                f.write(data)
-            try:
-                p = run(converter, opts + ["-i", f.name] + out, None, format or "this file")
-            finally:
-                os.unlink(f.name)
+            with tempfile.TemporaryDirectory() as d:
+                name = os.path.join(d, "in")
+                with open(name, "wb") as f:
+                    f.write(data)
+                p = run(converter, opts + ["-i", name] + out, None, format or "this file")
     if p.returncode != 0 or not p.stdout:
         raise CouldntDecodeError("cant decode this file: " + p.stderr.decode(errors="ignore")[-500:])
     wav = bytearray(p.stdout)
-    i = wav.find(b"data")
+    i = 12
+    while wav[i:i + 4] != b"data":
+        size = struct.unpack_from("<I", wav, i + 4)[0]
+        i += 8 + size + size % 2
     # ffmpeg cant seek back on a pipe so the sizes in the header are 0xffffffff
     wav[4:8] = struct.pack("<I", len(wav) - 8)
     wav[i + 4:i + 8] = struct.pack("<I", len(wav) - i - 8)

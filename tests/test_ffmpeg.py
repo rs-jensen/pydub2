@@ -51,6 +51,14 @@ def test_mp3_tags():
     assert b"hello" in mp3
 
 
+def test_tag_with_data_in_it(tmp_path):
+    f = tmp_path / "a.mp3"
+    f.write_bytes(_ffmpeg.from_wav(ff, sine(), "mp3", tags={"artist": "data"}))
+    wav = _ffmpeg.to_wav(ff, path=str(f), duration=0.5)
+    assert b"IART" in wav
+    assert abs(info(wav)[2] - 0.5) < 0.01
+
+
 def test_missing_converter():
     with pytest.raises(FileNotFoundError, match="ffmpeg not found, pydub2 needs it for mp3"):
         _ffmpeg.from_wav("nope-not-here", sine(), "mp3")

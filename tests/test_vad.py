@@ -43,3 +43,16 @@ def test_silence_and_noise():
     assert speech(np.zeros(rate * 3)) == []
     noise = np.random.default_rng(1).uniform(-0.5, 0.5, rate * 3)
     assert speech(noise) == []
+
+
+def test_short():
+    assert _pydub2.detect_speech(b"", rate, 1, 2, 0.5, 250, 100) == []
+    assert _pydub2.detect_speech(b"\1\0" * 100, rate, 1, 2, 0.5, 250, 100) == []
+
+
+def test_other_rate():
+    x = np.concatenate([np.zeros(rate), talk(2), np.zeros(rate)])
+    data = np.repeat((x * 32767).astype("<i2"), 3).tobytes()
+    r = _pydub2.detect_speech(data, rate * 3, 1, 2, 0.5, 250, 100)
+    assert len(r) == 1
+    assert abs(r[0][0] - 1000) < 100

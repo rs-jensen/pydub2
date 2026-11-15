@@ -1,5 +1,8 @@
+#include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstring>
+#include <memory>
 #include <stdexcept>
 
 #define DR_WAV_IMPLEMENTATION
@@ -40,6 +43,7 @@ static Audio read_wav(const uint8_t *buf, size_t len) {
     if (!drwav_init_memory(&wav, buf, len, NULL)) {
         fail();
     }
+    std::unique_ptr<drwav, drwav_result (*)(drwav *)> done(&wav, drwav_uninit);
     Audio a;
     a.rate = wav.sampleRate;
     a.channels = wav.channels;
@@ -48,8 +52,10 @@ static Audio read_wav(const uint8_t *buf, size_t len) {
     size_t n = wav.totalPCMFrameCount;
     size_t frame = wav.fmt.blockAlign;
     if (tag == DR_WAVE_FORMAT_PCM && (bits == 8 || bits == 16 || bits == 24 || bits == 32) && frame == (size_t)a.channels * bits / 8) {
-        a.data.resize(n * frame);
-        a.data.resize(drwav_read_raw(&wav, n * frame, &a.data[0]));
+        // the header can claim any size, the file cant hold more than len
+        size_t bytes = std::min(n * frame, len);
+        a.data.resize(bytes);
+        a.data.resize(drwav_read_raw(&wav, bytes, &a.data[0]));
         if (bits == 8) {
             for (char &c : a.data) {
                 c ^= 0x80;
@@ -73,15 +79,14 @@ static Audio read_wav(const uint8_t *buf, size_t len) {
             put(a.data, tmp, k * a.channels, 4);
         }
     } else {
-        drwav_uninit(&wav);
         fail();
     }
-    drwav_uninit(&wav);
     return a;
 }
 
 static Audio read_flac(const uint8_t *buf, size_t len) {
-    drflac *f = drflac_open_memory(buf, len, NULL);
+    std::unique_ptr<drflac, void (*)(drflac *)> done(drflac_open_memory(buf, len, NULL), drflac_close);
+    drflac *f = done.get();
     if (!f) {
         fail();
     }
@@ -101,15 +106,56 @@ static Audio read_flac(const uint8_t *buf, size_t len) {
             a.data.append((const char *)s32, k * a.channels * 4);
         }
     }
-    drflac_close(f);
     return a;
 }
 
+// dr_mp3 gives up on a short Info frame, so find it here. ffmpeg drops the frame and the lame delay and padding
+static size_t mp3_tag(const uint8_t *buf, size_t len, size_t &skip, size_t &cut) {
+    size_t at = 0;
+    if (len >= 10 && !memcmp(buf, "ID3", 3)) {
+        at = 10 + ((buf[6] & 127) << 21 | (buf[7] & 127) << 14 | (buf[8] & 127) << 7 | (buf[9] & 127)) + (buf[5] & 16 ? 10 : 0);
+    }
+    if (at + 4 > len || buf[at] != 0xff) {
+        return 0;
+    }
+    drmp3dec dec;
+    drmp3dec_init(&dec);
+    drmp3dec_frame_info fi;
+    const uint8_t *f = buf + at;
+    if (!drmp3dec_decode_frame(&dec, f, (int)std::min(len - at, (size_t)INT_MAX), NULL, &fi) || fi.layer != 3) {
+        return 0;
+    }
+    int side = (f[1] & 8) ? (fi.channels == 1 ? 17 : 32) : (fi.channels == 1 ? 9 : 17);
+    int o = 4 + (f[1] & 1 ? 0 : 2) + side;
+    if (o + 8 > fi.frame_bytes || (memcmp(f + o, "Xing", 4) && memcmp(f + o, "Info", 4))) {
+        return 0;
+    }
+    int flags = f[o + 7];
+    o += 8;
+    const int sizes[] = {4, 4, 100, 4};
+    for (int i = 0; i < 4; i++) {
+        if (flags >> i & 1) {
+            o += sizes[i];
+        }
+    }
+    if (o + 24 <= fi.frame_bytes && (!memcmp(f + o, "LAME", 4) || !memcmp(f + o, "Lavf", 4) || !memcmp(f + o, "Lavc", 4))) {
+        skip = (f[o + 21] << 4 | f[o + 22] >> 4) + 528 + 1;
+        int pad = (f[o + 22] & 15) << 8 | f[o + 23];
+        cut = pad > 529 ? pad - 529 : 0;
+    }
+    return at + fi.frame_bytes;
+}
+
 static Audio read_mp3(const uint8_t *buf, size_t len) {
+    size_t skip = 0, cut = 0;
+    size_t at = mp3_tag(buf, len, skip, cut);
+    buf += at;
+    len -= at;
     drmp3 mp3;
     if (!drmp3_init_memory(&mp3, buf, len, NULL)) {
         fail();
     }
+    std::unique_ptr<drmp3, void (*)(drmp3 *)> done(&mp3, drmp3_uninit);
     Audio a;
     a.rate = mp3.sampleRate;
     a.channels = mp3.channels;
@@ -119,13 +165,18 @@ static Audio read_mp3(const uint8_t *buf, size_t len) {
     while ((k = drmp3_read_pcm_frames_f32(&mp3, 4096 / a.channels, tmp)) > 0) {
         put(a.data, tmp, k * a.channels, 2);
     }
-    drmp3_uninit(&mp3);
+    size_t b = a.channels * 2;
+    a.data.erase(0, std::min(a.data.size(), skip * b));
+    a.data.resize(a.data.size() - std::min(a.data.size(), cut * b));
     return a;
 }
 
 static Audio read_vorbis(const uint8_t *buf, size_t len) {
-    int err = 0;
-    stb_vorbis *v = stb_vorbis_open_memory(buf, (int)len, &err, NULL);
+    if (len > INT_MAX) {
+        fail();
+    }
+    std::unique_ptr<stb_vorbis, void (*)(stb_vorbis *)> done(stb_vorbis_open_memory(buf, (int)len, NULL, NULL), stb_vorbis_close);
+    stb_vorbis *v = done.get();
     if (!v) {
         fail();
     }
@@ -139,13 +190,12 @@ static Audio read_vorbis(const uint8_t *buf, size_t len) {
     while ((k = stb_vorbis_get_samples_float_interleaved(v, a.channels, tmp, 4096 / a.channels * a.channels)) > 0) {
         put(a.data, tmp, k * a.channels, 4);
     }
-    stb_vorbis_close(v);
     return a;
 }
 
 static Audio read_opus(const uint8_t *buf, size_t len) {
-    int err = 0;
-    OggOpusFile *of = op_open_memory(buf, len, &err);
+    std::unique_ptr<OggOpusFile, void (*)(OggOpusFile *)> done(op_open_memory(buf, len, NULL), op_free);
+    OggOpusFile *of = done.get();
     if (!of) {
         fail();
     }
@@ -154,16 +204,20 @@ static Audio read_opus(const uint8_t *buf, size_t len) {
     a.channels = op_channel_count(of, -1);
     a.width = 4;
     float tmp[5760 * 2];
-    int k;
-    while ((k = op_read_float(of, tmp, 5760 * 2, NULL)) != 0) {
-        if (k < 0) {
-            op_free(of);
+    int k, link;
+    while ((k = op_read_float(of, tmp, 5760 * 2, &link)) != 0) {
+        // a chained file can change channel count, k is sized for the new one
+        if (k < 0 || op_channel_count(of, link) != a.channels) {
             fail();
         }
         put(a.data, tmp, k * a.channels, 4);
     }
-    op_free(of);
     return a;
+}
+
+// the first packet sits after the page header and its segment table
+static bool ogg_has(const uint8_t *buf, size_t len, const char *magic, size_t n) {
+    return len >= 27 && len >= 27 + buf[26] + n && !memcmp(buf, "OggS", 4) && !memcmp(buf + 27 + buf[26], magic, n);
 }
 
 Audio decode(const uint8_t *buf, size_t len) {
@@ -172,16 +226,16 @@ Audio decode(const uint8_t *buf, size_t len) {
         a = read_wav(buf, len);
     } else if (len >= 4 && !memcmp(buf, "fLaC", 4)) {
         a = read_flac(buf, len);
-    } else if (len >= 40 && !memcmp(buf, "OggS", 4) && !memcmp(buf + 27 + buf[26], "OpusHead", 8)) {
+    } else if (ogg_has(buf, len, "OpusHead", 8)) {
         a = read_opus(buf, len);
-    } else if (len >= 40 && !memcmp(buf, "OggS", 4) && !memcmp(buf + 27 + buf[26], "\x01vorbis", 7)) {
+    } else if (ogg_has(buf, len, "\x01vorbis", 7)) {
         a = read_vorbis(buf, len);
     } else if (len >= 4 && (!memcmp(buf, "ID3", 3) || (buf[0] == 0xff && (buf[1] & 0xe0) == 0xe0))) {
         a = read_mp3(buf, len);
     } else {
         fail();
     }
-    if (a.data.empty() || a.channels < 1) {
+    if ((a.data.empty() && memcmp(buf, "RIFF", 4)) || a.channels < 1 || a.rate < 1) {
         fail();
     }
     return a;
