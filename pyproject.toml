@@ -1,24 +1,58 @@
 [build-system]
-requires = ["scikit-build-core>=0.11", "nanobind>=2.0"]
+requires = ["scikit-build-core>=0.11", "nanobind>=3.1,<4"]
 build-backend = "scikit_build_core.build"
 
 [project]
 name = "pydub2"
 version = "0.1.0"
 description = "Drop-in replacement for pydub that reads and writes audio without ffmpeg"
+readme = "README.md"
 license = "MIT"
-license-files = ["LICENSE", "THIRD_PARTY.md"]
+license-files = ["LICENSE", "THIRD_PARTY.md", "licenses/*"]
 requires-python = ">=3.9"
+authors = [{ name = "Rasmus Stisen" }]
+keywords = ["audio", "pydub", "ffmpeg", "wav", "flac", "ogg", "opus", "mp3", "loudness", "lufs", "vad", "silence"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Free Threading :: 2 - Beta",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Sound/Audio :: Analysis",
+    "Topic :: Multimedia :: Sound/Audio :: Conversion",
+    "Topic :: Multimedia :: Sound/Audio :: Editors",
+]
+
+[project.optional-dependencies]
+mp3 = ["pydub2-mp3"]
+
+[project.urls]
+Homepage = "https://github.com/rs-jensen/pydub2"
+Source = "https://github.com/rs-jensen/pydub2"
+Documentation = "https://github.com/rs-jensen/pydub2/blob/HEAD/docs/differences.md"
+Issues = "https://github.com/rs-jensen/pydub2/issues"
 
 [tool.scikit-build]
 minimum-version = "build-system.requires"
 wheel.packages = ["pydub2"]
 install.components = ["python"]
 build-dir = "build/{wheel_tag}"
+sdist.exclude = [".github", "build", "mp3", "tests/pydub_suite", "PLAN.md", "HACKING.md"]
 
 [tool.cibuildwheel]
 build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-* cp314t-*"
 skip = "*-win32 *_i686"
 archs = ["auto64"]
-test-requires = ["pytest", "audioop-lts"]
+test-requires = ["pytest", "audioop-lts; python_version >= '3.13'"]
 test-command = "pytest {project}/tests/test_build.py {project}/tests/test_pcm.py"
