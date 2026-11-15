@@ -377,10 +377,13 @@ def cache_codecs(function):
 def get_supported_codecs():
     encoder = get_encoder_name()
     command = [encoder, "-codecs"]
-    res = Popen(command, stdout=PIPE, stderr=PIPE)
+    try:
+        res = Popen(command, stdout=PIPE, stderr=PIPE)
+    except OSError:
+        return set(), set()
     output = res.communicate()[0].decode("utf-8")
     if res.returncode != 0:
-        return []
+        return set(), set()
 
     if sys.platform == 'win32':
         output = output.replace("\r", "")
