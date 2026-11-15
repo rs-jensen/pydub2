@@ -81,3 +81,13 @@ def test_empty_input_gives_empty_output():
 def test_same_rate_returns_input():
     data = sine(44100, 1000, 0.1)
     assert resample(data, 44100, 1, 2, 44100) == data
+
+
+def test_24_bit_same_as_32():
+    data = sine(44100, 1000, 0.5, width=4, channels=2)
+    narrow = np.frombuffer(data, np.uint8).reshape(-1, 4)[:, 1:].tobytes()
+    out = np.frombuffer(resample(narrow, 44100, 2, 3, 16000), np.uint8).reshape(-1, 3)
+    ref = to_array(resample(data, 44100, 2, 4, 16000), 4, 2).ravel()
+    got = np.array([int.from_bytes(bytes(r), "little", signed=True) for r in out], float) * 256
+    assert len(got) == len(ref)
+    assert np.abs(got - ref).max() < 512

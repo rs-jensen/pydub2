@@ -8,7 +8,7 @@ import pytest
 pydub = pytest.importorskip("pydub")
 import pydub2
 
-from test_audio_segment import make_wav, same
+from test_audio_segment import make_wav, same, same_mp3
 
 ff = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
 
@@ -40,7 +40,10 @@ def test_audio_to_file(tmp_path, format):
         file = audio.export(name, format=format)
         file.close()
         files.append(open(name, "rb").read())
-    assert files[0] == files[1]
+    if format == "mp3":
+        same_mp3(*files)
+    else:
+        assert files[0] == files[1]
 
 
 # audio_stream_encoder

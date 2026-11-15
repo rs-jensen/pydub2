@@ -1,5 +1,4 @@
 import random
-import struct
 
 import pytest
 
@@ -7,14 +6,13 @@ import _pydub2 as core
 
 audioop = pytest.importorskip("audioop")
 
-CODE = {1: "b", 2: "h", 4: "i"}
-LIMITS = {1: (-128, 127), 2: (-32768, 32767), 4: (-2**31, 2**31 - 1)}
-WIDTHS = [1, 2, 4]
+LIMITS = {1: (-128, 127), 2: (-32768, 32767), 3: (-2**23, 2**23 - 1), 4: (-2**31, 2**31 - 1)}
+WIDTHS = [1, 2, 3, 4]
 FACTORS = [0, 1, -1, 0.5, 1.5, 2, -2.7, 0.333, 3.7, 100]
 
 
 def pack(width, vals):
-    return struct.pack("<%d%s" % (len(vals), CODE[width]), *vals)
+    return b"".join(v.to_bytes(width, "little", signed=True) for v in vals)
 
 
 def buffers(width, mult=1, seed=0):
@@ -88,7 +86,7 @@ def test_ratecv(width, channels):
 
 
 def test_errors():
-    for bad in (0, 3, 5):
+    for bad in (0, 5):
         with pytest.raises(ValueError):
             core.rms(b"\0" * 12, bad)
     with pytest.raises(ValueError):
@@ -102,4 +100,4 @@ def test_errors():
     with pytest.raises(ValueError):
         core.ratecv(b"\0" * 4, 2, 1, 0, 2)
     with pytest.raises(ValueError):
-        core.lin2lin(b"\0" * 4, 2, 3)
+        core.lin2lin(b"\0" * 4, 2, 5)

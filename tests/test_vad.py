@@ -56,3 +56,10 @@ def test_other_rate():
     r = _pydub2.detect_speech(data, rate * 3, 1, 2, 0.5, 250, 100)
     assert len(r) == 1
     assert abs(r[0][0] - 1000) < 100
+
+
+def test_24_bit_same_as_16():
+    x = np.concatenate([np.zeros(rate * 2), talk(2), np.zeros(rate * 2)])
+    wide = (x * 2 ** 23).astype("<i4").view(np.uint8).reshape(-1, 4)
+    data = wide[:, :3].tobytes()
+    assert _pydub2.detect_speech(data, rate, 1, 3, 0.5, 250, 100) == speech(x)
