@@ -29,7 +29,10 @@ def make(tmp_path, name, channels, *args):
     path = str(tmp_path / name)
     cmd = [ff, "-y", "-loglevel", "error", "-f", "f32le", "-ar", str(RATE), "-ac", "2", "-i", "-",
            "-ac", str(channels), *args, path]
-    subprocess.run(cmd, input=raw, check=True)
+    p = subprocess.run(cmd, input=raw, capture_output=True)
+    if b"Encoder not found" in p.stderr:
+        pytest.skip("this ffmpeg lacks the encoder")
+    assert p.returncode == 0, p.stderr
     return path
 
 
