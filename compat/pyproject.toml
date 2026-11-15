@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pydub2-compat"
+version = "0.1.0"
+description = "Makes import pydub use pydub2, even when the real pydub is installed"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+dependencies = ["pydub2"]
+authors = [{ name = "Rasmus Stisen" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio",
+]
+
+[project.urls]
+Homepage = "https://github.com/rs-jensen/pydub2"
+Source = "https://github.com/rs-jensen/pydub2"
+
+[tool.hatch.build.targets.wheel]
+include = ["pydub2_compat.py"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"pydub2_compat.pth" = "pydub2_compat.pth"
