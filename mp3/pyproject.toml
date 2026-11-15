@@ -1,0 +1,35 @@
+[build-system]
+requires = ["scikit-build-core>=0.11"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "pydub2-mp3"
+version = "3.100.0"
+description = "LAME mp3 encoder for pydub2, loaded at runtime"
+readme = "README.md"
+license = "LGPL-2.0-or-later AND MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+authors = [{ name = "Rasmus Stisen" }]
+keywords = ["mp3", "lame", "pydub2", "audio", "encoder"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: C",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Conversion",
+]
+
+[project.urls]
+Homepage = "https://github.com/rs-jensen/pydub2"
+Source = "https://github.com/rs-jensen/pydub2/tree/HEAD/mp3"
+LAME = "https://lame.sourceforge.io"
+Issues = "https://github.com/rs-jensen/pydub2/issues"
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+wheel.packages = ["pydub2_mp3"]
+wheel.py-api = "py3"
