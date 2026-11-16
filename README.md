@@ -123,7 +123,7 @@ mp3 and opus samples can differ slightly from what ffmpeg gives. They are listed
 
 ## More
 
-How pydub2 compares with soundfile, PyAV, pedalboard and the others: [docs/comparison.md](https://github.com/rs-jensen/pydub2/blob/main/docs/comparison.md).
+How pydub2 compares with soundfile, PyAV, pedalboard and the others: [docs/comparison.md](https://github.com/rs-jensen/pydub2/blob/main/docs/comparison.md), including timings and memory use measured with the scripts in [bench/](https://github.com/rs-jensen/pydub2/tree/main/bench).
 
 Moving a project from pydub: [docs/migrating.md](https://github.com/rs-jensen/pydub2/blob/main/docs/migrating.md).
 

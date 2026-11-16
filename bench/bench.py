@@ -10,7 +10,7 @@ import wave
 
 SR = 44100
 EXTS = ["wav", "flac", "mp3", "ogg", "opus"]
-LAYOUTS = ["s44", "m16"]
+LAYOUTS = ["s44"]
 ENCODE = {"flac": ["-c:a", "flac"], "mp3": ["-c:a", "libmp3lame", "-b:a", "128k"],
           "ogg": ["-c:a", "libvorbis", "-q:a", "4"], "opus": ["-c:a", "libopus"]}
 
@@ -92,20 +92,20 @@ def gen(data):
     import numpy as np
     os.makedirs(data, exist_ok=True)
     for kind, fn in (("speech", speech), ("music", music)):
-        full = f"{data}/{kind}_40m_s44.wav"
+        full = f"{data}/{kind}_10m_s44.wav"
         if not os.path.exists(full):
             w = wave.open(full + ".part", "wb")
             w.setnchannels(2)
             w.setsampwidth(2)
             w.setframerate(SR)
-            for i in range(40):
+            for i in range(10):
                 x = fn(np.random.default_rng(i * 2 + (kind == "music")))
                 w.writeframes((x * 32767).astype("<i2").tobytes())
             w.close()
             os.rename(full + ".part", full)
         for dur, secs in (("60s", "60"), ("5s", "5")):
             ff("-i", full, "-t", secs, "-c", "copy", f"{data}/{kind}_{dur}_s44.wav")
-        for dur in ("5s", "60s", "40m"):
+        for dur in ("5s", "60s", "10m"):
             ff("-i", f"{data}/{kind}_{dur}_s44.wav", "-ac", "1", "-ar", "16000", f"{data}/{kind}_{dur}_m16.wav")
             for lay in LAYOUTS:
                 base = f"{data}/{kind}_{dur}_{lay}"
@@ -126,7 +126,7 @@ IMPORT = {"pydub": "from pydub import AudioSegment", "pydublts": "from pydub imp
           "pydub2": "from pydub2 import AudioSegment", "pydub2mp3": "from pydub2 import AudioSegment",
           "sf": "import soundfile", "av": "import av", "mini": "import miniaudio",
           "librosa": "import librosa", "audioread": "import audioread", "silero": "import silero_vad"}
-SECONDS = {"5s": 5, "60s": 60, "40m": 2400}
+SECONDS = {"5s": 5, "60s": 60, "10m": 600}
 R = {}
 
 
@@ -233,6 +233,8 @@ def decode(lib, path, start=None, dur=None):
         return av_decode(path, start, dur)
     if lib == "mini":
         import miniaudio as m
+        if path.endswith(".opus"):
+            raise Unsupported(lib)
         i = m.get_file_info(path)
         if start is None:
             d = m.decode_file(path, m.SampleFormat.SIGNED16, i.nchannels, i.sample_rate)
@@ -299,11 +301,13 @@ def op_export(lib, a):
         timed(lambda: seg.export(out, format=fmt, bitrate="128k" if fmt == "mp3" else None))
     else:
         x = np.frombuffer(raw, np.int16).reshape(-1, ch)
+        if lib == "sf" and fmt == "opus" and rate != 48000:
+            raise Unsupported(lib)
         if lib == "sf":
             import soundfile as sf
             f, s = {"wav": ("WAV", None), "flac": ("FLAC", None), "ogg": ("OGG", "VORBIS"), "opus": ("OGG", "OPUS"), "mp3": ("MP3", None)}[fmt]
             timed(lambda: sf.write(out, x, rate, format=f, subtype=s))
-        elif lib == "av":
+        elif lib == "av" and fmt != "ogg":
             timed(lambda: av_encode(out, fmt, x, rate, ch))
         elif lib == "mini" and fmt == "wav":
             import array
@@ -401,6 +405,8 @@ def op_dsp(lib, a):
         r = timed(lambda: fx.normalize(s))
     elif what == "speedup":
         r = timed(lambda: fx.speedup(s, 1.5))
+    elif what == "lowpass":
+        r = timed(lambda: fx.low_pass_filter(s, 3000))
     elif what == "compress":
         r = timed(lambda: fx.compress_dynamic_range(s))
     elif what == "dbfs":
@@ -460,39 +466,40 @@ def worker(lib, op, args):
     print(json.dumps(R))
 
 
-def cases():
+def cases(quick):
+    skip = ["librosa", "audioread", "silero"] if quick else []
     c = [("none", [], ["pydub"]), ("import", [], list(IMPORT))]
-    for kind, durs in (("speech", ("5s", "60s", "40m")), ("music", ("60s",))):
+    for kind, durs in (("speech", ("60s", "10m") if quick else ("5s", "60s", "10m")), ("music", ("60s", "10m") if quick else ("60s",))):
         for dur in durs:
             for lay in LAYOUTS:
                 for ext in EXTS:
                     c.append(("load", ["%s_%s_%s.%s" % (kind, dur, lay, ext)], LOADERS))
-    for dur in ("60s", "40m"):
+    for dur in ("60s", "10m"):
         for lay in LAYOUTS:
             for ext in EXTS:
                 c.append(("load10", ["speech_%s_%s.%s" % (dur, lay, ext)], LOADERS[:-1]))
-    for f in ("speech_60s_s44", "speech_5s_s44", "speech_60s_m16", "speech_40m_s44"):
+    for f in ("speech_60s_s44", "speech_10m_s44") if quick else ("speech_60s_s44", "speech_5s_s44", "speech_10m_s44"):
         for fmt in EXTS:
             c.append(("export", [fmt, f + ".wav"], PYDUBS + ["sf", "av", "mini"] + (["pydub2mp3"] if fmt == "mp3" else [])))
-    for f in ("speech_60s_s44", "speech_40m_s44"):
-        for q in ("default", "high"):
+    for f in ("speech_60s_s44", "speech_10m_s44"):
+        for q in ("default",) if quick else ("default", "high"):
             c.append(("resample", [q, f + ".wav"], PYDUBS + ["av", "mini", "librosa"]))
-    for f in ("speech_60s_s44", "speech_40m_s44"):
+    for f in ("speech_60s_s44", "speech_10m_s44"):
         for ext in ("wav", "mp3", "flac"):
             c.append(("gradio_in", [f + "." + ext], PYDUBS))
             c.append(("gradio_in_fast", [f + "." + ext], ["pydub2"]))
         for fmt in ("wav", "mp3"):
             c.append(("gradio_out", [fmt, f + ".wav"], PYDUBS + (["pydub2mp3"] if fmt == "mp3" else [])))
-    for what in ("overlay", "fade", "gain", "normalize", "speedup", "compress", "dbfs", "append"):
+    for what in ("overlay", "normalize", "compress", "lowpass", "append") if quick else ("overlay", "fade", "gain", "normalize", "speedup", "compress", "lowpass", "dbfs", "append"):
         c.append(("dsp", [what, "speech_60s_s44.wav"], PYDUBS))
-    for what in ("overlay", "fade", "gain", "normalize"):
-        c.append(("dsp", [what, "speech_40m_s44.wav"], PYDUBS))
+    for what in ("overlay", "normalize", "compress", "lowpass") if quick else ("overlay", "fade", "gain", "normalize"):
+        c.append(("dsp", [what, "speech_10m_s44.wav"], PYDUBS))
     for what in ("detect", "split"):
-        c.append(("silence", [what, "speech_40m_s44.wav"], PYDUBS))
-    for f in ("speech_60s_m16", "speech_40m_m16"):
-        c.append(("vad", [f + ".wav"], ["pydub2", "silero"]))
+        c.append(("silence", [what, "speech_10m_s44.wav"], PYDUBS))
+    for f in ("speech_10m_m16",) if quick else ("speech_60s_m16", "speech_10m_m16"):
+        c.append(("vad", [f + ".wav"], ["pydub2"] if quick else ["pydub2", "silero"]))
     order = ["none", "import", "dsp", "silence", "vad", "gradio_in", "gradio_in_fast", "gradio_out", "resample", "export", "load10", "load"]
-    return sorted(c, key=lambda x: order.index(x[0]))
+    return sorted([(o, a, [l for l in ls if l not in skip]) for o, a, ls in c], key=lambda x: order.index(x[0]))
 
 
 def py(venvs, lib):
@@ -518,21 +525,20 @@ def one(venvs, data, lib, op, args, timeout, path=None):
 
 
 def spread(v):
-    q = statistics.quantiles(v, n=4) if len(v) >= 4 else [min(v), 0, max(v)]
-    return (q[2] - q[0]) / statistics.median(v)
+    return (max(v) - min(v)) / statistics.median(v)
 
 
-def run(venvs, data, out, runs, only, skip, libs, slow, timeout):
+def run(venvs, data, out, runs, only, skip, libs, slow, timeout, quick):
     done = set()
     if os.path.exists(out):
         done = {(j["case"], j["lib"]) for j in map(json.loads, open(out))}
-    for op, args, ls in cases():
+    for op, args, ls in cases(quick):
         key = " ".join([op] + args)
         if (only and only not in key) or (skip and skip in key):
             continue
         ls = [l for l in ls if (not libs or l in libs) and (key, l) not in done]
         for a in args:
-            if a.endswith(tuple(EXTS)):
+            if a.endswith(tuple("." + e for e in EXTS)):
                 with open(os.path.join(data, a), "rb") as f:
                     while f.read(1 << 24):
                         pass
@@ -543,12 +549,12 @@ def run(venvs, data, out, runs, only, skip, libs, slow, timeout):
         while True:
             todo = [l for l in ls if l not in bad and len(res[l]) < want[l]]
             if not todo:
-                noisy = [l for l in ls if l not in bad and want[l] >= runs and len(res[l]) >= 7 and spread([r["wall"] for r in res[l]]) > 0.2]
+                noisy = [l for l in ls if l not in bad and want[l] >= runs and len(res[l]) >= runs and spread([r["wall"] for r in res[l]]) > 0.15]
                 if not noisy or extra == 2:
                     break
                 extra += 1
                 for l in noisy:
-                    want[l] += 7
+                    want[l] += 5
                 continue
             for l in todo:
                 r = one(venvs, data, l, op, args, timeout)
@@ -579,7 +585,7 @@ def cell(rec):
     if rec["status"] != "ok":
         return rec["status"]
     v = [r["wall"] for r in rec["runs"]]
-    flag = "*" if len(v) < 7 or (len(v) >= 4 and spread(v) > 0.25) else ""
+    flag = "*" if len(v) < 5 or spread(v) > 0.15 else ""
     return "%.3g/%.3gs %.0fM%s" % (med(rec, "wall"), med(rec, "cpu"), med(rec, "peak"), flag)
 
 
@@ -594,7 +600,7 @@ def report(out):
         ld = [r["load"] for l in libs if (c, l) in by and by[(c, l)]["status"] == "ok" for r in by[(c, l)]["runs"]]
         print("| %s | %s | %.0f |" % (c, " | ".join(cell(by.get((c, l))) for l in libs), statistics.median(ld) if ld else 0))
     print("\nload is the median 1 min load average at the start of the runs of that row (10 cores)")
-    print("cell is median wall / median cpu seconds, peak MiB (self + children), * = fewer than 7 runs or iqr over 25%")
+    print("cell is median wall / median cpu seconds, peak MiB (self + children), * = fewer than 5 runs or (max - min) / median over 15% after repeating")
     loads = [r["load"] for x in recs if x["status"] == "ok" for r in x["runs"]]
     print("1 min load average at start of the runs: min %.1f median %.1f max %.1f" % (min(loads), statistics.median(loads), max(loads)))
     print("\nchecks that differ between libraries for the same case:")
@@ -636,7 +642,8 @@ def footprint(venvs, wheels):
     import glob
     for lib, names in ROOTS.items():
         v = VENV.get(lib, lib)
-        v = "vad" if lib == "silero" else v
+        if not os.path.isdir(os.path.join(venvs, v)):
+            continue
         p = subprocess.run([py(venvs, v), os.path.abspath(__file__), "size"] + names, capture_output=True, text=True)
         sizes = json.loads(p.stdout)
         np_size = sizes.pop("numpy", 0)
@@ -655,6 +662,8 @@ def noffmpeg(venvs, data):
     print("| lib | " + " | ".join("read " + e for e in EXTS) + " | " + " | ".join("write " + e for e in EXTS) + " |")
     print("|---" * 11 + "|")
     for lib in ["pydub", "pydublts", "pydub2", "pydub2mp3", "sf", "av", "mini", "librosa", "audioread"]:
+        if not os.path.isdir(os.path.join(venvs, VENV.get(lib, lib))):
+            continue
         row = []
         for op, args in [("load", ["speech_5s_s44." + e]) for e in EXTS] + [("export", [e, "speech_5s_s44.wav"]) for e in EXTS]:
             r = one(venvs, data, lib, op, args, 120, path)
@@ -676,14 +685,15 @@ if __name__ == "__main__":
         ap.add_argument("--venvs", required=True)
         ap.add_argument("--data", required=True)
         ap.add_argument("--out", required=True)
-        ap.add_argument("--runs", type=int, default=7)
+        ap.add_argument("--runs", type=int, default=5)
         ap.add_argument("--only", default="")
         ap.add_argument("--skip", default="")
         ap.add_argument("--libs", default="")
         ap.add_argument("--slow", type=float, default=60)
         ap.add_argument("--timeout", type=float, default=1800)
+        ap.add_argument("--quick", action="store_true")
         o = ap.parse_args(a[2:])
-        run(o.venvs, o.data, o.out, o.runs, o.only, o.skip, [l for l in o.libs.split(",") if l], o.slow, o.timeout)
+        run(o.venvs, o.data, o.out, o.runs, o.only, o.skip, [l for l in o.libs.split(",") if l], o.slow, o.timeout, o.quick)
     elif a[1] == "report":
         report(a[2])
     elif a[1] == "footprint":
