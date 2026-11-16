@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -16,6 +17,7 @@
 #include "third_party/dr_mp3.h"
 #define STB_VORBIS_HEADER_ONLY
 #include "third_party/stb_vorbis.c"
+extern "C" void crc32_init(void); // not static in our copy
 #include <opusfile.h>
 
 #include "core.h"
@@ -799,6 +801,8 @@ struct Vorbis : Dec {
             if (!arena) {
                 arena.reset(new char[32 << 20]);
             }
+            static std::once_flag crc;
+            std::call_once(crc, crc32_init);
             stb_vorbis_alloc mem = {arena.get(), 32 << 20};
             v = stb_vorbis_open_pushdata((const uint8_t *)win.data(), (int)win.size(), &used, &err, &mem);
             if (v) {
