@@ -79,13 +79,18 @@ static int scale(double val, size_t width) {
     return (int)floor(fbound(val, minvals[width], maxvals[width]));
 }
 
-long long rms(std::string_view data, size_t width) {
+double sumsq(std::string_view data, size_t width, bool fused) {
     check(data, width);
     double sum = 0;
     for (size_t i = 0; i < data.size(); i += width) {
         double val = get(&data[i], width);
-        sum += val * val;
+        sum = fused ? std::fma(val, val, sum) : sum + val * val;
     }
+    return sum;
+}
+
+long long rms(std::string_view data, size_t width, bool fused) {
+    double sum = sumsq(data, width, fused);
     if (data.empty()) {
         return 0;
     }
@@ -320,7 +325,7 @@ void highpass(std::string_view data, size_t width, size_t channels, double alpha
 }
 
 void compress(std::string_view data, size_t width, size_t channels, double thresh, double ratio, double attack_frames,
-              double release_frames, long long look, const Cancel &cancel, const Alloc &alloc) {
+              double release_frames, long long look, bool fused, const Cancel &cancel, const Alloc &alloc) {
     check(data, width, channels);
     char *out = alloc(data.size());
     memcpy(out, data.data(), data.size());
@@ -354,7 +359,7 @@ void compress(std::string_view data, size_t width, size_t channels, double thres
             }
             now = (unsigned int)sqrt((double)sum / (double)((i - lo) * channels));
         } else if (i > lo) {
-            now = (unsigned int)rms(data.substr(lo * fw, (i - lo) * fw), width);
+            now = (unsigned int)rms(data.substr(lo * fw, (i - lo) * fw), width, fused);
         }
         if (atten == 0.0 && now <= thresh) {
             continue;

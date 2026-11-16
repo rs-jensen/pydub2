@@ -100,3 +100,8 @@ def test_bytearray_and_memoryview_data(wrap):
     assert seg.raw_data == raw
     assert (seg + seg).raw_data == raw * 2
     assert seg.max == 2
+
+
+def test_empty_segment_with_negative_rate():
+    kw = dict(sample_width=2, frame_rate=-1, channels=1)
+    assert silence.detect_silence(AudioSegment(b"", **kw), 0, -16.5) == old_silence.detect_silence(OldSegment(b"", **kw), 0, -16.5)

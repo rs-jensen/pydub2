@@ -65,6 +65,12 @@ def test_lin2lin(width, new):
         same(core.lin2lin(buf, width, new), audioop.lin2lin(buf, width, new))
 
 
+def test_rms_32_bit_sum_like_audioop():
+    for vals in ([1608362628, 1608362630, -1608362626], [2017695478, 2017695481, 2017695479, 2017695478]):
+        buf = pack(4, vals)
+        same(core.rms(buf, 4), audioop.rms(buf, 4))
+
+
 @pytest.mark.parametrize("width", WIDTHS)
 def test_mono_stereo(width):
     # some audioop builds fuse the two products in tomono, that is not plain double math

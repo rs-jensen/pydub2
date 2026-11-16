@@ -62,7 +62,9 @@ void encode(const Audio &a, const std::string &format, int bitrate, const Tags &
 
 // pcm.cpp
 // these do the same math as the old audioop module so the numbers match pydub
-long long rms(std::string_view data, size_t width);
+// fused is audioops fused multiply add in the sum of squares, only the arm64 builds have it
+double sumsq(std::string_view data, size_t width, bool fused);
+long long rms(std::string_view data, size_t width, bool fused);
 long long max(std::string_view data, size_t width);
 void mul(std::string_view data, size_t width, double factor, const Alloc &alloc);
 void add(std::string_view a, std::string_view b, size_t width, const Alloc &alloc);
@@ -79,13 +81,13 @@ void bias(std::string_view data, size_t width, int bias, const Alloc &alloc);
 void lowpass(std::string_view data, size_t width, size_t channels, double alpha, const Alloc &alloc);
 void highpass(std::string_view data, size_t width, size_t channels, double alpha, const Alloc &alloc);
 void compress(std::string_view data, size_t width, size_t channels, double thresh, double ratio, double attack_frames,
-              double release_frames, long long look, const Cancel &cancel, const Alloc &alloc);
+              double release_frames, long long look, bool fused, const Cancel &cancel, const Alloc &alloc);
 // state is always None in pydub so there is none here
 void ratecv(std::string_view data, size_t width, size_t channels, int inrate, int outrate, const Alloc &alloc);
 
 // silence.cpp
 // same walk as pydub.silence.detect_silence, thresh is in dBFS
-Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh, int seek_step, const Cancel &cancel);
+Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh, int seek_step, bool fused, const Cancel &cancel);
 
 // resample.cpp
 void resample(const Audio &a, int new_rate, const Cancel &cancel, const Alloc &alloc);
