@@ -104,8 +104,9 @@ jobs:
         py=$PWD/venv/bin/python
         [ -x $py ] || py=$PWD/venv/Scripts/python
         $py -m pip install -q pytest numpy
-        $py -m pip install -q --no-index --find-links dist pydub2 pydub2-mp3 pydub2-compat
+        $py -m pip install -q --no-index --find-links "$src/dist" pydub2 pydub2-mp3 pydub2-compat
         $py -m pip list
+        cd "$(mktemp -d)"
         $py - <<'PY'
         import io, os
         from importlib.metadata import distribution
@@ -122,7 +123,6 @@ jobs:
         assert abs(len(a) - 1000) < 60 and a.dBFS > -30, (len(a), a.dBFS)
         print("smoke ok", len(a), a.dBFS)
         PY
-        cd "$(mktemp -d)"
         $py -m pytest -rs -q -p no:cacheprovider "$src/tests/test_mp3.py" "$src/tests/test_compat.py"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -155,7 +155,7 @@ jobs:
           path: dist
           merge-multiple: true
       - run: ls -l dist
-      - run: pipx run twine check --strict dist/*
+      - run: pipx run twine check --strict dist/*.whl dist/*.tar.gz
 
   version:
     runs-on: ubuntu-latest
