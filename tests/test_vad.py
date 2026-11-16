@@ -63,3 +63,13 @@ def test_24_bit_same_as_16():
     wide = (x * 2 ** 23).astype("<i4").view(np.uint8).reshape(-1, 4)
     data = wide[:, :3].tobytes()
     assert _pydub2.detect_speech(data, rate, 1, 3, 0.5, 250, 100) == speech(x)
+
+
+def test_long_input_in_pieces():
+    # over a million frames at 44.1 khz, so the resample inside runs in several pieces
+    x = np.tile(np.concatenate([np.zeros(rate), talk(12), np.zeros(rate)]), 2)
+    big = _pydub2.resample((x * 32767).astype("<i2").tobytes(), rate, 1, 2, 44100)
+    assert len(big) > 2 * (1 << 20)
+    whole = _pydub2.resample(big, 44100, 1, 2, rate)
+    a = _pydub2.detect_speech(big, 44100, 1, 2, 0.5, 250, 100)
+    assert a and a == _pydub2.detect_speech(whole, rate, 1, 2, 0.5, 250, 100)
