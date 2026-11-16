@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 import os
@@ -136,6 +137,7 @@ others = [
     [(b"ALBUMARTIST", b"1"), (b"ALBUMARTIST", b"2"), (b"x", b"y")],
     [(b"nokey", b""), (b"ARTIST", b"a"), (b"TrackNumber", b"7"), (b"description", b"d")],
     [(b"x", b"\xff\xfe"), (b"y", b"\xc3")],
+    [(b"title", b"t"), (b"Metadata_Block_Picture", b"AAAA"), (b"artist", b"a")],
 ]
 
 
@@ -447,6 +449,8 @@ ID3_HOSTILE = {
     "private frame with control bytes": (lambda n: id3_tag([id3_frame(b"PRIV", b"o\0" + b"\1" * n)]), 1 << 18),
     "compressed frame that grows": (lambda n: id3_tag([id3_frame(b"TIT2", n.to_bytes(4, "big") + zlib.compress(b"\0" * n), 3, 9)]), 1 << 18),
     "compressed frames again and again": (lambda n: id3_tag([id3_frame(b"TIT2", (1 << 20).to_bytes(4, "big") + zlib.compress(b"\0" * (1 << 20)), 3, 9)] * n), 100),
+    "compressed frames that fail to inflate": (lambda n: id3_tag([id3_frame(b"TIT2", (1 << 20).to_bytes(4, "big") + zlib.compress(b"\0" * (1 << 20))[:-1], 3, 9)] * n), 100),
+    "compressed frames one byte short": (lambda n: id3_tag([id3_frame(b"TIT2", ((1 << 20) - 1).to_bytes(4, "big") + zlib.compress(b"\0" * (1 << 20)), 3, 9)] * n), 100),
     "utf 16 with its zeros in the wrong place": (lambda n: id3_tag([id3_frame(b"TXXX", b"\1\xff\xfe" + b"a\0\0" * n)]), 1 << 17),
     "unsynchronised": (lambda n: id3_tag([id3_frame(b"TIT2", b"\0" + b"\xff\0" * n, 3, 2)]), 1 << 17),
 }
@@ -468,3 +472,56 @@ def test_id3_reads_only_the_tags(tmp_path):
     Counting.got = 0
     assert utils2._mp3_tags(f, p.stat().st_size)[0] == {"title": "t"}
     assert Counting.got < 1000
+
+
+def cover(n):
+    img = b"\xff\xd8\xff\xe0" + os.urandom(n)
+    pic = struct.pack(">II", 3, 10) + b"image/jpeg" + struct.pack(">I", 0) + struct.pack(">IIIII", 1, 1, 24, 0, len(img)) + img
+    return base64.b64encode(pic)
+
+
+@pytest.mark.parametrize("format", ["ogg", "opus"])
+def test_a_cover_over_the_cap_leaves_the_other_tags(format):
+    tags = [(b"title", b"T"), (b"METADATA_BLOCK_PICTURE", cover(13 << 20)), (b"artist", b"A")]
+    data = _pydub2.encode(raw(), 22050, 1, 2, format, 0, tags)
+    assert len(data) > 17 << 20
+    f = io.BytesIO(data)
+    got = utils2._convert(utils2._ogg_tags(lambda i, n: (f.seek(i), f.read(n))[1], 7 if format == "ogg" else 8), {})
+    assert got == {"title": "T", "artist": "A"}
+
+
+@need_ffmpeg
+def test_cover_and_many_tags_like_ffprobe(tmp_path, monkeypatch):
+    many = [(b"k%d" % i, b"v") for i in range(5000)] + [(b"title", b"last")]
+    paths = {"a.flac": _pydub2.encode(raw(), 22050, 1, 2, "flac", 0, many),
+             "b.opus": _pydub2.encode(raw(), 22050, 1, 2, "opus", 0, [(b"title", b"T"), (b"METADATA_BLOCK_PICTURE", cover(5 << 20))])}
+    want = {}
+    for name, data in paths.items():
+        (tmp_path / name).write_bytes(data)
+        want[name] = probe(tmp_path / name)
+    assert len(dict(want["a.flac"][0])) > 4096
+    no_ffprobe(monkeypatch)
+    for name in paths:
+        assert where(utils2.mediainfo_json(str(tmp_path / name))) == want[name]
+
+
+@pytest.mark.parametrize("format", ["ogg", "opus"])
+def test_a_cut_comment_page_gives_what_was_read(format):
+    data = _pydub2.encode(raw(), 22050, 1, 2, format, 0, [(b"title", b"T" * 150000), (b"artist", b"A")])
+    for cut in range(200, 170000, 997):
+        f = io.BytesIO(data[:cut])
+        utils2._ogg_tags(lambda i, n: (f.seek(i), f.read(n))[1], 7 if format == "ogg" else 8)
+
+
+def test_inflating_that_fails_is_paid_for():
+    frame = id3_frame(b"TIT2", ((1 << 20) - 1).to_bytes(4, "big") + zlib.compress(b"\0" * (1 << 20)), 3, 9)
+    good = id3_frame(b"TIT2", (1 << 20).to_bytes(4, "big") + zlib.compress(b"\0" * (1 << 20)), 3, 9)
+    short = id3_tag([frame] * 12)
+    # the baseline inflates the same bytes without a failure, 12 MiB of tag of these must not cost more than 20 times that
+    t = time.perf_counter()
+    id3_of(id3_tag([good] * 12))
+    base = time.perf_counter() - t
+    t = time.perf_counter()
+    id3_of(id3_tag([frame] * 4000)[:12 << 20])
+    assert time.perf_counter() - t < 20 * base + 0.5
+    assert id3_of(short) == {}

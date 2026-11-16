@@ -9,7 +9,9 @@ import wave
 
 import pytest
 
-from pydub2 import AudioSegment, _ffmpeg, utils
+import pathlib
+
+from pydub2 import AudioSegment, _ffmpeg, playback, utils
 
 pydub = pytest.importorskip("pydub")
 
@@ -156,3 +158,98 @@ def test_patched_prober_is_used_without_one_on_path(tmp_path, monkeypatch, m4a):
     want = pydub.utils.mediainfo(m4a)
     assert utils.mediainfo(m4a)["bits_per_sample"] == want["bits_per_sample"]
     assert utils.mediainfo(m4a)["duration"] == want["duration"]
+
+
+@need_real
+@pytest.mark.parametrize("probe", [True, False])
+@pytest.mark.parametrize("kind", [str, pathlib.Path])
+def test_a_subclass_converter_is_used_everywhere(tmp_path, monkeypatch, m4a, probe, kind):
+    folder = private(tmp_path, monkeypatch, "full", probe)
+    (folder / "ffplay").unlink(missing_ok=True)
+    (folder / "ffplay").write_text("#!/bin/sh\n")
+    (folder / "ffplay").chmod(0o755)
+    monkeypatch.setattr(AudioSegment, "converter", "no-such-ffmpeg")
+
+    class My(AudioSegment):
+        converter = kind(folder / "ffmpeg")
+
+    assert len(My.from_file(m4a)) > 400
+    assert len(My.from_file(io.BytesIO(open(m4a, "rb").read()))) > 400
+    with utils._using(My.converter):
+        assert utils.mediainfo(m4a)["codec_name"] == "aac"
+        assert utils.mediainfo_json(m4a)["streams"][0]["codec_name"] == "aac"
+        assert "aac" in utils.get_supported_decoders()
+    for fmt in ("m4a", "mp3"):
+        assert len(My.silent(200).export(io.BytesIO(), format=fmt).getvalue()) > 100
+    seen = []
+    monkeypatch.setattr(playback.subprocess, "call", lambda cmd, **kw: seen.append(cmd))
+    playback._play_with_ffplay(My.silent(100))
+    assert seen[0][0] == str(folder / "ffplay")
+
+
+def test_which_takes_a_path_on_windows(monkeypatch):
+    monkeypatch.setattr(utils.os, "name", "nt")
+    assert utils.which(pathlib.PurePath("no-such-program")) is None
+
+
+FORMATS = {
+    "wav": "pcm_u8 pcm_s16le pcm_s24le pcm_s32le pcm_f32le pcm_f64le pcm_mulaw pcm_alaw adpcm_ima_wav adpcm_ms",
+    "aiff": "pcm_u8 pcm_s8 pcm_s16be pcm_s24be pcm_s32be pcm_f32be pcm_mulaw pcm_alaw adpcm_ima_qt",
+    "caf": "pcm_s16le pcm_s24le pcm_s24be pcm_s32le pcm_f32le pcm_f64be pcm_mulaw pcm_alaw adpcm_ima_qt",
+    "mov": "pcm_u8 pcm_s16be pcm_s24le pcm_s24be pcm_s32le pcm_f32be pcm_mulaw pcm_alaw adpcm_ima_qt",
+    "au": "pcm_s8 pcm_s16be pcm_s24be pcm_s32be pcm_f32be pcm_f64be pcm_mulaw pcm_alaw",
+    "w64": "pcm_u8 pcm_s16le pcm_s24le pcm_s32le pcm_f32le pcm_mulaw pcm_alaw adpcm_ima_wav",
+}
+
+
+@need_real
+@pytest.mark.parametrize("fmt,codec", [(f, c) for f, cs in FORMATS.items() for c in cs.split()])
+def test_reading_without_ffprobe_gives_what_ffprobe_gives(tmp_path, monkeypatch, fmt, codec):
+    path = str(tmp_path / ("a." + fmt))
+    made = subprocess.run([real[0], "-y", "-v", "quiet", "-f", "lavfi", "-i", "sine=d=0.2:r=11025", "-ac", "2",
+                           "-c:a", codec, path])
+    if made.returncode:
+        pytest.skip("this ffmpeg cant write it")
+
+    def read():
+        seg = AudioSegment.from_file(path)
+        return (seg.sample_width, seg.frame_rate, seg.channels, seg.raw_data,
+                utils.mediainfo_json(path)["streams"][0]["bits_per_sample"])
+
+    want = read()
+    which = utils.which
+    monkeypatch.setattr(utils, "which", lambda p: None if os.path.basename(p) in ("ffprobe", "avprobe") else which(p))
+    assert read() == want
+
+
+@need_real
+@pytest.mark.parametrize("args", [0, 1])
+@pytest.mark.parametrize("name", ["get_prober_name", "get_encoder_name", "get_player_name"])
+def test_replaced_lookups_still_work(tmp_path, monkeypatch, m4a, name, args):
+    folder = private(tmp_path, monkeypatch, "full", False)
+    path = {"get_prober_name": real[1], "get_encoder_name": real[0], "get_player_name": "/the/player"}[name]
+    seen = []
+
+    def one(converter=None):
+        seen.append(converter)
+        return path
+
+    def none():
+        seen.append(None)
+        return path
+
+    monkeypatch.setattr(utils, name, one if args else none)
+    monkeypatch.setattr(playback, name, one if args else none, raising=False)
+    assert len(AudioSegment.from_file(m4a)) > 400
+    assert utils.mediainfo(m4a)["codec_name"] == "aac"
+    assert len(AudioSegment.silent(200).export(io.BytesIO(), format="m4a").getvalue()) > 100
+    if name == "get_encoder_name":
+        utils._codecs.cache_clear()
+        with utils._using("no-such-ffmpeg"):
+            assert "aac" in utils.get_supported_decoders()
+        utils._codecs.cache_clear()
+    calls = []
+    monkeypatch.setattr(playback.subprocess, "call", lambda cmd, **kw: calls.append(cmd))
+    playback._play_with_ffplay(AudioSegment.silent(100))
+    assert calls[0][0] == (path if name == "get_player_name" else str(folder / "ffplay"))
+    assert all(x is None for x in seen)

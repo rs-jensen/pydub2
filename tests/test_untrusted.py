@@ -124,6 +124,16 @@ def test_demuxer_list_skips_scripts_and_survives_a_timeout(monkeypatch):
     assert utils.allowed_demuxers("fake-ffmpeg") == "wav"
 
 
+def test_demuxer_list_skips_devices_and_an_empty_list_raises_and_is_not_kept(monkeypatch):
+    table = "Formats:\n ..d = Is a device\n ---\n D   wav  WAV\n D d lavfi  Lavfi\n D d avfoundation  AVF\n D   aac  AAC\n"
+    out = [b"", table.encode()]
+
+    monkeypatch.setattr(utils, "run", lambda cmd, data=None, **kw: subprocess.CompletedProcess(cmd, 0, out.pop(0), b""))
+    with pytest.raises(CouldntDecodeError, match="3.3"):
+        utils.allowed_demuxers("old-ffmpeg")
+    assert utils.allowed_demuxers("old-ffmpeg") == "wav,aac"
+
+
 def test_commands_restrict_protocols(monkeypatch, tmp_path):
     seen = []
 
