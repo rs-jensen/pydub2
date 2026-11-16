@@ -12,6 +12,7 @@ import pytest
 
 from pydub2 import AudioSegment, _ffmpeg
 from pydub2 import utils as utils2
+from pydub2.exceptions import CouldntDecodeError
 
 pydub = pytest.importorskip("pydub")
 ffmpeg = shutil.which("ffmpeg")
@@ -76,10 +77,15 @@ EXPORTS = [
     ("wav", "pcm_s32le", ["-sample_fmt", "s32"], True),
     ("wav", "pcm_s16le", ["-ar", "44100", "-ac", "2"], True),
     ("flac", None, ["-sample_fmt", "s16"], True),
-    ("flac", None, ["-ar", "44100"], False),
+    ("flac", None, ["-ar", "44100"], True),
+    ("wav", "pcm_s24le", ["-sample_fmt", "s32"], True),
+    ("wav", "pcm_s32le", None, True),
+    ("flac", None, ["-sample_fmt", "s32"], True),
+    ("flac", "flac", None, True),
+    ("flac", "flac", ["-sample_fmt", "s16"], True),
+    ("flac", "flac", ["-sample_fmt", "s32"], True),
     ("wav", None, ["-ac", "1"], False),
     ("wav", None, ["-ar", "22050"], False),
-    ("flac", None, ["-sample_fmt", "s32"], False),
 ]
 
 
@@ -96,6 +102,32 @@ def test_pcm_export_options(monkeypatch, width, format, codec, parameters, nativ
     got = b.export(io.BytesIO(), format=format, codec=codec, parameters=parameters).read()
     x, y = AudioSegment.from_file(io.BytesIO(expected)), AudioSegment.from_file(io.BytesIO(got))
     assert (x.channels, x.frame_rate, x.sample_width, x.raw_data) == (y.channels, y.frame_rate, y.sample_width, y.raw_data)
+    if format == "wav":
+        assert wav_bits(expected) == wav_bits(got)
+
+
+SEPARATOR = [
+    ("wav", {"parameters": ["-sample_fmt", "s16"]}),
+    ("wav", {"codec": "pcm_s24le", "parameters": ["-sample_fmt", "s32"]}),
+    ("wav", {"codec": "pcm_s32le", "parameters": ["-sample_fmt", "s32"]}),
+    ("flac", {"parameters": ["-sample_fmt", "s16"]}),
+    ("flac", {"parameters": ["-sample_fmt", "s32"]}),
+]
+
+
+@need_ffmpeg
+@pytest.mark.parametrize("bitrate", [None, "320k"])
+@pytest.mark.parametrize("width", [2, 4])
+@pytest.mark.parametrize("format,kw", SEPARATOR)
+def test_without_ffmpeg_like_audio_separator(monkeypatch, width, format, kw, bitrate):
+    data = noise(width)
+    a = pydub.AudioSegment(data, sample_width=width, frame_rate=44100, channels=2)
+    expected = a.export(io.BytesIO(), format=format, bitrate=bitrate, **kw).read()
+    monkeypatch.setattr(_ffmpeg, "run", None)
+    got = AudioSegment(data, sample_width=width, frame_rate=44100, channels=2).export(
+        io.BytesIO(), format=format, bitrate=bitrate, **kw).read()
+    x, y = AudioSegment.from_file(io.BytesIO(expected)), AudioSegment.from_file(io.BytesIO(got))
+    assert (x.sample_width, x.raw_data) == (y.sample_width, y.raw_data)
     if format == "wav":
         assert wav_bits(expected) == wav_bits(got)
 
@@ -147,3 +179,18 @@ def test_every_pydub_name_exists():
             continue
         new = importlib.import_module("pydub2." + m.name)
         assert [n for n in public(old) if n != "audioop" and not hasattr(new, n)] == [], m.name
+
+
+@need_ffmpeg
+def test_corrupt_mp3_message():
+    junk = b"\xff\xfb\x90\x00" + random.Random(1).randbytes(6000)
+    with pytest.raises(pydub.exceptions.CouldntDecodeError) as old:
+        pydub.AudioSegment.from_file(io.BytesIO(junk), format="mp3")
+    msgs = []
+    for _ in range(2):
+        with pytest.raises(CouldntDecodeError) as new:
+            AudioSegment.from_file(io.BytesIO(junk), format="mp3")
+        msgs.append(str(new.value))
+    assert msgs[0] == msgs[1]
+    assert msgs[0].splitlines()[0] == str(old.value).splitlines()[0]
+    assert len(msgs[0]) < 300 and "0x" not in msgs[0] and "libavutil" not in msgs[0] and "mp3" in msgs[0]

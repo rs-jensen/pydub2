@@ -138,6 +138,23 @@ def test_does_not_use_ffmpeg(monkeypatch):
     assert len(back.raw_data) == len(seg.raw_data)
 
 
+gapless = [(r, c, b) for r in (8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000) for c in (1, 2)
+           for b in (None, "32k", "64k", "128k", "192k")]
+
+
+@has_mp3
+@pytest.mark.parametrize("rate,channels,bitrate", gapless)
+def test_length_survives_low_bitrates(rate, channels, bitrate, monkeypatch):
+    monkeypatch.setattr(_ffmpeg, "find", lambda converter: None)
+    seg = chirp(rate, channels, secs=0.5)
+    mp3 = ours(seg, bitrate=bitrate)
+    assert len(AudioSegment.from_file(io.BytesIO(mp3), format="mp3").raw_data) == len(seg.raw_data)
+    if shutil.which("ffmpeg"):
+        p = subprocess.run(["ffmpeg", "-v", "error", "-i", "-", "-f", "s16le", "-"], input=mp3,
+                           capture_output=True, check=True)
+        assert len(p.stdout) == len(seg.raw_data)
+
+
 @has_mp3
 def test_empty():
     # only the info frame, ffmpeg cant read its own empty mp3 either
