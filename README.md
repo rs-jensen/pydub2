@@ -5,11 +5,7 @@ audio formats without ffmpeg, and it works on Python 3.13 and newer where the au
 
 ## Install
 
-It is not on PyPI yet. For now install it from the repo:
-
-    pip install git+https://github.com/rs-jensen/pydub2
-
-Once it is released it will be `pip install pydub2`.
+    pip install pydub2
 
 To move existing code over, change the import:
 
@@ -155,8 +151,7 @@ The source package downloads its codec libraries when it is built, so building n
 
 ## Status
 
-This is early. The version is 0.1.0. It is built and tested on macOS arm64 and Linux so far.
-Windows wheels are untested.
+This is early. The version is 0.0.1. The wheels are built and tested in CI on Linux, macOS and Windows.
 
 ## Building from source
 

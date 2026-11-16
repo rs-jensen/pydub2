@@ -10,7 +10,7 @@ on:
         description: JSON list of runners, empty for all
         default: ""
       tag:
-        description: Run the version check as if this tag was pushed, for example v0.1.0
+        description: Run the version check as if this tag was pushed, for example v0.0.1
         default: ""
   push:
     tags: ["v*"]

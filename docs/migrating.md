@@ -2,11 +2,9 @@
 
 For most projects the move is one changed import. This page covers that, what to do when you cannot edit the code that imports pydub, what happens to ffmpeg, the places where pydub2 behaves differently, and the errors people hit most often with pydub.
 
-pydub2 is not on PyPI yet. Until the first release, install it from GitHub:
+Install it with pip:
 
-    pip install git+https://github.com/rs-jensen/pydub2
-
-After the release this becomes `pip install pydub2`. I use the short form in the rest of this page.
+    pip install pydub2
 
 ## Change the import
 
@@ -35,10 +33,6 @@ Other packages write `import pydub` and you cannot change that. For this there i
 
     pip install pydub2-compat
 
-Until the first release it is not on PyPI either, so install it from the repo:
-
-    pip install "git+https://github.com/rs-jensen/pydub2#subdirectory=compat"
-
 It is one `.pth` file and a small import hook. After that, `import pydub` gives you pydub2, even when the real pydub is installed. Nothing is copied into a `pydub` folder, and pydub2 is only imported when something imports `pydub`.
 
 ```python
@@ -59,10 +53,6 @@ Things to know. `pip list` and `importlib.metadata.version("pydub")` still repor
 pydub2 reads mp3 on its own. To write mp3 without ffmpeg, add the encoder package. It holds only the LAME library, and it is its own package because LAME is LGPL and pydub2 is MIT.
 
     pip install "pydub2[mp3]"
-
-Until the first release, `pydub2[mp3]` cannot be resolved from PyPI. Install the encoder from the repo instead:
-
-    pip install "git+https://github.com/rs-jensen/pydub2#subdirectory=mp3"
 
 Your export call does not change:
 

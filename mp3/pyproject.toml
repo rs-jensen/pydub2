@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "pydub2-mp3"
-version = "0.1.0"
+version = "0.0.1"
 description = "LAME mp3 encoder for pydub2, loaded at runtime"
 readme = "README.md"
 license = "LGPL-2.0-or-later AND MIT"
