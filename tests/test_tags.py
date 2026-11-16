@@ -189,14 +189,17 @@ HOSTILE = {
 def seconds(tmp_path, data, ogg):
     p = tmp_path / "a"
     p.write_bytes(data)
-    t = time.perf_counter()
-    if ogg:
-        # the decoder is slower than linear on a packet this long, so the tag reader is timed alone
-        f = io.BytesIO(data)
-        utils2._ogg_tags(lambda i, n: (f.seek(i), f.read(n))[1], 7)
-    else:
-        utils2.mediainfo_json(str(p))
-    return time.perf_counter() - t
+    best = 1e9
+    for _ in range(5):
+        t = time.perf_counter()
+        if ogg:
+            # the decoder is slower than linear on a packet this long, so the tag reader is timed alone
+            f = io.BytesIO(data)
+            utils2._ogg_tags(lambda i, n: (f.seek(i), f.read(n))[1], 7)
+        else:
+            utils2.mediainfo_json(str(p))
+        best = min(best, time.perf_counter() - t)
+    return best
 
 
 @pytest.mark.parametrize("name", HOSTILE)

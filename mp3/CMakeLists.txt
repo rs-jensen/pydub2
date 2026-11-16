@@ -4,7 +4,10 @@ project(pydub2_mp3 C)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
-if(NOT MSVC)
+if(MSVC)
+    # static runtime, the wheel then needs no vcruntime
+    set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
+else()
     # same as lame's own configure
     set(CMAKE_C_FLAGS_RELEASE "-O3 -DNDEBUG -fstack-protector-strong -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2")
 endif()
