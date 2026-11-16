@@ -540,10 +540,11 @@ struct Mp3 : Dec {
         }
         // ffmpeg keeps the channels of the first frame and mixes the others like swresample
         size_t c = DRMP3_HDR_IS_MONO(b) ? 1 : 2;
-        for (size_t i = 0; i < spf; i++) {
-            if (c == channels) {
-                memcpy(out + i * c, pcm + i * c, c * sizeof(float));
-            } else if (c == 2) {
+        if (c == channels) {
+            memcpy(out, pcm, spf * c * sizeof(float));
+        }
+        for (size_t i = 0; c != channels && i < spf; i++) {
+            if (c == 2) {
                 out[i] = (pcm[2 * i] + pcm[2 * i + 1]) * 0.5f;
             } else {
                 out[2 * i] = out[2 * i + 1] = pcm[i] * 0.70710678f;
