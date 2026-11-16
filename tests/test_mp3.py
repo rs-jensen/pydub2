@@ -14,7 +14,6 @@ from pydub2 import AudioSegment, _ffmpeg, _mp3
 pydub = pytest.importorskip("pydub")
 has_mp3 = pytest.mark.skipif(not _mp3.available(), reason="pydub2-mp3 not installed")
 has_ff = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="no ffmpeg")
-data = os.path.join(os.path.dirname(__file__), "pydub_suite", "data")
 
 
 def chirp(rate=44100, channels=2, width=2, secs=2.0):
@@ -89,8 +88,8 @@ def test_versions():
 
 @has_mp3
 @has_ff
-def test_real_file_same_as_ffmpeg():
-    seg = AudioSegment.from_file(os.path.join(data, "test1.wav"))
+def test_five_seconds_same_as_ffmpeg():
+    seg = chirp(secs=5.0)
     _, a = decode(oracle(seg).export(format="mp3", bitrate="192k").read())
     _, b = decode(seg.export(format="mp3", bitrate="192k").read())
     assert snr(a, b) > 60

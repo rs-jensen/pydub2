@@ -225,7 +225,9 @@ struct Wav : Dec {
 
 struct Flac : Dec {
     drflac *f = NULL;
-    bool end = false;
+    bool end = false, lost = false, held = false;
+    uint64_t pos = UINT64_MAX, owed = 0;
+    char one[32];
 
     ~Flac() {
         drflac_close(f);
@@ -242,16 +244,61 @@ struct Flac : Dec {
         frames = f->totalPCMFrameCount;
     }
 
-    size_t read(char *out, size_t n) {
-        if (end) {
-            return 0;
-        }
+    uint64_t first() {
+        drflac_frame_header &h = f->currentFLACFrame.header;
+        return h.pcmFrameNumber ? h.pcmFrameNumber : (uint64_t)h.flacFrameNumber * f->maxBlockSizeInPCMFrames;
+    }
+
+    size_t pull(size_t n, char *out) {
         size_t k = width == 2 ? drflac_read_pcm_frames_s16(f, n, (int16_t *)out) : drflac_read_pcm_frames_s32(f, n, (int32_t *)out);
-        return k * channels * width;
+        if (k) {
+            pos = first() + f->currentFLACFrame.header.blockSizeInPCMFrames - f->currentFLACFrame.pcmFramesRemaining;
+        }
+        return k;
+    }
+
+    // like ffmpeg a frame with a bad crc stays in, silence here. a frame dr_flac gave up on is gone in both
+    size_t read(char *out, size_t n) {
+        size_t w = channels * width, done = 0, bad = 0;
+        while (done < n && !end) {
+            if (owed || held) {
+                size_t k = (size_t)std::min<uint64_t>(owed ? owed : 1, n - done);
+                if (owed) {
+                    memset(out + done * w, 0, k * w);
+                    owed -= k;
+                } else {
+                    memcpy(out + done * w, one, w);
+                    held = false;
+                }
+                done += k;
+            } else if (f->currentFLACFrame.pcmFramesRemaining) {
+                done += pull(std::min<size_t>(n - done, f->currentFLACFrame.pcmFramesRemaining), out + done * w);
+            } else if (bad < 64) {
+                uint64_t was = pos, blk = f->currentFLACFrame.header.blockSizeInPCMFrames;
+                if (!pull(1, one)) {
+                    bad++;
+                    lost = true;
+                    continue;
+                }
+                bad = 0;
+                // frame numbers count in max block size only when the frames before had that size
+                bool counted = f->currentFLACFrame.header.pcmFrameNumber || blk == f->maxBlockSizeInPCMFrames;
+                uint64_t gap = first() - was;
+                owed = !lost && counted && was != UINT64_MAX && first() > was && gap <= 8ull * f->maxBlockSizeInPCMFrames ? gap : 0;
+                lost = false;
+                held = true;
+            } else {
+                break;
+            }
+        }
+        return done * w;
     }
 
     void seek(uint64_t to) {
         end = !drflac_seek_to_pcm_frame(f, to);
+        pos = UINT64_MAX;
+        owed = 0;
+        held = lost = false;
     }
 };
 
@@ -270,31 +317,29 @@ static size_t mp3_size(const uint8_t *h) {
     return (size_t)(drmp3_hdr_frame_bytes(h, 0) + drmp3_hdr_padding(h));
 }
 
-// ffmpeg drops the Info frame and takes the lame delay, padding and frame count from it. returns where audio starts
-static uint64_t mp3_tag(Input &in, size_t &skip, size_t &cut, uint64_t &count) {
+static uint64_t mp3_id3(Input &in) {
     uint8_t h[10];
     uint64_t at = 0;
-    while (seek_to(&in, at) && in_read(&in, h, 10) == 10 && !memcmp(h, "ID3", 3)) {
+    // ffmpegs match: a version and flags below ff, a size of 7 bit bytes
+    while (seek_to(&in, at) && in_read(&in, h, 10) == 10 && !memcmp(h, "ID3", 3) && h[3] != 255 && h[4] != 255 &&
+           !((h[6] | h[7] | h[8] | h[9]) & 128)) {
         at += 10 + ((h[6] & 127u) << 21 | (h[7] & 127u) << 14 | (h[8] & 127u) << 7 | (h[9] & 127u)) + (h[5] & 16 ? 10u : 0u);
     }
-    std::vector<uint8_t> buf(16384);
+    return at;
+}
+
+// ffmpeg drops the Info frame and takes the lame delay from it only right after the tags, returns where audio starts
+static uint64_t mp3_tag(Input &in, uint64_t at, size_t &skip, size_t &cut, uint64_t &count) {
+    std::vector<uint8_t> buf(4096);
     if (!seek_to(&in, at)) {
         return at;
     }
     size_t len = in_read(&in, buf.data(), buf.size());
-    // ffmpeg drops the Info frame after junk too, but then keeps the delay
-    size_t junk = 0;
-    while (junk + 4 <= len && !mp3_head(buf.data() + junk)) {
-        junk++;
-    }
-    if (junk + 4 > len) {
+    const uint8_t *f = buf.data();
+    if (len < 4 || (f[1] & 6) != 2) {
         return at;
     }
-    const uint8_t *f = buf.data() + junk;
-    if ((f[1] & 6) != 2) {
-        fail();
-    }
-    size_t n = std::min(mp3_size(f), len - junk);
+    size_t n = std::min(mp3_size(f), len);
     bool mono = DRMP3_HDR_IS_MONO(f);
     size_t side = (f[1] & 8) ? (mono ? 17 : 32) : (mono ? 9 : 17);
     size_t o = 4 + (f[1] & 1 ? 0 : 2) + side;
@@ -317,16 +362,16 @@ static uint64_t mp3_tag(Input &in, size_t &skip, size_t &cut, uint64_t &count) {
         }
     }
     // a file much bigger than the tag says counts as files glued together, ffmpeg then forgets the frame count
-    uint64_t have = in.len - at - junk;
+    uint64_t have = in.len - at;
     if (size && have > size && have - size > size >> 4) {
         count = 0;
     }
-    if (!junk && o + 24 <= n && (!memcmp(f + o, "LAME", 4) || !memcmp(f + o, "Lavf", 4) || !memcmp(f + o, "Lavc", 4))) {
+    if (o + 24 <= n && (!memcmp(f + o, "LAME", 4) || !memcmp(f + o, "Lavf", 4) || !memcmp(f + o, "Lavc", 4))) {
         skip = (size_t)((f[o + 21] << 4 | f[o + 22] >> 4) + 529);
         unsigned pad = (f[o + 22] & 15u) << 8 | f[o + 23];
         cut = pad > 529 ? pad - 529 : 0;
     }
-    return at + junk + mp3_size(f);
+    return at + mp3_size(f);
 }
 
 static int bits(const uint8_t *o, size_t p, int n) {
@@ -399,6 +444,24 @@ static int mp3_fix(uint8_t *o, size_t n, int have) {
     return (int)z;
 }
 
+// the start of a container that can hold mp3 frames in its payload
+static bool mp3_container(const uint8_t *h, uint64_t len) {
+    if (len >= 262 && !memcmp(h + 257, "ustar", 5)) {
+        return true;
+    }
+    for (const char *m : {"RIFF", "RF64", "FORM", "caff", "OggS", "fLaC", "wvpk", "MAC ", "FLV\1", ".snd", "\x1a\x45\xdf\xa3", "\x30\x26\xb2\x75", "\0\0\1\xba", "PK\3\4", "%PDF"}) {
+        if (!memcmp(h, m, 4)) {
+            return true;
+        }
+    }
+    for (const char *m : {"ftyp", "moov", "mdat", "free", "wide", "skip", "styp", "moof", "sidx"}) {
+        if (!memcmp(h + 4, m, 4)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 struct Mp3 : Dec {
     // a frame that gets to ffmpegs decoder. it drops a bad one, but the end of that goes in the bit reservoir
     struct Frame {
@@ -417,7 +480,7 @@ struct Mp3 : Dec {
     uint64_t start = 0, pos = 0;
 
     void init() {
-        uint64_t count = 0, len = in.len, at = mp3_tag(in, skip, cut, count), off = 0;
+        uint64_t count = 0, len = in.len, at = mp3_id3(in), off = 0;
         std::vector<uint8_t> b;
         auto load = [&](uint64_t p) {
             if (p < off || std::min(len, p + 4096) > off + b.size()) {
@@ -433,26 +496,54 @@ struct Mp3 : Dec {
             }
             return (const uint8_t *)b.data() + (p - off);
         };
-        // like ffmpegs demuxer: start where two headers in a row match, give up at the end of the file
-        uint64_t first = at;
-        for (uint64_t i = 0; i < 65536; i++) {
-            if (at + i + 4 > len) {
-                fail();
+        const uint8_t *h0 = at + 4 <= len ? load(at) : NULL;
+        bool sync = h0 && h0[0] == 0xff && (h0[1] & 0xe0) == 0xe0, valid = h0 && mp3_head(h0);
+        if (!at && !sync && (len < 8 || mp3_container(h0, len))) {
+            fail();
+        }
+        auto chain = [&](uint64_t q, int n) {
+            uint32_t a = 0;
+            for (int k = 0; k < n; k++) {
+                if (q + 4 > len) {
+                    return false;
+                }
+                const uint8_t *h = load(q);
+                if (!mp3_head(h) || (k && ((a ^ be32(h)) & 0xfffe0ccf))) {
+                    return false;
+                }
+                a = be32(h);
+                q += mp3_size(h);
             }
-            const uint8_t *h = load(at + i);
-            uint64_t next = at + i + (mp3_head(h) ? mp3_size(h) : len);
-            if (next + 4 <= len) {
-                uint32_t a = be32(h);
-                h = load(next);
-                if (mp3_head(h) && !((a ^ be32(h)) & 0xfffe0ccf)) {
-                    first = at + i;
-                    break;
+            return true;
+        };
+        // like ffmpegs demuxer: first place with two headers in a row, after 64k its parser starts at the beginning
+        auto find = [&](uint64_t from) {
+            for (uint64_t i = 0; i < 65536; i++) {
+                if (from + i + 4 > len) {
+                    fail();
+                }
+                const uint8_t *h = load(from + i);
+                if (mp3_head(h) && chain(from + i, 2)) {
+                    return from + i;
                 }
             }
+            return from;
+        };
+        uint64_t first = find(at);
+        // a file that starts with junk needs four frames in a row, only in the first 1 MiB, junk past that goes to ffmpeg
+        for (uint64_t i = 0; !at && !sync && !chain(i, 4); i++) {
+            if (i >= (1 << 20)) {
+                fail();
+            }
+        }
+        uint64_t next = valid ? mp3_tag(in, at, skip, cut, count) : at;
+        if (next != at) {
+            first = find(next);
         }
         // like its parser: the 4 byte window starts empty after a frame, junk other than zeros drops the next frame
         uint64_t t = 0, e = count * drmp3_hdr_frame_samples(load(first)), drop = 0;
         bool none = true, after = false;
+        int gaps = 0;
         cut = e < cut ? 0 : cut;
         for (uint64_t p = first; p < len;) {
             uint64_t h = p;
@@ -463,6 +554,7 @@ struct Mp3 : Dec {
             if (h + 4 > len) {
                 break;
             }
+            gaps += h != p && !none;
             uint8_t f[4096];
             size_t n = mp3_size(load(h)), got = (size_t)std::min<uint64_t>(n, len - h);
             memcpy(f, load(h), got);
@@ -489,7 +581,8 @@ struct Mp3 : Dec {
             t += dur;
             p = h + n;
         }
-        if (none || (head[1] & 6) != 2) {
+        // a junk start with frames cut up again and again is another container, ts for one
+        if (none || (head[1] & 6) != 2 || (!at && !sync && gaps > 2)) {
             fail();
         }
         rate = (int)drmp3_hdr_sample_rate_hz(head);
@@ -1090,13 +1183,8 @@ static std::unique_ptr<Decoder> detect(Input in) {
         d.reset(new Opus);
     } else if (ogg_has(h, len, "\x01vorbis", 7)) {
         d.reset(new Vorbis);
-    } else if (len >= 4 && (!memcmp(h, "ID3", 3) || (h[0] == 0xff && (h[1] & 0xe0) == 0xe0))) {
-        d.reset(new Mp3);
     } else {
-        if (in.f) {
-            fclose(in.f);
-        }
-        fail();
+        d.reset(new Mp3);
     }
     d->in = in;
     d->init();
