@@ -11,6 +11,8 @@ from math import log, ceil
 from io import BytesIO
 from tempfile import TemporaryFile
 from warnings import warn
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache, wraps
 from bisect import bisect_right
 
@@ -226,25 +228,42 @@ def source(filepath, read_ahead_limit=-1, exe=None):
     return ["-protocol_whitelist", "file"] + allow + ["-i", "file:" + path], None
 
 
-def _first(names, converter):
+# the converter of the class a call was made on, the public lookups take no arguments like pydub's
+_converter = ContextVar("converter", default=None)
+
+
+@contextmanager
+def _using(converter):
+    token = _converter.set(converter)
+    try:
+        yield
+    finally:
+        _converter.reset(token)
+
+
+def _current():
     from .audio_segment import AudioSegment
+    return os.fspath(_converter.get() or AudioSegment.converter)
+
+
+def _first(names):
     for name in names:
         path = which(name)
         if path:
             return path
     # a private ffmpeg usually has its ffprobe and ffplay beside it
-    folder = os.path.dirname(os.fspath(converter or AudioSegment.converter))
+    folder = os.path.dirname(_current())
     for name in names:
         path = folder and which(os.path.join(folder, name))
         if path:
             return path
 
 
-def get_encoder_name(converter=None):
+def get_encoder_name():
     """
     Return enconder default application for system, either avconv or ffmpeg
     """
-    path = _first(("ffmpeg", "avconv"), converter)
+    path = _first(("ffmpeg", "avconv"))
     if path:
         return path
     else:
@@ -253,11 +272,11 @@ def get_encoder_name(converter=None):
         return "ffmpeg"
 
 
-def get_player_name(converter=None):
+def get_player_name():
     """
     Return enconder default application for system, either avconv or ffmpeg
     """
-    path = _first(("ffplay", "avplay"), converter)
+    path = _first(("ffplay", "avplay"))
     if path:
         return path
     else:
@@ -266,11 +285,11 @@ def get_player_name(converter=None):
         return "ffplay"
 
 
-def get_prober_name(converter=None):
+def get_prober_name():
     """
     Return probe application, either avconv or ffmpeg
     """
-    return _first(("ffprobe", "avprobe"), converter) or "ffprobe"
+    return _first(("ffprobe", "avprobe")) or "ffprobe"
 
 
 def fsdecode(filename):
@@ -318,8 +337,8 @@ def get_extra_info(stderr):
     return extra_info
 
 
-def _run_prober(filepath, read_ahead_limit, converter):
-    prober = get_prober_name(converter)
+def _run_prober(filepath, read_ahead_limit):
+    prober = get_prober_name()
     command_args = ["-v", "info", "-show_format", "-show_streams"]
     args, data = source(filepath, read_ahead_limit, prober)
     if data is not None and not os.path.basename(prober).startswith("ffprobe"):
@@ -559,20 +578,20 @@ def _open(filepath):
         return None, None
 
 
-def _has_prober(converter=None):
-    return which(get_prober_name(converter))
+def _has_prober():
+    return which(get_prober_name())
 
 
-def pcm_bits(name):
+def _pcm_bits(name):
     m = re.match(r"pcm_[suf](\d+)", name)
     return int(m[1]) if m else 8 if name in ("pcm_mulaw", "pcm_alaw") else 4 if name.startswith("adpcm_") else 0
 
 
-def mediainfo_json(filepath, read_ahead_limit=-1, converter=None):
+def mediainfo_json(filepath, read_ahead_limit=-1):
     """Return json dictionary with media info(codec, duration, size, bitrate...) from filepath
     """
-    if _has_prober(converter):
-        info, stderr = _run_prober(filepath, read_ahead_limit, converter)
+    if _has_prober():
+        info, stderr = _run_prober(filepath, read_ahead_limit)
         if not info:
             return info
         extra_info = get_extra_info(stderr)
@@ -591,8 +610,7 @@ def mediainfo_json(filepath, read_ahead_limit=-1, converter=None):
             extra_info = {0: [stream["sample_fmt"] + (" (%s bit)" % raw if raw != "N/A" else "")]}
         else:
             from . import _ffmpeg
-            from .audio_segment import AudioSegment
-            exe = converter or AudioSegment.converter
+            exe = _current()
             args, data = source(filepath, exe=_ffmpeg.find(exe))
             extra_info = get_extra_info(_ffmpeg.run(exe, args, data, "this file").stderr.decode("utf-8", "ignore"))
             info = {"streams": []}
@@ -600,7 +618,7 @@ def mediainfo_json(filepath, read_ahead_limit=-1, converter=None):
                 if "Audio" in t[:2]:
                     name = t[t.index("Audio") + 1].split()[0]
                     info["streams"].append({"index": i, "codec_type": "audio", "codec_name": name,
-                                            "bits_per_sample": pcm_bits(name)})
+                                            "bits_per_sample": _pcm_bits(name)})
 
     audio_streams = [x for x in info.get('streams', []) if x.get('codec_type') == 'audio']
     if len(audio_streams) == 0:
@@ -635,10 +653,10 @@ def mediainfo_json(filepath, read_ahead_limit=-1, converter=None):
     return info
 
 
-def mediainfo(filepath, converter=None):
+def mediainfo(filepath):
     """Return dictionary with media info(codec, duration, size, bitrate...) from filepath
     """
-    if not _has_prober(converter):
+    if not _has_prober():
         f, src = _open(filepath)
         native = None
         if f is not None:
@@ -648,10 +666,10 @@ def mediainfo(filepath, converter=None):
             stream, fmt = native
             tags = {**stream.pop("tags", {}), **fmt.pop("tags", {})}
             return {**stream, **fmt, **({"TAG": tags} if tags else {})}
-        streams = mediainfo_json(filepath, converter=converter).get("streams", [])
+        streams = mediainfo_json(filepath).get("streams", [])
         return {k: str(v) for k, v in streams[0].items()} if streams else {}
 
-    prober = get_prober_name(converter)
+    prober = get_prober_name()
     source_args, data = source(filepath, exe=prober)
     command_args = ["-v", "quiet", "-show_format", "-show_streams"] + source_args
 
@@ -701,15 +719,14 @@ def cache_codecs(function):
     return wrapper
 
 
-def get_supported_codecs(converter=None):
-    from .audio_segment import AudioSegment
-    return _codecs(os.fspath(converter or AudioSegment.converter))
+def get_supported_codecs():
+    return _codecs(_current())
 
 
 @lru_cache(None)
 def _codecs(converter):
     from . import _ffmpeg
-    encoder = _ffmpeg.find(converter) or get_encoder_name(converter)
+    encoder = _ffmpeg.find(converter) or get_encoder_name()
     command = [encoder, "-codecs"]
     try:
         res = run(command)
@@ -741,12 +758,12 @@ def _codecs(converter):
     return (decoders, encoders)
 
 
-def get_supported_decoders(converter=None):
-    return get_supported_codecs(converter)[0]
+def get_supported_decoders():
+    return get_supported_codecs()[0]
 
 
-def get_supported_encoders(converter=None):
-    return get_supported_codecs(converter)[1]
+def get_supported_encoders():
+    return get_supported_codecs()[1]
 
 
 def stereo_to_ms(audio_segment):

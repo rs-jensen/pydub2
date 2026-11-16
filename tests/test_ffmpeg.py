@@ -153,8 +153,8 @@ def test_prober_and_player_lookup(tmp_path, monkeypatch, probe):
 @need_real
 def test_patched_prober_is_used_without_one_on_path(tmp_path, monkeypatch, m4a):
     private(tmp_path, monkeypatch, "full", False)
-    monkeypatch.setattr(utils, "get_prober_name", lambda *a: real[1])
-    monkeypatch.setattr(pydub.utils, "get_prober_name", lambda *a: real[1])
+    monkeypatch.setattr(utils, "get_prober_name", lambda: real[1])
+    monkeypatch.setattr(pydub.utils, "get_prober_name", lambda: real[1])
     want = pydub.utils.mediainfo(m4a)
     assert utils.mediainfo(m4a)["bits_per_sample"] == want["bits_per_sample"]
     assert utils.mediainfo(m4a)["duration"] == want["duration"]
@@ -175,9 +175,10 @@ def test_a_subclass_converter_is_used_everywhere(tmp_path, monkeypatch, m4a, pro
 
     assert len(My.from_file(m4a)) > 400
     assert len(My.from_file(io.BytesIO(open(m4a, "rb").read()))) > 400
-    assert utils.mediainfo(m4a, converter=My.converter)["codec_name"] == "aac"
-    assert utils.mediainfo_json(m4a, converter=My.converter)["streams"][0]["codec_name"] == "aac"
-    assert "aac" in utils.get_supported_decoders(My.converter)
+    with utils._using(My.converter):
+        assert utils.mediainfo(m4a)["codec_name"] == "aac"
+        assert utils.mediainfo_json(m4a)["streams"][0]["codec_name"] == "aac"
+        assert "aac" in utils.get_supported_decoders()
     for fmt in ("m4a", "mp3"):
         assert len(My.silent(200).export(io.BytesIO(), format=fmt).getvalue()) > 100
     seen = []
@@ -219,3 +220,36 @@ def test_reading_without_ffprobe_gives_what_ffprobe_gives(tmp_path, monkeypatch,
     which = utils.which
     monkeypatch.setattr(utils, "which", lambda p: None if os.path.basename(p) in ("ffprobe", "avprobe") else which(p))
     assert read() == want
+
+
+@need_real
+@pytest.mark.parametrize("args", [0, 1])
+@pytest.mark.parametrize("name", ["get_prober_name", "get_encoder_name", "get_player_name"])
+def test_replaced_lookups_still_work(tmp_path, monkeypatch, m4a, name, args):
+    folder = private(tmp_path, monkeypatch, "full", False)
+    path = {"get_prober_name": real[1], "get_encoder_name": real[0], "get_player_name": "/the/player"}[name]
+    seen = []
+
+    def one(converter=None):
+        seen.append(converter)
+        return path
+
+    def none():
+        seen.append(None)
+        return path
+
+    monkeypatch.setattr(utils, name, one if args else none)
+    monkeypatch.setattr(playback, name, one if args else none, raising=False)
+    assert len(AudioSegment.from_file(m4a)) > 400
+    assert utils.mediainfo(m4a)["codec_name"] == "aac"
+    assert len(AudioSegment.silent(200).export(io.BytesIO(), format="m4a").getvalue()) > 100
+    if name == "get_encoder_name":
+        utils._codecs.cache_clear()
+        with utils._using("no-such-ffmpeg"):
+            assert "aac" in utils.get_supported_decoders()
+        utils._codecs.cache_clear()
+    calls = []
+    monkeypatch.setattr(playback.subprocess, "call", lambda cmd, **kw: calls.append(cmd))
+    playback._play_with_ffplay(AudioSegment.silent(100))
+    assert calls[0][0] == (path if name == "get_player_name" else str(folder / "ffplay"))
+    assert all(x is None for x in seen)

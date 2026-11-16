@@ -8,10 +8,11 @@ OSX 10.10): https://gist.github.com/jiaaro/9767512210a1d80a8a0d
 import os
 import subprocess
 from tempfile import NamedTemporaryFile
-from .utils import get_player_name, make_chunks, NOWINDOW
+from .utils import _using, get_player_name, make_chunks, NOWINDOW
 
 def _play_with_ffplay(seg):
-    PLAYER = get_player_name(seg.converter)
+    with _using(seg.converter):
+        PLAYER = get_player_name()
     f = NamedTemporaryFile("w+b", suffix=".wav", delete=False)
     f.close()
     try:

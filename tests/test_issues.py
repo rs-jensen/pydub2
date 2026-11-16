@@ -183,7 +183,7 @@ def test_flac_of_32_bit_like_pydub():
 
 
 def test_rf64_info_without_ffprobe(monkeypatch):
-    monkeypatch.setattr(utils, "_has_prober", lambda *a: False)
+    monkeypatch.setattr(utils, "_has_prober", lambda: False)
     pcm = bytes(400)
     fmt = struct.pack("<4sIHHIIHH", b"fmt ", 16, 1, 1, 8000, 16000, 2, 16)
     ds64 = struct.pack("<4sIQQQI", b"ds64", 28, 0, len(pcm), len(pcm) // 2, 0)

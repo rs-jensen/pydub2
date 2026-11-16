@@ -8,7 +8,7 @@ from io import BytesIO
 import pydub2
 from .exceptions import CouldntDecodeError, CouldntEncodeError
 from .logging_utils import log_conversion
-from .utils import check_duration, mediainfo_json, source, which
+from .utils import _using, check_duration, mediainfo_json, source, which
 from .utils import run as run_command
 
 
@@ -42,7 +42,8 @@ def _to_wav(converter, path, data, format, codec, parameters, start_second, dura
     inp = source(path if path is not None else BytesIO(data), exe=find(converter))[0]
     out = ["-vn", "-f", "wav"]
     if not codec:
-        info = mediainfo_json(path if path is not None else BytesIO(data), converter=converter)
+        with _using(converter):
+            info = mediainfo_json(path if path is not None else BytesIO(data))
         streams = [x for x in info.get("streams", []) if x.get("codec_type") == "audio"]
         if streams:
             stream = streams[0]
