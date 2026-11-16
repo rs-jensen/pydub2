@@ -84,6 +84,21 @@ suite lives in `tests/pydub_suite` and runs against pydub2.
 There are a few deliberate differences, for example files that fall back to ffmpeg come out as
 16 bit. They are listed in [docs/differences.md](https://github.com/rs-jensen/pydub2/blob/main/docs/differences.md).
 
+## Untrusted files
+
+If your service decodes uploads, set a limit on length and on how long ffmpeg may run. Both are off by default.
+
+    import pydub2
+    pydub2.max_duration = 3600   # seconds, longer files raise CouldntDecodeError
+    pydub2.ffmpeg_timeout = 60   # seconds for every ffmpeg and ffprobe call
+    seg = pydub2.AudioSegment.from_file(upload)
+
+Never build `format`, `codec`, `parameters`, `cover` or `AudioSegment.converter` from user input, they
+go to ffmpeg as they are. Do not show exception text to end users, ffmpeg errors can hold paths on your
+server. Numbers such as `silent(duration)`, `seg * n` and `set_frame_rate(n)` use memory in proportion to
+the number, so keep them in bounds. For the rest, run decoding in a worker with a memory and time limit.
+The source package downloads its codec libraries when it is built, so building needs network access.
+
 ## Status
 
 This is early. The version is 0.1.0. It is built and tested on macOS arm64 and Linux so far.

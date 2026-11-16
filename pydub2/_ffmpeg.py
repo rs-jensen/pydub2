@@ -1,19 +1,20 @@
 import os
-import shutil
+import os
 import struct
-import subprocess
 import sys
 import tempfile
 from io import BytesIO
 
+import pydub2
 from .exceptions import CouldntDecodeError, CouldntEncodeError
 from .logging_utils import log_conversion
-from .utils import mediainfo_json, NOWINDOW
+from .utils import check_duration, mediainfo_json, source, which
+from .utils import run as run_command
 
 
 def find(converter):
     for name in (converter, "avconv"):
-        path = shutil.which(name)
+        path = which(name)
         if path:
             return path
 
@@ -24,30 +25,40 @@ def run(converter, args, data, what):
         raise FileNotFoundError("ffmpeg not found, pydub2 needs it for " + what)
     cmd = [exe, "-y", "-nostdin"] + args
     log_conversion(cmd)
-    return subprocess.run(cmd, input=data, capture_output=True, creationflags=NOWINDOW)
+    return run_command(cmd, data)
 
 
 def to_wav(converter, path=None, data=None, format=None, codec=None, parameters=None,
            start_second=None, duration=None):
+    try:
+        return _to_wav(converter, path, data, format, codec, parameters, start_second, duration)
+    except (KeyError, ValueError, TimeoutError, struct.error) as e:
+        raise CouldntDecodeError("cant decode this file: " + str(e))
+
+
+def _to_wav(converter, path, data, format, codec, parameters, start_second, duration):
     format = {"m4a": "mp4", "wave": "wav", "wma": "asf"}.get(format, format)
     opts = (["-f", format] if format else []) + (["-acodec", codec] if codec else [])
-    if path is not None:
-        inp = ["-i", path]
-    else:
-        inp = ["-read_ahead_limit", "-1", "-i", "cache:pipe:0"]
+    inp = source(path if path is not None else BytesIO(data))[0]
     out = ["-vn", "-f", "wav"]
     if not codec:
         info = mediainfo_json(path if path is not None else BytesIO(data))
-        streams = [x for x in info.get("streams", []) if x["codec_type"] == "audio"]
+        streams = [x for x in info.get("streams", []) if x.get("codec_type") == "audio"]
         if streams:
             stream = streams[0]
-            bits = stream["bits_per_sample"]
+            bits = stream.get("bits_per_sample")
             # ffprobe says fltp for these even when they are not
             if stream.get("sample_fmt") == "fltp" and stream.get("codec_name") in ["mp3", "mp4", "aac", "webm", "ogg"]:
+                bits = 16
+            if bits not in (8, 16, 24, 32):
                 bits = 16
             out = ["-acodec", "pcm_u8" if bits == 8 else "pcm_s%dle" % bits] + out
     if start_second is not None:
         out += ["-ss", str(start_second)]
+    limit = pydub2.max_duration
+    if limit is not None:
+        # one second over, so a file past the limit is seen and not just cut
+        duration = limit + 1 if duration is None else min(duration, limit + 1)
     if duration is not None:
         out += ["-t", str(duration)]
     out += (parameters or []) + ["-"]
@@ -62,6 +73,9 @@ def to_wav(converter, path=None, data=None, format=None, codec=None, parameters=
     # ffmpeg cant seek back on a pipe so the sizes in the header are 0xffffffff
     wav[4:8] = struct.pack("<I", len(wav) - 8)
     wav[i + 4:i + 8] = struct.pack("<I", len(wav) - i - 8)
+    if limit is not None:
+        channels, rate, _, align = struct.unpack_from("<HIIH", wav, 22)
+        check_duration((len(wav) - i - 8) // align, rate)
     return bytes(wav)
 
 
@@ -74,7 +88,7 @@ def from_wav(converter, wav, format, codec=None, bitrate=None, parameters=None, 
         cover = os.fspath(cover)
         if format != "mp3" or not cover.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")):
             raise AttributeError("cover images only work with mp3 and png, jpg, bmp or tif files")
-        args += ["-i", cover, "-map", "0", "-map", "1", "-c:v", "mjpeg"]
+        args += ["-protocol_whitelist", "file", "-i", "file:" + cover, "-map", "0", "-map", "1", "-c:v", "mjpeg"]
     if codec:
         args += ["-acodec", codec]
     if bitrate:
@@ -88,7 +102,10 @@ def from_wav(converter, wav, format, codec=None, bitrate=None, parameters=None, 
         args += ["-write_xing", "0"]
     with tempfile.TemporaryDirectory() as d:
         name = os.path.join(d, "out")
-        p = run(converter, args + ["-f", muxer, name], wav, format)
+        try:
+            p = run(converter, args + ["-f", muxer, name], wav, format)
+        except TimeoutError as e:
+            raise CouldntEncodeError("cant encode this file: " + str(e))
         if p.returncode != 0:
             raise CouldntEncodeError("cant encode this file: " + p.stderr.decode(errors="ignore")[-500:])
         with open(name, "rb") as f:

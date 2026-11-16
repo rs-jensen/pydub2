@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cstring>
 #include <exception>
+#include <new>
 #include <stdexcept>
 
 #include <FLAC/stream_encoder.h>
@@ -58,7 +59,10 @@ static std::string wav(const Audio &a) {
     put16(out, 1);
     put16(out, a.channels);
     put32(out, a.rate);
-    put32(out, a.rate * a.channels * a.width);
+    uint64_t byte_rate = (uint64_t)a.rate * a.channels * a.width;
+    if (byte_rate > UINT32_MAX)
+        throw std::runtime_error("cant encode this");
+    put32(out, byte_rate);
     put16(out, a.channels * a.width);
     put16(out, a.width * 8);
     out += "data";
@@ -104,6 +108,8 @@ static FLAC__StreamEncoderTellStatus flac_tell(const FLAC__StreamEncoder *, FLAC
 }
 
 static std::string flac(const Audio &a) {
+    if (a.channels > 8)
+        throw std::runtime_error("cant encode this");
     size_t frames = a.data.size() / a.width / a.channels;
     // ffmpeg writes 8 bit as 16 and 32 bit as 24, so do we
     int bits = a.width == 1 ? 16 : a.width == 4 ? 24 : a.width * 8;
@@ -115,6 +121,8 @@ static std::string flac(const Audio &a) {
             block = b;
     std::vector<FLAC__int32> buf(block * a.channels);
     FLAC__StreamEncoder *enc = FLAC__stream_encoder_new();
+    if (!enc)
+        throw std::bad_alloc();
     FLAC__stream_encoder_set_channels(enc, a.channels);
     FLAC__stream_encoder_set_bits_per_sample(enc, bits);
     FLAC__stream_encoder_set_blocksize(enc, block);

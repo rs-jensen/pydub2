@@ -33,6 +33,11 @@
 - `export` of a 32 bit segment to flac writes 24 bit flac, like ffmpeg. A wav export with a float `frame_rate` rounds it like the `wave` module.
 - Damaged files can have another length than with ffmpeg, a few ms of difference where the damage is. A wav cut inside a frame loses the stray bytes, pydub keeps them.
 - With `pydub2_mp3` and `tags`, the id3 tag is version 2.3 when `id3v2_version="3"` is asked for or ffmpeg is missing, otherwise ffmpeg writes the default 2.4.
+- ffmpeg, ffprobe and ffplay are looked up on `PATH` only, never in the current directory, and an ffmpeg next to avconv wins over avconv. The functions `get_encoder_name`, `get_prober_name` and `get_player_name` return the full path they found. `AudioSegment.converter` can still be a full path.
+- Files go to ffmpeg with a `file:` prefix and `-protocol_whitelist`, so a name like `concat:a.wav` is a file name and not a protocol. A file that starts like an ffconcat script, an HLS playlist or a DASH manifest raises `CouldntDecodeError`.
+- `pydub2.max_duration` and `pydub2.ffmpeg_timeout` are new, both off by default.
+- `mul` (`apply_gain`, fades) with a nan factor, or an infinite factor on a zero sample, raises `ValueError`. The result is undefined in audioop. `fade` with a duration far past the end of the audio and `overlay(loop=True)` give the same bytes as pydub, only faster. Sample widths other than 8, 16, 24 and 32 bit that ffprobe reports for a file are read as 16 bit.
+- opusfile 0.12 is patched at build time for CVE-2022-47021 (a null pointer when an allocation fails), the fix is the upstream commit 0a4cd796 and no release has it yet.
 
 ## pydub quirks kept on purpose
 

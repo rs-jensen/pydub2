@@ -13,11 +13,14 @@ Audio resample(const Audio &a, int new_rate) {
     if (a.width < 1 || a.width > 4) throw std::invalid_argument("bad sample width");
     if (new_rate == a.rate) return a;
 
+    // libsamplerate only takes ratios up to 256 and would say so after the buffers are made
+    if (new_rate > 256LL * a.rate || a.rate > 256LL * new_rate) throw std::runtime_error("rates too far apart");
     int w = a.width;
     long long full = 1LL << (8 * w - 1); // 128, 32768 or 2^31
     long long n = a.data.size() / (w * a.channels); // frames
     long long out_n = std::llrint(n * (double)new_rate / a.rate); // half to even, like python round
 
+    if (n > INT32_MAX || out_n > INT32_MAX) throw std::runtime_error("too long to resample");
     std::vector<float> in(n * a.channels);
     for (size_t i = 0; i < in.size(); i++) {
         long long v = 0;
