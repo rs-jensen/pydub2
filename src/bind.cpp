@@ -211,19 +211,19 @@ NB_MODULE(_pydub2, m) {
         return nb::bytes(s.data(), s.size());
     });
 
-    m.def("rms", [](nb::bytes data, size_t width) {
+    m.def("rms", [](nb::bytes data, long long width) {
         std::string_view s = str(data);
         nb::gil_scoped_release g;
         return rms(s, width);
     });
 
-    m.def("max", [](nb::bytes data, size_t width) {
+    m.def("max", [](nb::bytes data, long long width) {
         std::string_view s = str(data);
         nb::gil_scoped_release g;
         return pydub2::max(s, width);
     });
 
-    m.def("mul", [](nb::bytes data, size_t width, double factor) {
+    m.def("mul", [](nb::bytes data, long long width, double factor) {
         std::string_view s = str(data);
         nb::object out;
         {
@@ -233,7 +233,7 @@ NB_MODULE(_pydub2, m) {
         return out;
     });
 
-    m.def("lowpass", [](nb::bytes data, size_t width, size_t channels, double alpha) {
+    m.def("lowpass", [](nb::bytes data, long long width, long long channels, double alpha) {
         std::string_view s = str(data);
         nb::object out;
         {
@@ -243,7 +243,7 @@ NB_MODULE(_pydub2, m) {
         return out;
     });
 
-    m.def("highpass", [](nb::bytes data, size_t width, size_t channels, double alpha) {
+    m.def("highpass", [](nb::bytes data, long long width, long long channels, double alpha) {
         std::string_view s = str(data);
         nb::object out;
         {
@@ -253,7 +253,7 @@ NB_MODULE(_pydub2, m) {
         return out;
     });
 
-    m.def("compress", [](nb::bytes data, size_t width, size_t channels, double thresh, double ratio, double attack_frames,
+    m.def("compress", [](nb::bytes data, long long width, long long channels, double thresh, double ratio, double attack_frames,
                          double release_frames, long long look) {
         std::string_view s = str(data);
         nb::object out;
@@ -269,7 +269,7 @@ NB_MODULE(_pydub2, m) {
         return out;
     });
 
-    m.def("add", [](nb::bytes a, nb::bytes b, size_t width) {
+    m.def("add", [](nb::bytes a, nb::bytes b, long long width) {
         std::string_view x = str(a), y = str(b);
         nb::object out;
         {
@@ -279,7 +279,7 @@ NB_MODULE(_pydub2, m) {
         return out;
     });
 
-    m.def("lin2lin", [](nb::bytes data, size_t width, size_t new_width) {
+    m.def("lin2lin", [](nb::bytes data, long long width, long long new_width) {
         std::string_view s = str(data);
         nb::object out;
         {
@@ -289,7 +289,7 @@ NB_MODULE(_pydub2, m) {
         return out;
     });
 
-    m.def("tomono", [](nb::bytes data, size_t width, double lfac, double rfac) {
+    m.def("tomono", [](nb::bytes data, long long width, double lfac, double rfac) {
         std::string_view s = str(data);
         nb::object out;
         {
@@ -299,7 +299,7 @@ NB_MODULE(_pydub2, m) {
         return out;
     });
 
-    m.def("tostereo", [](nb::bytes data, size_t width, double lfac, double rfac) {
+    m.def("tostereo", [](nb::bytes data, long long width, double lfac, double rfac) {
         std::string_view s = str(data);
         nb::object out;
         {
@@ -309,7 +309,7 @@ NB_MODULE(_pydub2, m) {
         return out;
     });
 
-    m.def("downmix", [](nb::bytes data, size_t width, size_t channels) {
+    m.def("downmix", [](nb::bytes data, long long width, long long channels) {
         std::string_view s = str(data);
         nb::object out;
         {
@@ -319,7 +319,7 @@ NB_MODULE(_pydub2, m) {
         return out;
     });
 
-    m.def("reverse", [](nb::bytes data, size_t width) {
+    m.def("reverse", [](nb::bytes data, long long width) {
         std::string_view s = str(data);
         nb::object out;
         {
@@ -329,13 +329,13 @@ NB_MODULE(_pydub2, m) {
         return out;
     });
 
-    m.def("avg", [](nb::bytes data, size_t width) {
+    m.def("avg", [](nb::bytes data, long long width) {
         std::string_view s = str(data);
         nb::gil_scoped_release g;
         return avg(s, width);
     });
 
-    m.def("bias", [](nb::bytes data, size_t width, int bias_) {
+    m.def("bias", [](nb::bytes data, long long width, int bias_) {
         std::string_view s = str(data);
         nb::object out;
         {
@@ -345,7 +345,7 @@ NB_MODULE(_pydub2, m) {
         return out;
     });
 
-    m.def("ratecv", [](nb::bytes data, size_t width, size_t channels, int inrate, int outrate) {
+    m.def("ratecv", [](nb::bytes data, long long width, long long channels, int inrate, int outrate) {
         std::string_view s = str(data);
         nb::object out;
         {

@@ -81,7 +81,7 @@ I ran this with no ffmpeg on `PATH`. Without the encoder package and without ffm
 
 pydub2 reads wav, flac, ogg, opus and mp3 without ffmpeg, and writes wav, flac, ogg and opus without it. Everything else still goes to ffmpeg: m4a and aac, wma, aiff, video files, and mp3 writing if you did not install the encoder package. pydub2 never needs ffprobe to read a file. It asks ffmpeg when it must.
 
-`AudioSegment.converter` is still there, and so is the old name `AudioSegment.ffmpeg`. Set it to a full path when ffmpeg is not on `PATH`:
+`AudioSegment.converter` is still there. Set it to a full path when ffmpeg is not on `PATH`:
 
 ```python
 from pydub2 import AudioSegment
@@ -92,9 +92,9 @@ seg = Sine(440).to_audio_segment(duration=500)
 seg.export("tone.m4a", format="ipod").close()
 ```
 
-Use your own path there. This works for exporting. For reading a file that has to go through ffmpeg, such as m4a, pydub2 currently looks for ffmpeg on `PATH` and ignores `converter`, so put ffmpeg on `PATH` for that case.
+Use your own path there. It is used for reading and exporting, and also for the `ffmpeg -i` call behind `utils.mediainfo`. The path can be absolute, relative or contain spaces. ffprobe is looked up on `PATH` first and then in the folder of `converter`, so a private ffmpeg with its ffprobe beside it needs nothing else. With no ffprobe anywhere, `from_file` and `mediainfo` use `ffmpeg -i`.
 
-pydub2 looks for ffmpeg, ffprobe and ffplay on `PATH` only. pydub also finds one in the current directory, which pydub2 does not.
+Without `converter`, ffmpeg, ffprobe and ffplay are looked up on `PATH` only. pydub also finds one in the current directory, which pydub2 does not. As in pydub, setting `AudioSegment.ffmpeg` or `AudioSegment.ffprobe` does nothing, set `converter`. In pydub a private ffmpeg is not enough for reading m4a, because the ffprobe call ignores `converter` and fails with `FileNotFoundError: 'ffprobe'`.
 
 ## What behaves differently
 
@@ -143,9 +143,9 @@ Give it a few files of each format you use. A different length is worth a bug re
 
 `ModuleNotFoundError: No module named 'pyaudioop'` on Python 3.13 or newer. That is pydub 0.25.1, which needs the removed `audioop` module. pydub2 has no audioop at all, so there is nothing to install. `import pydub2` works on 3.13 and newer as it is.
 
-`RuntimeWarning: Couldn't find ffmpeg or avconv - defaulting to ffmpeg, but may not work` when you import pydub. pydub2 prints nothing at import. If a call really needs ffmpeg and cannot find it, you get the warning at that call, followed by `FileNotFoundError: [Errno 2] No such file or directory: 'ffmpeg'`. Install ffmpeg, or use a format pydub2 handles itself.
+`RuntimeWarning: Couldn't find ffmpeg or avconv - defaulting to ffmpeg, but may not work` when you import pydub. pydub2 prints nothing at import. If a call really needs ffmpeg and cannot find it, you get `FileNotFoundError: ffmpeg not found, pydub2 needs it for ...` at that call, with no warning. Install ffmpeg, or use a format pydub2 handles itself.
 
-`FileNotFoundError: [Errno 2] No such file or directory: 'ffprobe'`. In pydub this happens for every file that is not wav. pydub2 does not run ffprobe to read a file, so reading wav, flac, ogg, opus and mp3 works without it, and m4a and the like work with only ffmpeg installed. `utils.mediainfo` is the exception for formats pydub2 cannot read itself, and still needs ffprobe.
+`FileNotFoundError: [Errno 2] No such file or directory: 'ffprobe'`. In pydub this happens for every file that is not wav. pydub2 does not run ffprobe to read a file, so reading wav, flac, ogg, opus and mp3 works without it, and m4a and the like work with only ffmpeg installed. `utils.mediainfo` and `mediainfo_json` fall back to `ffmpeg -i` for formats pydub2 cannot read itself, and return only the codec, the stream index and the sample size keys.
 
 `FileNotFoundError` when exporting mp3 or m4a. For mp3, install `pydub2[mp3]` or ffmpeg. For m4a and aac you need ffmpeg. The error message says which one.
 

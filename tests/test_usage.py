@@ -36,7 +36,7 @@ def noise(width, channels=2, frames=3000):
 
 def no_ffprobe(monkeypatch):
     which = utils2.which
-    monkeypatch.setattr(utils2, "which", lambda p: None if p in ("ffprobe", "avprobe") else which(p))
+    monkeypatch.setattr(utils2, "which", lambda p: None if os.path.basename(p) in ("ffprobe", "avprobe") else which(p))
 
 
 @need_ffmpeg
@@ -165,6 +165,17 @@ def test_mediainfo_without_ffprobe(tmp_path, monkeypatch):
         assert {k: s2.get(k) for k in keys[4:]} == {k: s1.get(k) for k in keys[4:]}, p
     with open(paths[0], "rb") as f:
         assert utils2.mediainfo_json(f)["streams"][0]["codec_name"] == "pcm_s16le"
+
+
+@need_ffmpeg
+def test_mediainfo_of_m4a_without_ffprobe(tmp_path, monkeypatch):
+    path = tmp_path / "a.m4a"
+    make(path, "-c:a", "aac")
+    want = pydub.utils.mediainfo_json(str(path))["streams"][0]
+    no_ffprobe(monkeypatch)
+    for got in (utils2.mediainfo_json(str(path))["streams"][0], utils2.mediainfo(str(path))):
+        assert got["codec_name"] == "aac"
+        assert str(got["bits_per_sample"]) == str(want["bits_per_sample"])
 
 
 def test_mediainfo_chunks_and_tags_without_ffprobe(tmp_path, monkeypatch):

@@ -1,12 +1,17 @@
 import io
 import math
 import os
+import shutil
 import struct
+import subprocess
+import sys
 import wave
 
 import pytest
 
-from pydub2 import _ffmpeg
+from pydub2 import AudioSegment, _ffmpeg, utils
+
+pydub = pytest.importorskip("pydub")
 
 ff = "/opt/homebrew/bin/ffmpeg"
 if not os.path.exists(ff):
@@ -67,3 +72,87 @@ def test_missing_converter():
 def test_bad_data():
     with pytest.raises(_ffmpeg.CouldntDecodeError):
         _ffmpeg.to_wav(ff, data=b"not audio at all")
+
+
+real = shutil.which("ffmpeg"), shutil.which("ffprobe"), shutil.which("ffplay")
+need_real = pytest.mark.skipif(not (real[0] and real[1]) or sys.platform == "win32", reason="needs ffmpeg and ffprobe on posix")
+
+
+@pytest.fixture(scope="module")
+def m4a(tmp_path_factory):
+    path = tmp_path_factory.mktemp("m4a") / "a.m4a"
+    subprocess.run([real[0], "-y", "-v", "quiet", "-f", "lavfi", "-i", "sine=duration=0.5", "-c:a", "aac", str(path)], check=True)
+    return str(path)
+
+
+def outcome(f):
+    try:
+        return f()
+    except Exception as e:
+        return type(e)
+
+
+def private(tmp_path, monkeypatch, where, probe):
+    folder = tmp_path / ("my bin" if where == "spaces" else "bin")
+    folder.mkdir()
+    for name, src in zip(("ffmpeg", "ffprobe", "ffplay"), real):
+        if src and (probe or name != "ffprobe"):
+            (folder / name).symlink_to(src)
+    monkeypatch.setenv("PATH", str(folder) if where == "bare" else str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    conv = {"bare": "ffmpeg", "relative": "bin/ffmpeg"}.get(where, str(folder / "ffmpeg"))
+    monkeypatch.setattr(AudioSegment, "converter", conv)
+    monkeypatch.setattr(pydub.AudioSegment, "converter", conv)
+    return folder
+
+
+@need_real
+@pytest.mark.parametrize("probe", [True, False])
+@pytest.mark.parametrize("where", ["full", "relative", "bare", "spaces"])
+def test_reading_with_a_private_converter(tmp_path, monkeypatch, m4a, where, probe):
+    private(tmp_path, monkeypatch, where, probe)
+    want = outcome(lambda: pydub.AudioSegment.from_file(m4a).raw_data)
+    # pydub only finds ffprobe on PATH, pydub2 also next to the converter and falls back to ffmpeg -i
+    assert (want is FileNotFoundError) != (where == "bare" and probe)
+    with open(m4a, "rb") as f:
+        data = f.read()
+    segs = [AudioSegment.from_file(m4a), AudioSegment.from_file(open(m4a, "rb")), AudioSegment.from_file(io.BytesIO(data))]
+    assert len(segs[0]) > 400
+    assert all(s.raw_data == segs[0].raw_data for s in segs)
+    if probe and where == "bare":
+        assert segs[0].raw_data == want
+    assert utils.mediainfo(m4a)["codec_name"] == "aac"
+    assert utils.mediainfo_json(m4a)["streams"][0]["codec_name"] == "aac"
+    for fmt in ("m4a", "mp3"):
+        assert len(AudioSegment.silent(200).export(io.BytesIO(), format=fmt).getvalue()) > 100
+
+
+@need_real
+def test_missing_converter_raises_like_pydub(tmp_path, monkeypatch, m4a):
+    monkeypatch.setenv("PATH", str(tmp_path))
+    for conv in ("ffmpeg", str(tmp_path / "nope" / "ffmpeg")):
+        monkeypatch.setattr(AudioSegment, "converter", conv)
+        monkeypatch.setattr(pydub.AudioSegment, "converter", conv)
+        for f in (lambda a: a.from_file(m4a), lambda a: a.silent(100).export(io.BytesIO(), format="m4a")):
+            assert outcome(lambda: f(AudioSegment)) is FileNotFoundError
+        assert outcome(lambda: pydub.AudioSegment.from_file(m4a)) is FileNotFoundError
+        assert outcome(lambda: utils.mediainfo(m4a)) is outcome(lambda: pydub.utils.mediainfo(m4a)) is FileNotFoundError
+
+
+@need_real
+@pytest.mark.parametrize("probe", [True, False])
+def test_prober_and_player_lookup(tmp_path, monkeypatch, probe):
+    folder = private(tmp_path, monkeypatch, "full", probe)
+    want = str(folder / "ffprobe") if probe else "ffprobe"
+    assert utils.get_prober_name() == want
+    assert (utils.get_player_name() == str(folder / "ffplay")) == bool(real[2])
+
+
+@need_real
+def test_patched_prober_is_used_without_one_on_path(tmp_path, monkeypatch, m4a):
+    private(tmp_path, monkeypatch, "full", False)
+    monkeypatch.setattr(utils, "get_prober_name", lambda: real[1])
+    monkeypatch.setattr(pydub.utils, "get_prober_name", lambda: real[1])
+    want = pydub.utils.mediainfo(m4a)
+    assert utils.mediainfo(m4a)["bits_per_sample"] == want["bits_per_sample"]
+    assert utils.mediainfo(m4a)["duration"] == want["duration"]

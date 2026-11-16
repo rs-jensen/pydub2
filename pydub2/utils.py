@@ -222,8 +222,15 @@ def source(filepath, read_ahead_limit=-1, exe=None):
 
 
 def _first(*names):
+    from .audio_segment import AudioSegment
     for name in names:
         path = which(name)
+        if path:
+            return path
+    # a private ffmpeg usually has its ffprobe and ffplay beside it
+    folder = os.path.dirname(AudioSegment.converter)
+    for name in names:
+        path = folder and which(os.path.join(folder, name))
         if path:
             return path
 
@@ -258,13 +265,7 @@ def get_prober_name():
     """
     Return probe application, either avconv or ffmpeg
     """
-    path = _first("ffprobe", "avprobe")
-    if path:
-        return path
-    else:
-        # should raise exception
-        warn("Couldn't find ffprobe or avprobe - defaulting to ffprobe, but may not work", RuntimeWarning)
-        return "ffprobe"
+    return _first("ffprobe", "avprobe") or "ffprobe"
 
 
 def fsdecode(filename):
@@ -533,7 +534,7 @@ def _open(filepath):
 
 
 def _has_prober():
-    return which("ffprobe") or which("avprobe")
+    return which(get_prober_name())
 
 
 def mediainfo_json(filepath, read_ahead_limit=-1):
@@ -558,8 +559,11 @@ def mediainfo_json(filepath, read_ahead_limit=-1):
             info = {"streams": [{k: v for k, v in stream.items() if v != "N/A"}], "format": dict(fmt, nb_streams=1)}
             extra_info = {0: [stream["sample_fmt"] + (" (%s bit)" % raw if raw != "N/A" else "")]}
         else:
-            args, data = source(filepath, exe=get_encoder_name())
-            extra_info = get_extra_info(run([get_encoder_name()] + args, data).stderr.decode("utf-8", "ignore"))
+            from . import _ffmpeg
+            from .audio_segment import AudioSegment
+            exe = AudioSegment.converter
+            args, data = source(filepath, exe=_ffmpeg.find(exe))
+            extra_info = get_extra_info(_ffmpeg.run(exe, args, data, "this file").stderr.decode("utf-8", "ignore"))
             info = {"streams": [
                 {"index": i, "codec_type": "audio", "codec_name": t[t.index("Audio") + 1].split()[0],
                  "bits_per_sample": 0} for i, t in extra_info.items() if "Audio" in t[:2]]}
@@ -610,6 +614,8 @@ def mediainfo(filepath):
             stream, fmt = native
             tags = {**stream.pop("tags", {}), **fmt.pop("tags", {})}
             return {**stream, **fmt, **({"TAG": tags} if tags else {})}
+        streams = mediainfo_json(filepath).get("streams", [])
+        return {k: str(v) for k, v in streams[0].items()} if streams else {}
 
     prober = get_prober_name()
     source_args, data = source(filepath, exe=prober)
@@ -663,7 +669,9 @@ def cache_codecs(function):
 
 @cache_codecs
 def get_supported_codecs():
-    encoder = get_encoder_name()
+    from . import _ffmpeg
+    from .audio_segment import AudioSegment
+    encoder = _ffmpeg.find(AudioSegment.converter) or get_encoder_name()
     command = [encoder, "-codecs"]
     try:
         res = run(command)
