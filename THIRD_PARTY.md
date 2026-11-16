@@ -40,6 +40,11 @@ Two vendored files have a small change so that opening files from several thread
 
 - a short granule ignores its own scfsi bits but no longer clears the ones of the next granule
 - MPEG 2 intensity stereo: the highest scalefactor value is a position like any other, only 16 and up are illegal
+- a frame whose granules claim more bits than it has is decoded, not dropped. The huffman decoder stops at the end of
+  the data before each pair and each quad, reads zeros after it, and drops a last quad that ran past its granule
+- after such a frame the bit reservoir is the end of its data
+- scfsi copies the scalefactors of the last granule 0 that was decoded, which `src/decode.cpp` can mark as zeroed
+  (the new fields `zeroed` and `scf0` in `drmp3dec`)
 
 The mp3 encoder is not part of this package. It is in the separate package pydub2-mp3 (LAME 3.100,
 LGPL-2.0-or-later) and is loaded at runtime. It is its own shared library, built from the unmodified

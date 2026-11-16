@@ -299,6 +299,18 @@ def test_mp3_lsf_intensity_positions(tmp_path):
     same_as_ffmpeg(tmp_path, "is.mp3", (frame + bytes(104 - len(frame))) * 4)
 
 
+# ffmpeg drops the frame after junk unless the junk is all zeros, and a frame with big_values over 288
+def test_mp3_junk_between_frames(tmp_path):
+    m = bytearray(open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k"), "rb").read())
+    starts = mp3_frames(m)
+    big = (starts[16] + 4) * 8 + 20 + 12
+    m[big // 8:big // 8 + 3] = (int.from_bytes(m[big // 8:big // 8 + 3], "big") | 0x1ff << (15 - big % 8)).to_bytes(3, "big")
+    out = m[:starts[3]] + b"\1\2" + m[starts[3]:starts[5]] + bytes(3) + m[starts[5]:starts[8] - 2] + m[starts[8]:starts[12]]
+    out += b"\7" * 416 + m[starts[12]:]
+    same_as_ffmpeg(tmp_path, "junk.mp3", bytes(out))
+    assert len(_pydub2.decode(bytes(out))[0]) < len(_pydub2.decode(bytes(m))[0])
+
+
 def test_mp3_starts_inside_the_bit_reservoir(tmp_path):
     m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k", "-write_xing", "0"), "rb").read()
     starts = mp3_frames(m)
