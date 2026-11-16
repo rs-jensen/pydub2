@@ -46,6 +46,11 @@ static void put(char *out, const float *f, size_t n, int width) {
     }
 }
 
+// ffmpeg hands 3 to 8 vorbis channels out in wav order, out[i] is vorbis channel order[n - 1][i]
+static const uint8_t order[8][8] = {
+    {0}, {0, 1}, {0, 2, 1}, {0, 1, 2, 3}, {0, 2, 1, 3, 4}, {0, 2, 1, 5, 3, 4}, {0, 2, 1, 6, 5, 3, 4}, {0, 2, 1, 7, 5, 6, 3, 4},
+};
+
 // a file or a piece of memory. base hides bytes at the start from the decoder, tail goes after the end
 // and fix replaces the bytes at fix_at
 struct Input {
@@ -841,7 +846,7 @@ struct Vorbis : Dec {
             left.resize(k * c);
             for (int i = 0; i < k; i++) {
                 for (size_t j = 0; j < c; j++) {
-                    left[i * c + j] = o[j][i];
+                    left[i * c + j] = o[c <= 8 ? order[c - 1][j] : j][i];
                 }
             }
             lpos = pos < target ? (size_t)std::min<uint64_t>(k, target - pos) : 0;
@@ -946,6 +951,15 @@ struct Opus : Dec {
             // a chained file can change channel count, k is sized for the new one
             if (k < 0 || op_channel_count(of, link) != channels) {
                 fail();
+            }
+            if (c > 2 && op_head(of, link)->mapping_family == 1) {
+                float f[8];
+                for (int i = 0; i < k; i++) {
+                    for (size_t j = 0; j < c; j++) {
+                        f[j] = tmp[i * c + order[c - 1][j]];
+                    }
+                    memcpy(&tmp[i * c], f, c * sizeof(float));
+                }
             }
             put(out + done * c * 4, tmp, k * c, 4);
             done += k;
