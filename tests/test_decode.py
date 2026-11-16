@@ -7,6 +7,7 @@ import random
 import struct
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -374,6 +375,23 @@ def test_mp2_goes_to_ffmpeg(tmp_path):
     with open(make(tmp_path, "a.mp2", 2, "-c:a", "mp2"), "rb") as f:
         with pytest.raises(RuntimeError):
             _pydub2.decode(f.read())
+
+
+# a cover picture of several MB in the comments must not make opening quadratic
+def test_vorbis_big_comment_opens_fast(tmp_path):
+    meta = tmp_path / "meta.txt"
+    meta.write_text(";FFMETADATA1\ncomment=" + "A" * (10 << 20) + "\n")
+    small = make(tmp_path, "small.ogg", 2, "-c:a", "libvorbis")
+    big = make(tmp_path, "big.ogg", 2, "-i", str(meta), "-map_metadata", "1", "-c:a", "libvorbis")
+    times = []
+    for path in (small, big):
+        with open(path, "rb") as f:
+            data = f.read()
+        t = time.perf_counter()
+        out = _pydub2.decode(data)
+        times.append(time.perf_counter() - t)
+    assert out == _pydub2.decode(open(small, "rb").read())
+    assert times[1] < 10 * times[0] + 0.5
 
 
 def test_chained_vorbis_goes_to_ffmpeg(tmp_path):

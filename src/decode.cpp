@@ -868,9 +868,22 @@ struct Vorbis : Dec {
         left.clear();
         lpos = 0;
         pos = sync = 0;
+        size_t scan = 0, ends = 0;
         while (!v) {
             if (!more()) {
                 fail();
+            }
+            // stb parses all of win again on each try, so only try once the three header packets are in
+            while (scan + 27 <= win.size() && scan + 27 + (uint8_t)win[scan + 26] <= win.size()) {
+                size_t nseg = (uint8_t)win[scan + 26], body = 0;
+                for (size_t s = 0; s < nseg; s++) {
+                    body += (uint8_t)win[scan + 27 + s];
+                    ends += (uint8_t)win[scan + 27 + s] < 255;
+                }
+                scan += 27 + nseg + body;
+            }
+            if (ends < 3 && !eof) {
+                continue;
             }
             int used, err;
             if (!arena) {
