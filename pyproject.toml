@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "pydub2"
-version = "0.1.0"
+version = "0.0.1"
 description = "Drop-in replacement for pydub with a C++ core. wav, flac, ogg, opus and mp3 reading need no ffmpeg."
 readme = "README.md"
 license = "MIT"
