@@ -20,4 +20,4 @@ Things to know:
 - `pip list` and `importlib.metadata.version("pydub")` still report the real pydub if it is installed.
 - `pydub.pyaudioop` and `pydub.audioop` do not exist and raise ImportError, pydub2 has no audioop.
 - `python -m pydub.something` stops with "No code object available".
-- Do not run pydub oracle comparisons with this installed, they would test pydub2 against itself.
+- Do not run tests that compare against pydub with this installed, they would test pydub2 against itself.

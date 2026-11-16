@@ -11,9 +11,11 @@ namespace pydub2 {
 // the weights flipped so the output index is last and the loops over outputs run on neighbours in memory
 static std::vector<float> flip(const float *w, int rows, int cols) {
     std::vector<float> t(rows * cols);
-    for (int r = 0; r < rows; r++)
-        for (int c = 0; c < cols; c++)
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
             t[c * rows + r] = w[r * cols + c];
+        }
+    }
     return t;
 }
 
@@ -46,33 +48,38 @@ static Net load() {
 }
 
 static void madd(float *__restrict out, const float *__restrict w, float v, int n) {
-    for (int i = 0; i < n; i++)
+    for (int i = 0; i < n; i++) {
         out[i] += w[i] * v;
+    }
 }
 
 // kernel 3, pad 1, then relu. in is [t][cin], out is [t out][cout]
 static int conv(const float *in, int cin, int t, const std::vector<float> &w, const float *b, int cout, int stride,
                 float *out) {
     int tout = (t - 1) / stride + 1;
-    for (int j = 0; j < tout; j++)
+    for (int j = 0; j < tout; j++) {
         memcpy(out + j * cout, b, cout * sizeof(float));
+    }
     for (int i = 0; i < cin; i++) {
         for (int k = 0; k < 3; k++) {
             for (int j = 0; j < tout; j++) {
                 int p = j * stride + k - 1;
-                if (p >= 0 && p < t)
+                if (p >= 0 && p < t) {
                     madd(out + j * cout, &w[(i * 3 + k) * cout], in[p * cin + i], cout);
+                }
             }
         }
     }
-    for (int i = 0; i < tout * cout; i++)
+    for (int i = 0; i < tout * cout; i++) {
         out[i] = out[i] > 0 ? out[i] : 0;
+    }
     return tout;
 }
 
 static void gates(float *__restrict g, const float *__restrict a, float x, const float *__restrict b, float y) {
-    for (int r = 0; r < 512; r++)
+    for (int r = 0; r < 512; r++) {
         g[r] += a[r] * x + b[r] * y;
+    }
 }
 
 static float sigmoid(float x) {
@@ -91,15 +98,19 @@ static std::vector<float> speech_probs(const std::vector<float> &x, const Cancel
         cancel();
         // 64 samples of context from the last window, then reflect pad 64 on the right
         std::memmove(buf, buf + 512, 64 * sizeof(float));
-        for (int i = 0; i < 512; i++)
+        for (int i = 0; i < 512; i++) {
             buf[64 + i] = start + i < x.size() ? x[start + i] : 0;
-        for (int i = 0; i < 64; i++)
+        }
+        for (int i = 0; i < 64; i++) {
             buf[576 + i] = buf[574 - i];
+        }
 
         memset(acc, 0, sizeof(acc));
-        for (int n = 0; n < 256; n++)
-            for (int t = 0; t < 4; t++)
+        for (int n = 0; n < 256; n++) {
+            for (int t = 0; t < 4; t++) {
                 madd(acc + t * 258, &net.basis[n * 258], buf[t * 128 + n], 258);
+            }
+        }
         for (int t = 0; t < 4; t++) {
             for (int k = 0; k < 129; k++) {
                 float re = acc[t * 258 + k], im = acc[t * 258 + 129 + k];
@@ -113,10 +124,12 @@ static std::vector<float> speech_probs(const std::vector<float> &x, const Cancel
         conv(e2, 64, t, net.enc3, enc3_b, 128, 1, e3);
 
         // lstm cell, torch gate order i f g o
-        for (int r = 0; r < 512; r++)
+        for (int r = 0; r < 512; r++) {
             g[r] = ih_b[r] + hh_b[r];
-        for (int i = 0; i < 128; i++)
+        }
+        for (int i = 0; i < 128; i++) {
             gates(g, &net.ih[i * 512], e3[i], &net.hh[i * 512], h[i]);
+        }
         float out = out_b[0];
         for (int i = 0; i < 128; i++) {
             c[i] = sigmoid(g[128 + i]) * c[i] + sigmoid(g[i]) * std::tanh(g[256 + i]);
@@ -129,8 +142,9 @@ static std::vector<float> speech_probs(const std::vector<float> &x, const Cancel
 }
 
 Ranges detect_speech(const Audio &in, double threshold, int min_speech_ms, int min_silence_ms, const Cancel &cancel) {
-    if (in.width < 1 || in.width > 4)
+    if (in.width < 1 || in.width > 4) {
         throw std::invalid_argument("bad sample width");
+    }
     Audio a = in;
     std::string res;
     if (in.rate != 16000) {
@@ -148,10 +162,15 @@ Ranges detect_speech(const Audio &in, double threshold, int min_speech_ms, int m
     for (size_t i = 0; i < n; i++) {
         float sum = 0;
         for (int ch = 0; ch < a.channels; ch++, p += a.width) {
-            if (a.width == 1) sum += (int8_t)p[0];
-            else if (a.width == 2) sum += (int16_t)(p[0] | p[1] << 8);
-            else if (a.width == 3) sum += (int32_t)((uint32_t)p[0] << 8 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 24) / 256;
-            else sum += (int32_t)((uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24);
+            if (a.width == 1) {
+                sum += (int8_t)p[0];
+            } else if (a.width == 2) {
+                sum += (int16_t)(p[0] | p[1] << 8);
+            } else if (a.width == 3) {
+                sum += (int32_t)((uint32_t)p[0] << 8 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 24) / 256;
+            } else {
+                sum += (int32_t)((uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24);
+            }
         }
         x[i] = sum * scale;
     }
@@ -166,26 +185,31 @@ Ranges detect_speech(const Audio &in, double threshold, int min_speech_ms, int m
     long long start = 0, temp_end = 0;
     for (size_t i = 0; i < probs.size(); i++) {
         long long pos = 512LL * i;
-        if (probs[i] >= threshold)
+        if (probs[i] >= threshold) {
             temp_end = 0;
+        }
         if (probs[i] >= threshold && !on) {
             on = true;
             start = pos;
             continue;
         }
         if (probs[i] < neg && on) {
-            if (!temp_end)
+            if (!temp_end) {
                 temp_end = pos;
-            if (pos - temp_end < min_silence)
+            }
+            if (pos - temp_end < min_silence) {
                 continue;
-            if (temp_end - start > min_speech)
+            }
+            if (temp_end - start > min_speech) {
                 out.push_back({(int)(start / 16), (int)(temp_end / 16)});
+            }
             on = false;
             temp_end = 0;
         }
     }
-    if (on && (long long)n - start > min_speech)
+    if (on && (long long)n - start > min_speech) {
         out.push_back({(int)(start / 16), (int)(n / 16)});
+    }
     return out;
 }
 

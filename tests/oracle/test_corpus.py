@@ -16,17 +16,21 @@ LOSSY = {"mp3", "mp2", "mp1", "vorbis", "opus", "aac", "ac3", "eac3", "wmav1", "
 # 16 bit units, more than this is a shift or a different decode, not rounding
 TOL = 328
 MODES = ["path", "format", "fileobj", "bytesio", "bytesio_format", "start", "slice"]
-# known differences by file name, see docs/differences.md
+# known differences by file name, see docs/differences.md. each is the kind of difference pydub2 has to the oracle in
+# the modes where it differs: params:<what differs>, samples (not lossy, same params) or decoder (lossy over TOL)
 WRONG_IN_PYDUB = "pydub reads this file wrongly"
 DECODER = "a different decoder"
 EXPECTED = {
-    "pcm_alaw_44100_6ch_1s.wav": WRONG_IN_PYDUB, "pcm_mulaw_44100_6ch_1s.wav": WRONG_IN_PYDUB,
-    "pcm_f32le_44100_6ch_1s.wav": WRONG_IN_PYDUB, "pcm_f64le_44100_6ch_1s.wav": WRONG_IN_PYDUB,
-    "ext_float.wav": WRONG_IN_PYDUB, "ext_24_in_32.wav": WRONG_IN_PYDUB, "bits_12_in_16.wav": WRONG_IN_PYDUB,
-    "s24_192000_6ch_1s.flac": WRONG_IN_PYDUB, "s24_192000_8ch_1s.flac": WRONG_IN_PYDUB,
-    "b6k_48000_2ch.opus": DECODER, "b16k_48000_2ch.opus": DECODER, "b32k_48000_2ch.opus": DECODER,
-    "Boot_to_the_Head.MP3": DECODER, "Ed_Rush_-_Sabotage.mp3": DECODER, "scooter-wicked-02-imraving.mp3": DECODER,
-    "he_mode.mp3": DECODER, "mp3_with_embedded_albumart.mp3": DECODER,
+    "pcm_alaw_44100_6ch_1s.wav": ({"samples"}, WRONG_IN_PYDUB), "pcm_mulaw_44100_6ch_1s.wav": ({"samples"}, WRONG_IN_PYDUB),
+    "pcm_f32le_44100_6ch_1s.wav": ({"samples"}, WRONG_IN_PYDUB), "pcm_f64le_44100_6ch_1s.wav": ({"samples"}, WRONG_IN_PYDUB),
+    "ext_float.wav": ({"samples"}, WRONG_IN_PYDUB), "ext_24_in_32.wav": ({"samples"}, WRONG_IN_PYDUB),
+    "bits_12_in_16.wav": ({"params:width", "params:width,frames"}, WRONG_IN_PYDUB),
+    "s24_192000_6ch_1s.flac": ({"params:frames"}, WRONG_IN_PYDUB), "s24_192000_8ch_1s.flac": ({"params:frames"}, WRONG_IN_PYDUB),
+    "b6k_48000_2ch.opus": ({"decoder"}, DECODER), "b16k_48000_2ch.opus": ({"decoder"}, DECODER),
+    "b32k_48000_2ch.opus": ({"decoder"}, DECODER),
+    "Ed_Rush_-_Sabotage.mp3": ({"decoder"}, DECODER), "scooter-wicked-02-imraving.mp3": ({"decoder"}, DECODER),
+    "he_mode.mp3": ({"decoder"}, DECODER), "mp3_with_embedded_albumart.mp3": ({"decoder"}, DECODER),
+    "Boot_to_the_Head.MP3": ({"params:frames"}, "24 mp3 frames fewer than ffmpeg gives"),
 }
 
 
@@ -68,12 +72,13 @@ def samples(seg):
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("name", files, ids=[os.path.relpath(f, root) for f in files] if root else None)
 def test_corpus(name, mode, record_property):
-    try:
-        compare(name, mode, record_property)
-    except AssertionError:
-        if os.path.basename(name) in EXPECTED:
-            pytest.xfail(EXPECTED[os.path.basename(name)])
-        raise
+    kind = compare(name, mode, record_property)
+    if kind is None:
+        return
+    known = EXPECTED.get(os.path.basename(name))
+    if known and kind[0] in known[0]:
+        pytest.xfail(known[1])
+    pytest.fail("%s: %s" % kind)
 
 
 def compare(name, mode, record_property):
@@ -90,12 +95,16 @@ def compare(name, mode, record_property):
         got = load(pydub2, name, mode)
     except Exception as e:
         pytest.fail("pydub reads it, pydub2 raises %s: %s" % (type(e).__name__, str(e)[:200]))
+    names = ("rate", "channels", "width", "frames")
     params = lambda s: (s.frame_rate, s.channels, s.sample_width, int(s.frame_count()))
-    assert params(got) == params(want), "rate, channels, width, frames"
+    if params(got) != params(want):
+        bad = [n for n, x, y in zip(names, params(got), params(want)) if x != y]
+        return "params:" + ",".join(bad), "%s, pydub2 %s, pydub %s" % (bad, params(got), params(want))
     a, b = samples(want), samples(got)
     if codec(name) in LOSSY:
         diff = int(np.abs(a - b).max()) >> (8 * (want.sample_width - 2)) if len(a) and want.sample_width > 1 else 0
         record_property("maxdiff", diff)
-        assert diff <= TOL, "max abs diff %d in 16 bit units" % diff
-    else:
-        assert got.raw_data == want.raw_data, "%d of %d samples differ" % (int((a != b).sum()), len(a))
+        if diff > TOL:
+            return "decoder", "max abs diff %d in 16 bit units" % diff
+    elif got.raw_data != want.raw_data:
+        return "samples", "%d of %d samples differ" % (int((a != b).sum()), len(a))

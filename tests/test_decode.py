@@ -78,7 +78,7 @@ def lossy(tmp_path, name, channels, limit, *args):
     return close(*both(make(tmp_path, name, channels, *args)), limit)
 
 
-# same float to s16 as ffmpeg, what is left is minimp3 vs ffmpegs synthesis, 1 LSB on a few samples
+# same float to s16 as ffmpeg, what is left is minimp3 vs ffmpegs synthesis, 1 LSB on up to 1 sample in 100 (the ubuntu runner)
 @pytest.mark.parametrize("channels", [1, 2])
 @pytest.mark.parametrize("args", [["-b:a", "128k"], ["-q:a", "4"], ["-b:a", "128k", "-write_xing", "0"],
                                   ["-ar", "22050", "-b:a", "64k"], ["-ar", "8000", "-q:a", "6"]])
@@ -88,15 +88,27 @@ def test_mp3(tmp_path, args, channels):
     assert lossy(tmp_path, "a.mp3", channels, 1, "-c:a", "libmp3lame", *args) < 0.015  # ffmpeg x86 SIMD rounds differently
 
 
-# these have an Info frame too short for a whole lame block
-@pytest.mark.parametrize("name", ["test1.mp3", "test2.mp3", "test3.mp3", "party.mp3"])
-def test_mp3_info_frame(name):
-    path = os.path.join(os.path.dirname(__file__), "pydub_suite", "data", name)
-    if not os.path.exists(path):
-        pytest.skip("no data file")
-    if name in ("test1.mp3", "test2.mp3") and X64_FF_ON_ARM:
+# ffmpeg 1.x wrote an Info frame with 8 bytes too few for the whole lame block, dr_mp3 then keeps it as audio
+@pytest.mark.parametrize("tag", [b"Info", b"Xing"])
+def test_mp3_info_frame(tmp_path, tag):
+    if X64_FF_ON_ARM:
         pytest.skip(STEREO)
-    assert close(*both(path), 1) < 0.005
+    m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "40k", "-ar", "32000", "-write_xing", "0",
+                  "-id3v2_version", "0"), "rb").read()
+    assert m[:3] == bytes.fromhex("fffb28") and len(m) % 180 == 0
+    info = bytearray(180)
+    info[:4] = m[:4]
+    info[36:40] = tag
+    info[40:56] = struct.pack(">IIII", 7, len(m) // 180, len(m) + 180, 0x00010203)
+    info[152:165] = b"Lavf55.12.100"
+    assert close(*both(save(tmp_path, "info.mp3", bytes(info) + m)), 1) < 0.015
+
+
+def save(tmp_path, name, data):
+    path = str(tmp_path / name)
+    with open(path, "wb") as f:
+        f.write(data)
+    return path
 
 
 @pytest.mark.parametrize("channels", [1, 2])
@@ -262,8 +274,11 @@ def test_channel_order(tmp_path, channels, name, codec):
     p = subprocess.run([ff, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "aevalsrc=%s:s=48000:d=0.5" % expr,
                         "-c:a", codec, path], capture_output=True)
     if p.returncode:
+        # ffmpeg writes no opus for these two layouts
+        assert name == "a.opus" and channels in (3, 4), p.stderr
         pytest.skip("this ffmpeg cant write it")
-    close(*both(path), 1 << 20)
+    # libopus and ffmpeg's own opus decoder are up to 245568 apart on 6 channels, vorbis is under 1024 (1152 with msvc)
+    close(*both(path), 1280 if name == "a.ogg" else 1 << 19)
 
 
 def test_mp2_goes_to_ffmpeg(tmp_path):

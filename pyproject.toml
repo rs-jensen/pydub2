@@ -5,7 +5,7 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "pydub2"
 version = "0.1.0"
-description = "pydub without the ffmpeg install. Drop-in replacement with a C++ core."
+description = "Drop-in replacement for pydub with a C++ core. wav, flac, ogg, opus and mp3 reading need no ffmpeg."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE", "THIRD_PARTY.md", "licenses/*"]
@@ -48,7 +48,7 @@ minimum-version = "build-system.requires"
 wheel.packages = ["pydub2"]
 install.components = ["python"]
 build-dir = "build/{wheel_tag}"
-sdist.exclude = [".github", "build", "mp3", "tests/pydub_suite", "PLAN.md", "HACKING.md"]
+sdist.exclude = [".github", "build", "mp3", "tests/pydub_suite"]
 
 [tool.cibuildwheel]
 build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-* cp314t-*"

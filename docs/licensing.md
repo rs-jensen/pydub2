@@ -1,51 +1,27 @@
-# Licensing notes
+# Licensing
 
-Checked 2026-11-16. These are my notes on what I verified and what I decided, so the next person does not have to redo it.
+pydub2 is MIT. The Python layer is a port of pydub (MIT, licenses/pydub.txt). The tests in `tests/pydub_suite/test_pydub.py` are pydub's own tests.
 
-## 1. Silero VAD weights
+## What is bundled
 
-`src/silero_weights.h` is made by `tools/silero_weights.py` from `silero_vad.onnx`. The file I used has sha256 `1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3` (2327524 bytes).
+The C++ extension has the libraries listed in [THIRD_PARTY.md](../THIRD_PARTY.md) built in. All of them are MIT, BSD, public domain or MIT-0. The text of each license is in `licenses/` in the source tree and in `*.dist-info/licenses/licenses` of an installed wheel.
 
-I downloaded every wheel of `silero-vad` on PyPI (5.0.1b2 to 6.2.3) and hashed the `silero_vad/data/silero_vad.onnx` in each. The hash first shows up in 6.2.0 (2025-11-06) and is the same in 6.2.1, 6.2.2 and 6.2.3. Versions 5.0.1b2 to 5.1.2 have `2623a295...` and 6.0.0 and 6.1.0 have `597d30b3...`. The git history agrees: `src/silero_vad/data/silero_vad.onnx` last changed in commit bfdc019 "add v6.2 model" (2025-11-06), which is the tag `v6.2`. I also downloaded the file at tag `v6.2` from github.com/snakers4/silero-vad and got the same hash. Running `tools/silero_weights.py` on it gives a `silero_weights.h` that is byte for byte the one in the repo.
+Only the libFLAC library is built from the FLAC source. The flac and metaflac programs and the replaygain code, which are GPL or LGPL, are not built and not in the wheel.
 
-So the weights are the 16 kHz model of silero-vad v6.2. The comment in the header and the old THIRD_PARTY line said v5, which was wrong, and both say v6.2 now.
+## Silero VAD weights
 
-The LICENSE at tag `v6.2` is MIT, "Copyright (c) 2020-present Silero Team", and is identical to `licenses/silero-vad.txt`.
+`src/silero_weights.h` is made by `tools/silero_weights.py` from `silero_vad.onnx` of silero-vad v6.2 (MIT, Copyright (c) 2020-present Silero Team). The file has sha256 `1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3`. Running the script on it gives the header in the repo byte for byte.
 
-Decision: keep the weights, record version, path, hash and license in THIRD_PARTY.md and in the header of `licenses/silero-vad.txt`. Nothing is regenerated.
+## Test audio
 
-## 2. Test audio from pydub
+No audio from pydub's repository is kept. `tests/pydub_suite/conftest.py` makes the test files when the suite first runs, and `tests/pydub_suite/data/.gitignore` keeps them out of git.
 
-`tests/pydub_suite/data` was 8.0 MB in 18 files copied from pydub v0.25.1 (MIT repo). I went through the pydub git history, the commit messages and the tags in the files. Nothing in the repo says where any of the audio came from:
+## mp3 and aac
 
-- test1.mp3, test2.mp3, test3.mp3 are from the first commits (2011) and were cut down in 2013. test2 is tagged "ringing rythm abstract" by "Stephan" and test3 "Medium rooster crowing" by "Chanticleer". No license or source is recorded and a web search did not find either one.
-- party.mp3 (2011), bach.ogg (2013, a flac stream in an ogg file) and creative_common.mp4 (2013, stream dated 2007-05-12) have no recorded source. The name of the mp4 hints at a Creative Commons video but not which license or whose.
-- format_test.m4a and wrong_extension.aac are the same bytes, added by the pydub author in 2011.
-- test1.wav, test1.raw, test1-8bit.wav and test1-24bit.wav are made from test1 (2014 to 2020). The 24 bit file has Logic Pro X tags from 2016.
-- test4.wav, test5.webm, cover.jpg, cover.png and test-dc_offset.wav (a contributor, 2017) are real recordings or pictures with no recorded source. test1_empty.wav is only a 44 byte header.
+mp3 reading is built in (minimp3 through dr_mp3). mp3 writing uses LAME 3.100 (LGPL-2.0-or-later), which is not in this package. It is in the separate package `pydub2-mp3`, installed with `pip install pydub2[mp3]`. LAME is built from the unmodified release tarball (sha256 `ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e`) with `mp3/CMakeLists.txt` as its own shared library, which pydub2 loads with ctypes. Anyone can replace it with their own build. The `LICENSE` of that package has the full LGPL text, the source and how to replace the library.
 
-The audio is music and speech, so these are not clearly public domain or CC0 and the repo being MIT does not settle what the audio is. The tests do not need those exact files, they need audio with some measurable properties.
+aac, m4a, wma and video files are not bundled. They go to ffmpeg, which you install yourself.
 
-Decision: replace all of it. `tests/pydub_suite/conftest.py` makes every file the first time the suite runs (numpy, the wave module and ffmpeg) and `data/.gitignore` keeps them out of git. Delete the files in `data` to make them again. The signals are sine tones with envelopes, tuned so the numbers in `test_pydub.py` still hold: the same silence ranges `[[0, 775], [3141, 4033], [5516, 6051]]` for test1 (with and without `seek_step`), dBFS values within the tolerances, the fade ratio, the dc offsets, the 8 bit rms and the lengths. I also ran `detect_silence` from pydub 0.25.1 on the generated test1.wav and it gives the same ranges. The suite gives the same result as before, 108 passed and 5 skipped. If ffmpeg is missing the suite is skipped, like the other ffmpeg tests.
+## The name
 
-Tracked size of the data dir: 8.0 MB before, 16 bytes after (only `.gitignore`). The generated files are about 5.7 MB on disk when the suite has run. What stays from pydub is `test_pydub.py`, which is MIT code and covered by `licenses/pydub.txt`.
-
-## 3. The name
-
-Trademark search for "pydub". USPTO: I used the backend behind tmsearch.uspto.gov (the same JSON service the search page calls). An exact word mark search, `pydub*`, `*pydub*`, `py dub` and a goods and services text search all returned 0 records. A fuzzy search returned one record, serial 79014286, a dead design only mark filed 2004-06-11 and abandoned 2014-06-11 for restaurant services, which has nothing to do with the name. As a check that the service answers, "pillow" returns 2210 records. EUIPO eSearch plus: the connection was reset and the page never loaded. WIPO Global Brand Database: it shows a verification page (ALTCHA) before any search, and I did not try to get around it. TMview: the request was rejected. So I have a clean USPTO result and no result for EUIPO and WIPO.
-
-PyPI: PEP 541 says a project can be removed or moved if it uses a third party's trademark outside nominal or fair use, and PyPI does not pre-screen uploads. `pydub2` and `pydub2-mp3` are not taken on PyPI (the JSON API gives 404 for both). Comparable projects: pydub-ng (MIT fork, 2025), pydub-lts (published November 2026, describes itself as a drop in replacement), Pillow (the PIL fork, kept the `PIL` import name and says "Python Imaging Library (fork)") and rapidfuzz (a faster rewrite of fuzzywuzzy and thefuzz with a similar API, new name).
-
-Decision: keep the name pydub2. It is a name for compatibility, as in pydub-ng and Pillow, the README says it is not affiliated with pydub, and I found no registered mark for "pydub" where I could search. If a registration for "pydub" turns up, or the pydub author asks, I rename the PyPI project and the package directory, which is a mechanical change.
-
-## 4. LAME in pydub2-mp3
-
-Three projects on PyPI that ship LAME in wheels:
-
-- lameenc 1.9.0, `LGPL-3.0-or-later`, https://pypi.org/project/lameenc/ . LAME is built into the Python extension (`lameenc.cpython-313-x86_64-linux-gnu.so`), so it cannot be swapped without rebuilding. The wheel has `dist-info/licenses/LICENSE`.
-- python-soundfile 0.14.0, `BSD-3-Clause`, https://github.com/bastibe/python-soundfile . The wheel has `libsndfile_x86_64.so` with LAME and mpg123 inside, the LGPL-2.1 text in `_soundfile_data/COPYING`, and `licensing/license_notes.md` with the copyright list, license and a source link for each library.
-- PyAV 15.1.0, `BSD-3-Clause`, https://pypi.org/project/av/15.1.0/ . The wheel has `av.libs/libmp3lame-68ba0ecb.so.0.0.0` as a separate shared library next to the ffmpeg libraries, and only the PyAV BSD license in `dist-info`, no LGPL text.
-
-pydub2-mp3 meets the points they cover, and a bit more: the `LICENSE` in the wheel has the LAME notice and the full LGPL text (part 3), names the exact source (`lame-3.100.tar.gz` with its sha256) and the build file (`mp3/CMakeLists.txt`, also in the sdist), and says how to replace the library. LAME is its own shared object, `libmp3lame.so`, `.dylib` or `.dll`, in the `pydub2_mp3` folder, loaded with ctypes and not linked, so anyone can drop in their own build. It is built from the unmodified tarball and pydub2 itself stays MIT.
-
-Decision: keep LAME in the separate `pydub2-mp3` wheel as it is. AAC and m4a stay on ffmpeg and are not bundled.
+pydub2 is a name for compatibility, like pydub-ng. The project is not affiliated with pydub. I found no registered trademark for "pydub" in the US trademark database. I could not search the EU and WIPO databases.

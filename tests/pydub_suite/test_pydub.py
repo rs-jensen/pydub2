@@ -270,7 +270,6 @@ class AudioSegmentTests(unittest.TestCase):
             tmp_file.seek(0)
             check_8bit_segment(AudioSegment.from_file(tmp_file))
 
-    @unittest.skip("64 bit wav comes out 16 bit")
     def test_192khz_audio(self):
         test_files = [('test-192khz-16bit.wav', 16),
                       ('test-192khz-24bit.wav', 32),
@@ -1239,19 +1238,11 @@ class NoConverterTests(unittest.TestCase):
         func = partial(AudioSegment.from_raw, self.raw_file)
         self.assertRaises(KeyError, func)
 
-    @unittest.skip("mp3 needs no ffmpeg here")
-    def test_opening_mp3_file_fails(self):
-        func = partial(AudioSegment.from_mp3, self.mp3_file)
-        self.assertRaises(OSError, func)
-
-        func = partial(AudioSegment.from_file, self.mp3_file)
-        self.assertRaises(OSError, func)
-
-        func = partial(AudioSegment.from_file, self.mp3_file, "mp3")
-        self.assertRaises(OSError, func)
-
-        func = partial(AudioSegment.from_file, self.mp3_file, format="mp3")
-        self.assertRaises(OSError, func)
+    def test_opening_mp3_file_needs_no_ffmpeg(self):
+        # pydub raises OSError here, mp3 is built in
+        for seg in (AudioSegment.from_mp3(self.mp3_file), AudioSegment.from_file(self.mp3_file),
+                    AudioSegment.from_file(self.mp3_file, "mp3"), AudioSegment.from_file(self.mp3_file, format="mp3")):
+            self.assertTrue(len(seg) > 1000)
 
     def test_init_AudioSegment_data_buffer(self):
         seg = AudioSegment(data="\0" * 34, sample_width=2, frame_rate=4, channels=1)
@@ -1343,21 +1334,18 @@ class PartialAudioSegmentLoadTests(unittest.TestCase):
     def tearDown(self):
         AudioSegment.converter = get_encoder_name()
 
-    @unittest.skip("bundled decoder differs from ffmpeg")
     def test_partial_load_duration_equals_cropped_mp3_audio_segment(self):
         partial_seg1 = AudioSegment.from_file(self.mp3_path_str)[:1000]
         partial_seg2 = AudioSegment.from_file(self.mp3_path_str, duration=1.)
         self.assertEqual(len(partial_seg1), len(partial_seg2))
         self.assertEqual(partial_seg1._data, partial_seg2._data)
 
-    @unittest.skip("bundled decoder differs from ffmpeg")
     def test_partial_load_start_second_equals_cropped_mp3_audio_segment(self):
         partial_seg1 = AudioSegment.from_file(self.mp3_path_str)[1000:]
         partial_seg2 = AudioSegment.from_file(self.mp3_path_str, start_second=1.)[0:]
         self.assertEqual(len(partial_seg1), len(partial_seg2))
         self.assertEqual(partial_seg1._data, partial_seg2._data)
 
-    @unittest.skip("bundled decoder differs from ffmpeg")
     def test_partial_load_start_second_and_duration_equals_cropped_mp3_audio_segment(self):
         partial_seg1 = AudioSegment.from_file(self.mp3_path_str)[1000:2000]
         partial_seg2 = AudioSegment.from_file(self.mp3_path_str, start_second=1., duration=1.)

@@ -14,15 +14,17 @@ namespace pydub2 {
 
 static int32_t sample(const Audio &a, size_t i) {
     const char *p = a.data.data() + i * a.width;
-    if (a.width == 1)
+    if (a.width == 1) {
         return (int8_t)*p;
+    }
     if (a.width == 2) {
         int16_t s;
         memcpy(&s, p, 2);
         return s;
     }
-    if (a.width == 3)
+    if (a.width == 3) {
         return (uint8_t)p[0] | (uint8_t)p[1] << 8 | (int8_t)p[2] * 65536;
+    }
     int32_t s;
     memcpy(&s, p, 4);
     return s;
@@ -32,14 +34,16 @@ static std::vector<float> floats(const Audio &a) {
     size_t n = a.data.size() / a.width;
     float scale = 1.0f / (float)(1u << (a.width * 8 - 1));
     std::vector<float> out(n);
-    for (size_t i = 0; i < n; i++)
+    for (size_t i = 0; i < n; i++) {
         out[i] = sample(a, i) * scale;
+    }
     return out;
 }
 
 static void put32(std::string &s, uint32_t v) {
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < 4; i++) {
         s += (char)(v >> (8 * i));
+    }
 }
 
 static void put16(std::string &s, uint16_t v) {
@@ -49,8 +53,9 @@ static void put16(std::string &s, uint16_t v) {
 
 // same bytes as the wave module writes for pydub
 std::string wav_head(const Audio &a) {
-    if (a.data.size() > UINT32_MAX - 36)
+    if (a.data.size() > UINT32_MAX - 36) {
         throw std::runtime_error("too long for wav");
+    }
     uint32_t n = a.data.size();
     std::string out = "RIFF";
     put32(out, 36 + n + (n & 1));
@@ -60,8 +65,9 @@ std::string wav_head(const Audio &a) {
     put16(out, a.channels);
     put32(out, a.rate);
     uint64_t byte_rate = (uint64_t)a.rate * a.channels * a.width;
-    if (byte_rate > UINT32_MAX)
+    if (byte_rate > UINT32_MAX) {
         throw std::runtime_error("cant encode this");
+    }
     put32(out, byte_rate);
     put16(out, a.channels * a.width);
     put16(out, a.width * 8);
@@ -78,11 +84,14 @@ static void wav(const Audio &a, const Alloc &alloc) {
     memcpy(p, out.data(), start);
     memcpy(p + start, a.data.data(), n);
     // 8 bit wav is unsigned
-    if (a.width == 1)
-        for (size_t i = start; i < start + n; i++)
+    if (a.width == 1) {
+        for (size_t i = start; i < start + n; i++) {
             p[i] = (char)(p[i] + 128);
-    if (n & 1)
+        }
+    }
+    if (n & 1) {
         p[start + n] = 0;
+    }
 }
 
 struct Sink {
@@ -94,8 +103,9 @@ static FLAC__StreamEncoderWriteStatus flac_write(const FLAC__StreamEncoder *, co
                                                  uint32_t, uint32_t, void *user) {
     Sink *s = (Sink *)user;
     try {
-        if (s->pos + len > s->out.size())
+        if (s->pos + len > s->out.size()) {
             s->out.resize(s->pos + len);
+        }
     } catch (...) {
         return FLAC__STREAM_ENCODER_WRITE_STATUS_FATAL_ERROR;
     }
@@ -115,17 +125,20 @@ static FLAC__StreamEncoderTellStatus flac_tell(const FLAC__StreamEncoder *, FLAC
 }
 
 static std::string flac(const Audio &a, const Cancel &cancel) {
-    if (a.channels > 8)
+    if (a.channels > 8) {
         throw std::runtime_error("cant encode this");
+    }
     size_t frames = a.data.size() / a.width / a.channels;
     // ffmpeg writes 8 bit as 16 and 32 bit as 24, so do we
     int bits = a.width == 1 ? 16 : a.width == 4 ? 24 : a.width * 8;
     // its block size is the biggest standard one under 105 ms
     uint32_t sizes[] = {16, 192, 256, 512, 576, 1024, 1152, 2048, 2304, 4096, 4608, 8192, 16384};
     uint32_t block = sizes[0];
-    for (uint32_t b : sizes)
-        if (b <= (uint64_t)a.rate * 105 / 1000)
+    for (uint32_t b : sizes) {
+        if (b <= (uint64_t)a.rate * 105 / 1000) {
             block = b;
+        }
+    }
     std::vector<FLAC__int32> buf(block * a.channels);
     FLAC__StreamEncoder *enc = FLAC__stream_encoder_new();
     FLAC__stream_encoder_set_channels(enc, a.channels);
@@ -152,8 +165,9 @@ static std::string flac(const Audio &a, const Cancel &cancel) {
     }
     ok = FLAC__stream_encoder_finish(enc) && ok;
     FLAC__stream_encoder_delete(enc);
-    if (!ok)
+    if (!ok) {
         throw std::runtime_error("cant encode this");
+    }
     return s.out;
 }
 
@@ -184,10 +198,12 @@ static std::string ogg(const Audio &a, int bitrate, const Cancel &cancel) {
     // q 3 like ffmpeg when no bitrate is given, and with a bitrate ffmpeg turns the slow rate management off
     int err = bitrate ? vorbis_encode_setup_managed(&vi, a.channels, a.rate, -1, bitrate, -1)
                       : vorbis_encode_setup_vbr(&vi, a.channels, a.rate, 0.3f);
-    if (!err && bitrate)
+    if (!err && bitrate) {
         err = vorbis_encode_ctl(&vi, OV_ECTL_RATEMANAGE2_SET, nullptr);
-    if (!err)
+    }
+    if (!err) {
         err = vorbis_encode_setup_init(&vi);
+    }
     if (err) {
         vorbis_info_clear(&vi);
         throw std::runtime_error("cant encode this");
@@ -216,9 +232,11 @@ static std::string ogg(const Audio &a, int bitrate, const Cancel &cancel) {
             cancel();
             int n = std::min(frames - f, (size_t)4096);
             float **buf = vorbis_analysis_buffer(&vd, n);
-            for (int i = 0; i < n; i++)
-                for (int c = 0; c < a.channels; c++)
+            for (int i = 0; i < n; i++) {
+                for (int c = 0; c < a.channels; c++) {
                     buf[c][i] = pcm[(f + i) * a.channels + c];
+                }
+            }
             vorbis_analysis_wrote(&vd, n);
             blocks(&vd, &vb, &os, out);
         }
@@ -234,8 +252,9 @@ static std::string ogg(const Audio &a, int bitrate, const Cancel &cancel) {
     vorbis_dsp_clear(&vd);
     vorbis_comment_clear(&vc);
     vorbis_info_clear(&vi);
-    if (ex)
+    if (ex) {
         std::rethrow_exception(ex);
+    }
     return out;
 }
 
@@ -260,14 +279,17 @@ static std::string opus(const Audio &a, int bitrate, const Cancel &cancel) {
     int err = 0;
     OggOpusEnc *enc = ope_encoder_create_callbacks(&cb, &out, com, a.rate, a.channels, a.channels > 2, &err);
     ope_comments_destroy(com);
-    if (!enc)
+    if (!enc) {
         throw std::runtime_error("cant encode this");
+    }
     // ffmpeg: 64k per stream plus 32k per coupled pair, plain vbr, no padding in the tags
     int streams[] = {1, 1, 2, 2, 3, 4, 5, 5}, pairs[] = {0, 1, 1, 2, 2, 2, 2, 3};
-    if (!bitrate && a.channels <= 8)
+    if (!bitrate && a.channels <= 8) {
         bitrate = 64000 * streams[a.channels - 1] + 32000 * pairs[a.channels - 1];
-    if (bitrate)
+    }
+    if (bitrate) {
         err = ope_encoder_ctl(enc, OPUS_SET_BITRATE(bitrate));
+    }
     err = err || ope_encoder_ctl(enc, OPUS_SET_VBR_CONSTRAINT(0));
     err = err || ope_encoder_ctl(enc, OPE_SET_COMMENT_PADDING(0));
     // ffmpeg encodes at the next rate opus has, which caps the bandwidth
@@ -286,11 +308,13 @@ static std::string opus(const Audio &a, int bitrate, const Cancel &cancel) {
         ope_encoder_destroy(enc);
         throw;
     }
-    if (!err)
+    if (!err) {
         err = ope_encoder_drain(enc);
+    }
     ope_encoder_destroy(enc);
-    if (err)
+    if (err) {
         throw std::runtime_error("cant encode this");
+    }
     return out;
 }
 
@@ -299,18 +323,23 @@ static void copy(const std::string &s, const Alloc &alloc) {
 }
 
 void encode(const Audio &a, const std::string &format, int bitrate, const Cancel &cancel, const Alloc &alloc) {
-    if (a.width < 1 || a.width > 4)
+    if (a.width < 1 || a.width > 4) {
         throw std::invalid_argument("bad sample width");
-    if (format == "wav")
+    }
+    if (format == "wav") {
         return wav(a, alloc);
-    if (format == "flac")
+    }
+    if (format == "flac") {
         return copy(flac(a, cancel), alloc);
-    if (format == "ogg")
+    }
+    if (format == "ogg") {
         return copy(ogg(a, bitrate, cancel), alloc);
+    }
     if (format == "opus") {
         // libopusenc corrupts the heap when it resamples up from below about 90 hz
-        if (a.rate < 100)
+        if (a.rate < 100) {
             throw std::runtime_error("cant encode this");
+        }
         return copy(opus(a, bitrate, cancel), alloc);
     }
     throw std::invalid_argument("cant write this format");
