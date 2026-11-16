@@ -211,7 +211,7 @@ def test_max_duration_on_the_native_path(tmp_path, monkeypatch, name):
         "except pydub2.exceptions.CouldntDecodeError:\n    pass"
     full = peak_mb(code.replace("sys.argv[1]", repr(str(tmp_path / name))) % None)
     capped = peak_mb(code.replace("sys.argv[1]", repr(str(tmp_path / name))) % 10)
-    assert capped < full - 20
+    assert capped < full / 2
     monkeypatch.setattr(pydub2, "max_duration", 10)
     with pytest.raises(CouldntDecodeError):
         AudioSegment.from_file(str(tmp_path / name))
