@@ -509,7 +509,8 @@ ebur128_init(unsigned int channels, unsigned long samplerate, int mode) {
   /* start at the beginning of the buffer */
   st->d->audio_data_index = 0;
 
-  /* initialize static constants */
+  /* initialize static constants, only the first call writes them */
+  if (!relative_gate_factor) {
   relative_gate_factor = pow(10.0, relative_gate / 10.0);
   minus_twenty_decibels = pow(10.0, -20.0 / 10.0);
   histogram_energy_boundaries[0] = pow(10.0, (-70.0 + 0.691) / 10.0);
@@ -522,6 +523,7 @@ ebur128_init(unsigned int channels, unsigned long samplerate, int mode) {
       histogram_energy_boundaries[i] =
           pow(10.0, ((double) i / 10.0 - 70.0 + 0.691) / 10.0);
     }
+  }
   }
 
   return st;

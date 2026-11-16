@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -16,6 +17,7 @@
 #include "third_party/dr_mp3.h"
 #define STB_VORBIS_HEADER_ONLY
 #include "third_party/stb_vorbis.c"
+extern "C" void crc32_init(void); // not static in our copy
 #include <opusfile.h>
 
 #include "core.h"
@@ -45,6 +47,11 @@ static void put(char *out, const float *f, size_t n, int width) {
         }
     }
 }
+
+// ffmpeg hands 3 to 8 vorbis channels out in wav order, out[i] is vorbis channel order[n - 1][i]
+static const uint8_t order[8][8] = {
+    {0}, {0, 1}, {0, 2, 1}, {0, 1, 2, 3}, {0, 2, 1, 3, 4}, {0, 2, 1, 5, 3, 4}, {0, 2, 1, 6, 5, 3, 4}, {0, 2, 1, 7, 5, 6, 3, 4},
+};
 
 // a file or a piece of memory. base hides bytes at the start from the decoder, tail goes after the end
 // and fix replaces the bytes at fix_at
@@ -132,18 +139,36 @@ struct Wav : Dec {
         frame = w.fmt.blockAlign;
         if (w.translatedFormatTag == DR_WAVE_FORMAT_PCM && (bits == 8 || bits == 16 || bits == 24 || bits == 32) && frame == (size_t)channels * bits / 8) {
             width = bits == 24 ? 4 : bits / 8;
+        } else if (w.translatedFormatTag == DR_WAVE_FORMAT_IEEE_FLOAT && bits == 64 && frame == (size_t)channels * 8) {
+            // pydub has ffmpeg turn this into 64 bit ints
+            width = 8;
         } else if (w.translatedFormatTag == DR_WAVE_FORMAT_IEEE_FLOAT && frame) {
             width = 4;
             bits = 0;
         } else {
             fail();
         }
-        // a pipe writes 0xffffffff as the data size, over 4 GB dr_wav counts that from the end of the file and gets 0
-        uint8_t size[4];
-        if (w.container == drwav_container_riff && w.dataChunkDataPos >= 4 && in_seek(&in, w.dataChunkDataPos - 4, SEEK_SET) &&
-            in_read(&in, size, 4) == 4 && !memcmp(size, "\xff\xff\xff\xff", 4)) {
-            w.dataChunkDataSize = w.bytesRemaining = (in.len - w.dataChunkDataPos) / frame * frame;
-            w.totalPCMFrameCount = w.dataChunkDataSize / frame;
+        // like ffmpeg: a data size of 0 or 0xffffffff (a pipe) runs to the end of the file, and a later data chunk wins
+        uint8_t h[8];
+        for (uint64_t at = w.dataChunkDataPos; w.container == drwav_container_riff && at >= 4;) {
+            if (!in_seek(&in, at - 4, SEEK_SET) || in_read(&in, h, 4) < 4) {
+                break;
+            }
+            uint64_t size = h[0] | h[1] << 8 | h[2] << 16 | (uint64_t)h[3] << 24;
+            size = size && size != 0xffffffff ? std::min(size, in.len - at) : in.len - at;
+            w.dataChunkDataPos = at;
+            w.dataChunkDataSize = w.bytesRemaining = size;
+            w.totalPCMFrameCount = size / frame;
+            at = 0;
+            // a thousand chunks at most, past that it is junk
+            uint64_t next = w.dataChunkDataPos + size + (size & 1);
+            for (int i = 0; i < 1000 && next + 8 <= in.len && in_seek(&in, next, SEEK_SET) && in_read(&in, h, 8) == 8; i++) {
+                if (!memcmp(h, "data", 4)) {
+                    at = next + 8;
+                    break;
+                }
+                next += 8 + (h[4] | h[5] << 8 | h[6] << 16 | (uint64_t)h[7] << 24) + (h[4] & 1);
+            }
         }
         in_seek(&in, w.dataChunkDataPos, SEEK_SET);
         // the header can claim any size, the file cant hold more
@@ -163,6 +188,14 @@ struct Wav : Dec {
         if (bits != 24) {
             k = drwav_read_raw(&w, n * frame, out);
             k -= k % frame; // a data size that is not a whole number of frames leaves stray bytes
+            for (size_t i = 0; bits == 64 && i < k; i += 8) {
+                // ffmpegs double to s64, it saturates and nan is whatever the cpu does
+                double x;
+                memcpy(&x, out + i, 8);
+                x *= 9223372036854775808.0;
+                int64_t v = x >= 9223372036854775808.0 ? INT64_MAX : x <= -9223372036854775808.0 ? INT64_MIN : llrint(x);
+                memcpy(out + i, &v, 8);
+            }
             if (bits == 8) {
                 for (size_t i = 0; i < k; i++) {
                     out[i] ^= 0x80;
@@ -605,6 +638,10 @@ static int64_t vorbis_len(Input &in, std::vector<Page> &pages) {
             break;
         }
         const uint8_t *buf = (const uint8_t *)pg.data();
+        // ffmpeg drops a page cut off by the end of the file and ends there
+        if (r < 0 && in.pos == in.len) {
+            break;
+        }
         if (r < 0) {
             return -1;
         }
@@ -711,8 +748,7 @@ static int64_t vorbis_len(Input &in, std::vector<Page> &pages) {
         return total;
     }
     if (pk[0].eos) {
-        // one page: the parser starts from the block size left over by the length scan
-        prev = bs[flag[mode(pk.back().b)]];
+        prev = bs[0];
         for (Packet &x : pk) {
             skip += dur(prev, x.b);
         }
@@ -791,6 +827,8 @@ struct Vorbis : Dec {
             if (!arena) {
                 arena.reset(new char[32 << 20]);
             }
+            static std::once_flag crc;
+            std::call_once(crc, crc32_init);
             stb_vorbis_alloc mem = {arena.get(), 32 << 20};
             v = stb_vorbis_open_pushdata((const uint8_t *)win.data(), (int)win.size(), &used, &err, &mem);
             if (v) {
@@ -838,7 +876,7 @@ struct Vorbis : Dec {
             left.resize(k * c);
             for (int i = 0; i < k; i++) {
                 for (size_t j = 0; j < c; j++) {
-                    left[i * c + j] = o[j][i];
+                    left[i * c + j] = o[c <= 8 ? order[c - 1][j] : j][i];
                 }
             }
             lpos = pos < target ? (size_t)std::min<uint64_t>(k, target - pos) : 0;
@@ -922,7 +960,8 @@ struct Opus : Dec {
     void init() {
         OpusFileCallbacks cb = {op_read, op_seek, op_tell, NULL};
         of = op_open_callbacks(&in, &cb, NULL, 0, NULL);
-        if (!of) {
+        // libopus starts each link fresh, ffmpeg keeps decoding across, so chains go to ffmpeg like vorbis ones
+        if (!of || op_link_count(of) > 1) {
             fail();
         }
         rate = 48000;
@@ -940,9 +979,17 @@ struct Opus : Dec {
         size_t c = channels, done = 0;
         int k, link;
         while (!end && done < n && (k = op_read_float(of, tmp, (int)std::min<size_t>(n - done, 5760 * 2 / c) * c, &link)) != 0) {
-            // a chained file can change channel count, k is sized for the new one
-            if (k < 0 || op_channel_count(of, link) != channels) {
+            if (k < 0) {
                 fail();
+            }
+            if (c > 2 && op_head(of, link)->mapping_family == 1) {
+                float f[8];
+                for (int i = 0; i < k; i++) {
+                    for (size_t j = 0; j < c; j++) {
+                        f[j] = tmp[i * c + order[c - 1][j]];
+                    }
+                    memcpy(&tmp[i * c], f, c * sizeof(float));
+                }
             }
             put(out + done * c * 4, tmp, k * c, 4);
             done += k;

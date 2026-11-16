@@ -1,4 +1,5 @@
 import array
+import io
 import math
 import os
 import platform
@@ -10,6 +11,7 @@ import sys
 import pytest
 
 import _pydub2
+import pydub2
 
 ff = "/opt/homebrew/bin/ffmpeg"
 if not os.path.exists(ff):
@@ -112,6 +114,25 @@ def test_vorbis_length(tmp_path, n, rate, args):
     close(*both(path), 1024)
 
 
+# a sine starts on a short block, one page
+def test_vorbis_short_first_block(tmp_path):
+    path = str(tmp_path / "a.ogg")
+    subprocess.run([ff, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "aevalsrc=0.3*sin(700*t):s=48000:d=0.5",
+                    "-c:a", "libvorbis", path], check=True)
+    close(*both(path), 1024)
+
+
+# a download cut off in the middle of a page
+def test_vorbis_cut_off(tmp_path):
+    path = str(tmp_path / "a.ogg")
+    subprocess.run([ff, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "anoisesrc=a=0.3:d=5", "-c:a", "libvorbis",
+                    path], check=True)
+    with open(path, "rb") as f:
+        whole = f.read()
+    for cut in (len(whole) // 2, len(whole) - 100):
+        same_as_ffmpeg(tmp_path, "cut.ogg", whole[:cut], 1024)
+
+
 # ffmpeg uses its own opus decoder, not libopus, so this is only close
 @pytest.mark.parametrize("channels", [1, 2])
 def test_opus(tmp_path, channels):
@@ -129,6 +150,36 @@ def test_opus_rate(tmp_path):
 def test_garbage(junk):
     with pytest.raises(RuntimeError):
         _pydub2.decode(junk)
+
+
+def wav_file(fmt, *chunks):
+    body = b"WAVEfmt " + struct.pack("<I", len(fmt)) + fmt + b"".join(chunks)
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
+def data_chunk(pcm, size=None):
+    return b"data" + struct.pack("<I", len(pcm) if size is None else size) + pcm + b"\0" * (len(pcm) % 2)
+
+
+# pydub reads these wavs itself from a path and through ffmpeg from a file object, each its own way
+def test_wav_odd_headers_like_pydub(tmp_path):
+    pcm = struct.pack("<%dh" % len(SAMPLES), *(int(x * 30000) for x in SAMPLES))
+    f16 = struct.pack("<HHIIHH", 1, 2, RATE, RATE * 4, 4, 16)
+    files = [wav_file(f16, data_chunk(pcm, 0)), wav_file(f16, data_chunk(pcm[:4000]), data_chunk(pcm[4000:8000])),
+             wav_file(f16, data_chunk(pcm))[:-3], wav_file(f16, data_chunk(pcm + b"\1", len(pcm) + 1)),
+             wav_file(struct.pack("<HHIIHH", 3, 1, RATE, RATE * 8, 8, 64), data_chunk(struct.pack("<%dd" % len(SAMPLES), *SAMPLES)))]
+    for i, raw in enumerate(files):
+        path = str(tmp_path / ("%d.wav" % i))
+        with open(path, "wb") as f:
+            f.write(raw)
+        for src in (lambda: path, lambda: io.BytesIO(raw)):
+            for kw in ({}, {"start_second": 0.1}):
+                try:
+                    want = AudioSegment.from_file(src(), **kw)
+                except Exception:
+                    continue
+                got = pydub2.AudioSegment.from_file(src(), **kw)
+                assert (got.sample_width, got.raw_data) == (want.sample_width, want.raw_data)
 
 
 def test_wav_lies_about_size():
@@ -203,6 +254,18 @@ def test_mp3_starts_inside_the_bit_reservoir(tmp_path):
         same_as_ffmpeg(tmp_path, "cut.mp3", m[starts[k]:])
 
 
+@pytest.mark.parametrize("channels", [3, 4, 5, 6, 7, 8])
+@pytest.mark.parametrize("name, codec", [("a.ogg", "libvorbis"), ("a.opus", "libopus")])
+def test_channel_order(tmp_path, channels, name, codec):
+    expr = "|".join("0.3*sin(%d*t)" % (700 * (c + 1)) for c in range(channels))
+    path = str(tmp_path / name)
+    p = subprocess.run([ff, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "aevalsrc=%s:s=48000:d=0.5" % expr,
+                        "-c:a", codec, path], capture_output=True)
+    if p.returncode:
+        pytest.skip("this ffmpeg cant write it")
+    close(*both(path), 1 << 20)
+
+
 def test_mp2_goes_to_ffmpeg(tmp_path):
     with open(make(tmp_path, "a.mp2", 2, "-c:a", "mp2"), "rb") as f:
         with pytest.raises(RuntimeError):
@@ -214,6 +277,22 @@ def test_chained_vorbis_goes_to_ffmpeg(tmp_path):
         one = f.read()
     with pytest.raises(RuntimeError):
         _pydub2.decode(one + one)
+
+
+def test_chained_opus_goes_to_ffmpeg(tmp_path):
+    with open(make(tmp_path, "a.opus", 2), "rb") as f:
+        one = f.read()
+    with open(make(tmp_path, "b.opus", 2), "rb") as f:
+        two = f.read()
+    assert one[14:18] != two[14:18]
+    with pytest.raises(RuntimeError):
+        _pydub2.decode(one + two)
+
+
+def test_vorbis_part_goes_to_ffmpeg(tmp_path):
+    path = make(tmp_path, "a.ogg", 2, "-c:a", "libvorbis")
+    for kw in ({"start_second": 0.1}, {"start_second": 0.05, "duration": 0.2}):
+        assert pydub2.AudioSegment.from_file(path, **kw).raw_data == AudioSegment.from_file(path, **kw).raw_data
 
 
 def test_seek_back_after_the_end(tmp_path):

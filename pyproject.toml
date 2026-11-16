@@ -5,7 +5,7 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "pydub2"
 version = "0.1.0"
-description = "Drop-in replacement for pydub that reads and writes audio without ffmpeg"
+description = "pydub without the ffmpeg install. Drop-in replacement with a C++ core."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE", "THIRD_PARTY.md", "licenses/*"]

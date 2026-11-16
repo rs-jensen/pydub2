@@ -27,7 +27,7 @@ static bool mul_less(uint64_t hi, uint64_t lo, uint64_t a, uint64_t b) {
     return hi < phi || (hi == phi && lo < plo);
 }
 
-Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh, int seek_step) {
+Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh, int seek_step, const Cancel &cancel) {
     if (a.width < 1 || a.width > 4) throw std::invalid_argument("bad sample width");
     if (seek_step <= 0) throw std::invalid_argument("seek_step must be positive");
     if (min_silence_len < 0) throw std::invalid_argument("min_silence_len must not be negative");
@@ -93,7 +93,10 @@ Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh
     };
 
     int last = seg_len - min_silence_len;
-    for (long long i = 0; i <= last; i += seek_step) check((int)i);
+    for (long long i = 0; i <= last; i += seek_step) {
+        if ((i / seek_step & 4095) == 0) cancel();
+        check((int)i);
+    }
     // last slice is always checked, like pydub
     if (last % seek_step) check(last);
 

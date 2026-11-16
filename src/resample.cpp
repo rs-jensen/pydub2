@@ -9,7 +9,7 @@
 
 namespace pydub2 {
 
-Audio resample(const Audio &a, int new_rate) {
+Audio resample(const Audio &a, int new_rate, const Cancel &cancel) {
     if (a.width < 1 || a.width > 4) throw std::invalid_argument("bad sample width");
     if (new_rate == a.rate) return a;
 
@@ -31,13 +31,29 @@ Audio resample(const Audio &a, int new_rate) {
 
     // zeros stay in the buffer when libsamplerate makes fewer frames than out_n
     std::vector<float> out(out_n * a.channels, 0.0f);
+    int err;
+    SRC_STATE *st = src_new(SRC_SINC_MEDIUM_QUALITY, a.channels, &err);
+    if (!st) throw std::runtime_error(src_strerror(err));
     SRC_DATA d = {};
-    d.data_in = in.data();
-    d.input_frames = n;
-    d.data_out = out.data();
-    d.output_frames = out_n;
     d.src_ratio = (double)new_rate / a.rate;
-    int err = src_simple(&d, SRC_SINC_MEDIUM_QUALITY, a.channels);
+    long long used = 0, made = 0, step = 1 << 20;
+    try {
+        do {
+            cancel();
+            d.data_in = in.data() + used * a.channels;
+            d.input_frames = std::min(step, n - used);
+            d.end_of_input = used + d.input_frames == n;
+            d.data_out = out.data() + made * a.channels;
+            d.output_frames = out_n - made;
+            err = src_process(st, &d);
+            used += d.input_frames_used;
+            made += d.output_frames_gen;
+        } while (!err && !d.end_of_input && made < out_n);
+    } catch (...) {
+        src_delete(st);
+        throw;
+    }
+    src_delete(st);
     if (err) throw std::runtime_error(src_strerror(err));
 
     Audio r;
