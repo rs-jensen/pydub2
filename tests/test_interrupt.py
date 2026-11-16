@@ -28,6 +28,8 @@ CALLS = {
 
 @pytest.mark.parametrize("name", CALLS)
 def test_ctrl_c_stops_a_long_call(name):
+    if signal.getsignal(signal.SIGINT) is signal.SIG_IGN:
+        pytest.skip("SIGINT is ignored, pytest was started in the background")
     minutes, call = CALLS[name]
     data = os.urandom(MIN) * minutes
     # the whole call would take this long on this machine right now, the time scales with the input

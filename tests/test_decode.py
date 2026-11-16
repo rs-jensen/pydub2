@@ -333,6 +333,90 @@ def test_mp3_junk_between_frames(tmp_path):
     assert len(_pydub2.decode(bytes(out))[0]) < len(_pydub2.decode(bytes(m))[0])
 
 
+def junk_of(kind, n, rng):
+    if kind == "nul":
+        return bytes(n)
+    if kind == "random":
+        return rng.randbytes(n)
+    return (b"\xff\xfb\x90\x00" + rng.randbytes(n))[:n]
+
+
+# ffmpeg looks for two headers in a row in the first 64k, junk in front of the first frame or the id3 tag is skipped
+@pytest.mark.parametrize("kind", ["nul", "random", "sync"])
+@pytest.mark.parametrize("n", [1, 2, 100, 4096, 70000])
+def test_mp3_junk_in_front(tmp_path, kind, n):
+    rng = random.Random(n)
+    m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k", samples=CLICKS), "rb").read()
+    i = 10 + ((m[6] & 127) << 21 | (m[7] & 127) << 14 | (m[8] & 127) << 7 | (m[9] & 127))
+    junk = junk_of(kind, n, rng)
+    same_as_ffmpeg(tmp_path, "front.mp3", junk + m)
+    same_as_ffmpeg(tmp_path, "after.mp3", m[:i] + junk + m[i:])
+    same_as_ffmpeg(tmp_path, "twice.mp3", m[:i] + junk + m)
+    same_as_ffmpeg(tmp_path, "bare.mp3", junk + m[i:])
+
+
+def test_mp3_id3_that_is_not_one(tmp_path):
+    m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k", samples=CLICKS), "rb").read()
+    i = 10 + ((m[6] & 127) << 21 | (m[7] & 127) << 14 | (m[8] & 127) << 7 | (m[9] & 127))
+    for size in (i - 11, i - 9, i - 30, i + 90, 0):
+        same_as_ffmpeg(tmp_path, "size.mp3", m[:6] + bytes([size >> 21 & 127, size >> 14 & 127, size >> 7 & 127, size & 127]) + m[10:])
+    same_as_ffmpeg(tmp_path, "ff.mp3", b"ID3\xff" + m[4:])
+    same_as_ffmpeg(tmp_path, "high.mp3", m[:6] + b"\x80" + m[7:])
+
+
+def test_mp3_junk_is_not_left_to_other_formats(tmp_path):
+    for data in (bytes(5000), os.urandom(20000), b"\0\0\0\x1cftypM4A " + bytes(3000)):
+        with pytest.raises(RuntimeError):
+            _pydub2.decode(data)
+
+
+def crc8(d):
+    c = 0
+    for b in d:
+        c ^= b
+        for _ in range(8):
+            c = (c << 1 ^ 7 if c & 128 else c << 1) & 255
+    return c
+
+
+def flac_frames(m):
+    out = []
+    for i in range(len(m) - 8):
+        if m[i] == 0xff and m[i + 1] == 0xf8 and m[i + 4] < 0x80 and crc8(m[i:i + 5]) == m[i + 5]:
+            out.append(i)
+    return out
+
+
+# ffmpeg keeps the samples of a frame with a bad crc and drops one it cannot decode, so the length is the same as
+# with the whole file or one frame less. here the damaged frame is silence and nothing after it is lost
+def test_flac_damaged_keeps_the_length(tmp_path):
+    m = open(make(tmp_path, "a.flac", 2, "-c:a", "flac", samples=CLICKS), "rb").read()
+    starts = flac_frames(m) + [len(m)]
+    assert len(starts) > 15
+    clean = _pydub2.decode(m)[0]
+    one = 4608 * 8
+    p = str(tmp_path / "bad.flac")
+    for k in (3, 9):
+        a, b = starts[k], starts[k + 1]
+        for at in (a + (b - a) // 2, b - 1, b - 2):
+            d = bytearray(m)
+            d[at] ^= 0x55
+            open(p, "wb").write(d)
+            mine = _pydub2.decode(bytes(d))[0]
+            assert len(mine) == len(clean)
+            assert mine[:(k * 4608 - 1) * 8] == clean[:(k * 4608 - 1) * 8]
+            assert mine[(k + 2) * 4608 * 8:] == clean[(k + 2) * 4608 * 8:]
+            assert len(AudioSegment.from_file(p).raw_data) in (len(clean), len(clean) - one)
+    rng = random.Random(3)
+    for _ in range(40):
+        d = bytearray(m)
+        d[rng.randrange(starts[0], len(m))] ^= 1 << rng.randrange(8)
+        open(p, "wb").write(d)
+        # never stops early, at most the damaged frame and the next one are gone
+        assert len(_pydub2.decode(bytes(d))[0]) >= len(clean) - 2 * one
+        assert abs(len(_pydub2.decode(bytes(d))[0]) - len(AudioSegment.from_file(p).raw_data)) <= 2 * one
+
+
 # ffmpeg keeps the channels of the first frame and mixes the rest, a new rate it resamples so that goes to ffmpeg
 def test_mp3_channels_change(tmp_path):
     args = ["-c:a", "libmp3lame", "-write_xing", "0", "-id3v2_version", "0"]
