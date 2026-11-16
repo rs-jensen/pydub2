@@ -62,29 +62,29 @@ def _encode(data, rate, *args):
 
 def _export_pcm(seg, format, codec, parameters):
     # only what ffmpeg gives back bit for bit, resampling and channel mixing stay with ffmpeg
-    if format == "flac" and codec:
-        return None
-    width = 2
-    if codec:
-        width = {"pcm_s16le": 2, "pcm_s24le": 3, "pcm_s32le": 4}.get(codec, 0)
-    elif format == "flac" and seg.sample_width == 4:
-        width = 0
     p = parameters or []
     if len(p) % 2:
         return None
+    fmt = None
     for k, v in zip(p[::2], p[1::2]):
         if k == "-ar" and v == str(seg.frame_rate) or k == "-ac" and v == str(seg.channels):
             pass
         elif k == "-sample_fmt" and v in ("s16", "s32"):
-            if format == "flac" and v == "s16":
-                width = 2
-            elif v != {2: "s16", 4: "s32"}.get(width):
-                return None
+            fmt = v
         else:
             return None
-    if not width:
-        return None
+    if format == "flac":
+        # flac keeps 16 bit or goes to 24, a pcm codec cant be put in it
+        if codec not in (None, "flac") or seg.sample_width not in (2, 4):
+            return None
+        width = 2 if (fmt or {2: "s16", 4: "s32"}[seg.sample_width]) == "s16" else 3
+    else:
+        width = {None: 2, "pcm_s16le": 2, "pcm_s24le": 3, "pcm_s32le": 4}.get(codec, 0)
+        if not width or fmt and fmt != {2: "s16", 3: "s32", 4: "s32"}[width]:
+            return None
     seg = seg.set_sample_width(4 if width == 3 else width)
+    if format == "flac" and width == 3:
+        return _encode(_pydub2.lin2lin(seg._data, 4, 3), seg.frame_rate, seg.channels, 3, format, 0)
     if width != 3:
         return _encode(seg._data, seg.frame_rate, seg.channels, width, format, 0)
     n = len(seg._data) // 4 * 3

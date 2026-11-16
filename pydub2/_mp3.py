@@ -1,5 +1,6 @@
 import ctypes
 import functools
+import struct
 import threading
 
 import _pydub2
@@ -14,6 +15,11 @@ FRAMES = {"album": "TALB", "composer": "TCOM", "genre": "TCON", "copyright": "TC
           "encoded_by": "TENC", "title": "TIT2", "language": "TLAN", "artist": "TPE1",
           "album_artist": "TPE2", "performer": "TPE3", "disc": "TPOS", "publisher": "TPUB",
           "track": "TRCK", "encoder": "TSSE", "date": "TYER"}
+
+# version bits, rates by header index, kbps by header index
+MPEG = [(3, [44100, 48000, 32000], [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]),
+        (2, [22050, 24000, 16000], [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160]),
+        (0, [11025, 12000, 8000], [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160])]
 
 
 # lame fills static tables the first time it is set up
@@ -39,6 +45,22 @@ def rate_of(text):
     text = str(text).lower()
     unit = {"k": 1000, "m": 1000000}.get(text[-1])
     return int(float(text[:-1]) * unit) if unit else int(float(text))
+
+
+def info_frame(rate, channels, frames, music, delay, padding):
+    # lame skips its tag when the cbr frame is too small for it, so make one in a frame that fits
+    ver, rates, kbps = next(m for m in MPEG if rate in m[1])
+    side = (21 if channels == 1 else 36) if ver == 3 else (13 if channels == 1 else 21)
+    unit = 144000 if ver == 3 else 72000
+    i = next(i for i in range(1, 15) if unit * kbps[i] // rate >= side + 156)
+    size = unit * kbps[i] // rate
+    head = bytes([0xFF, 0xE3 | ver << 3, i << 4 | rates.index(rate) << 2, 0xC0 if channels == 1 else 0x40])
+    toc = bytes(255 * k // 100 for k in range(100))
+    gapless = bytes([delay >> 4, delay << 4 & 255 | padding >> 8, padding & 255])
+    # crcs stay 0, no reader checks them
+    tag = struct.pack(">4sIII100sI9sBB8xBB3sBBHIHH", b"Info", 15, frames, music + size, toc, 0, b"LAME3.100",
+                      1, 0, 0, 0, gapless, 0, 0, 0, music + size, 0, 0)
+    return (head + bytes(side - 4) + tag).ljust(size, b"\0")
 
 
 def encode(data, rate, channels, width, bitrate=None, tags=None, id3v2_version="4", parameters=None,
@@ -141,9 +163,10 @@ def encode(data, rate, channels, width, bitrate=None, tags=None, id3v2_version="
 
         # the first frame is a placeholder for the lame tag, it only knows the gapless info at the end
         n = lame.lame_get_lametag_frame(gfp, buf, ctypes.c_size_t(len(buf)))
-        if n == 0 and _ffmpeg.find(converter):
-            # no room for the lame tag at low cbr, ffmpeg writes a bigger first frame
-            return None
+        if n == 0:
+            first = info_frame(rate, channels, lame.lame_get_frameNum(gfp), len(mp3),
+                               lame.lame_get_encoder_delay(gfp), lame.lame_get_encoder_padding(gfp))
+            return id3.raw + first + mp3
         return id3.raw + buf.raw[:n] + mp3[n:]
     finally:
         lame.lame_close(gfp)

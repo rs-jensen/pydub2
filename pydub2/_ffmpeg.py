@@ -1,4 +1,5 @@
 import os
+import re
 import struct
 import sys
 import tempfile
@@ -63,7 +64,11 @@ def _to_wav(converter, path, data, format, codec, parameters, start_second, dura
     out += (parameters or []) + ["-"]
     p = run(converter, opts + inp + out, None if path is not None else data, format or "this file")
     if p.returncode != 0 or not p.stdout:
-        raise CouldntDecodeError("cant decode this file: " + p.stderr.decode(errors="ignore")[-500:])
+        lines = [x.strip() for x in p.stderr.decode(errors="ignore").splitlines() if x.strip()]
+        # drop the [mp3 @ 0x...] prefix, the address changes every run
+        last = re.sub(r"^\[[^\]]*\] ", "", lines[-1]) if lines else "no output"
+        raise CouldntDecodeError("Decoding failed. ffmpeg returned error code: %d\n\nformat: %s\nffmpeg said: %s"
+                                 % (p.returncode, format or "unknown", last))
     wav = bytearray(p.stdout)
     i = 12
     while wav[i:i + 4] != b"data":
