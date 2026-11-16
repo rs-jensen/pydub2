@@ -181,13 +181,13 @@ static std::string flac(const Audio &a, const Tags &tags, const Cancel &cancel) 
         if (c.size() >= 1 << 24) {
             throw std::runtime_error("cant encode this");
         }
-        // after the stream info block, which stops being the last one
         std::string head = "\x84";
         head += (char)(c.size() >> 16);
         head += (char)(c.size() >> 8);
         head += (char)c.size();
-        s.out[4] = 0;
-        s.out.insert(42, head + c);
+        // libflac wrote its own comment block after the stream info, ours takes its place
+        size_t old = 4 + ((uint8_t)s.out[43] << 16 | (uint8_t)s.out[44] << 8 | (uint8_t)s.out[45]);
+        s.out.replace(42, old, head + c);
     }
     return s.out;
 }

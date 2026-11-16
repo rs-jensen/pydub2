@@ -107,6 +107,23 @@ def test_commands_name_the_demuxers():
     assert cmd[cmd.index("-format_whitelist") + 1] == ",".join(names)
 
 
+def test_demuxer_list_skips_scripts_and_survives_a_timeout(monkeypatch):
+    table = "Demuxers:\n D. = Demuxing supported\n --\n D  avisynth  AviSynth\n D  hls,applehttp  HLS\n" \
+        " D  vapoursynth  VapourSynth\n D  wav  WAV\n"
+    calls = []
+
+    def fake(cmd, data=None, **kw):
+        calls.append(cmd)
+        if len(calls) == 1:
+            raise TimeoutError("stop")
+        return subprocess.CompletedProcess(cmd, 0, table.encode(), b"")
+
+    monkeypatch.setattr(utils, "run", fake)
+    with pytest.raises(TimeoutError):
+        utils.allowed_demuxers("fake-ffmpeg")
+    assert utils.allowed_demuxers("fake-ffmpeg") == "wav"
+
+
 def test_commands_restrict_protocols(monkeypatch, tmp_path):
     seen = []
 

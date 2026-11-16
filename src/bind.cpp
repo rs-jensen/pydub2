@@ -90,8 +90,7 @@ struct Stream {
 };
 
 // n frames or all that is left, decoded straight into the bytes python gets
-// frames comes from the header and can lie, so only the first 64 MB are sized from it, the rest grows with what is decoded
-// unless the decoder counted them itself
+// the header can lie about frames, so only 64 MB is sized from it and the rest grows, unless d.exact
 static nb::bytes take(Stream &s, int64_t n) {
     Decoder &d = *s.d;
     size_t fw = d.channels * d.width;
@@ -152,7 +151,6 @@ NB_MODULE(_pydub2, m) {
         .def("__init__", [](Stream *s, nb::bytes data) {
             std::unique_ptr<Decoder> d;
             {
-                // bytes cant change under us, no copy needed
                 const uint8_t *buf = (const uint8_t *)data.c_str();
                 size_t len = data.size();
                 nb::gil_scoped_release g;
@@ -259,9 +257,10 @@ NB_MODULE(_pydub2, m) {
                          double release_frames, long long look) {
         std::string_view s = str(data);
         nb::object out;
+        Cancel cancel = interrupt();
         try {
             nb::gil_scoped_release g;
-            compress(s, width, channels, thresh, ratio, attack_frames, release_frames, look, into(out));
+            compress(s, width, channels, thresh, ratio, attack_frames, release_frames, look, cancel, into(out));
         } catch (std::domain_error &e) {
             // pydub divides by a threshold of 0 in python
             PyErr_SetString(PyExc_ZeroDivisionError, e.what());

@@ -106,6 +106,20 @@ def test_pcm_export_options(monkeypatch, width, format, codec, parameters, nativ
         assert wav_bits(expected) == wav_bits(got)
 
 
+@need_ffmpeg
+@pytest.mark.parametrize("frames", [5, 6])
+def test_24_bit_wav_pads_odd_data_like_ffmpeg(monkeypatch, frames):
+    data = noise(2, 1, frames)
+    expected = pydub.AudioSegment(data, sample_width=2, frame_rate=8000, channels=1).export(
+        io.BytesIO(), format="wav", codec="pcm_s24le").read()
+    monkeypatch.setattr(_ffmpeg, "run", None)
+    got = AudioSegment(data, sample_width=2, frame_rate=8000, channels=1).export(
+        io.BytesIO(), format="wav", codec="pcm_s24le").read()
+    assert got[got.index(b"data"):] == expected[expected.index(b"data"):]
+    assert struct.unpack_from("<I", got, 4)[0] == len(got) - 8
+    assert len(got) % 2 == 0
+
+
 SEPARATOR = [
     ("wav", {"parameters": ["-sample_fmt", "s16"]}),
     ("wav", {"codec": "pcm_s24le", "parameters": ["-sample_fmt", "s32"]}),

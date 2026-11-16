@@ -61,24 +61,23 @@ def _encode(data, rate, *args):
 
 
 def _vorbis_tags(tags, format):
-    # what ffmpeg makes of -metadata: key=value split at the first =, a set matches keys without case,
-    # an empty value deletes, and the muxer renames four keys
+    # what ffmpeg makes of -metadata, the muxer renames four keys
     if not isinstance(tags, dict):
         raise InvalidTag("Tags must be a dictionary.")
-    out = []
+    out, idx = [], {}
     for k, v in tags.items():
-        arg = os.fsencode("%s=%s" % (k, v))
+        arg = ("%s=%s" % (k, v)).encode("utf-8", "surrogateescape")
         if b"\0" in arg:
             raise ValueError("embedded null byte")
         k, _, v = arg.partition(b"=")
         if k:
-            dict_set(out, k, v)
+            dict_set(out, idx, k, v)
     names = {b"album_artist": b"ALBUMARTIST", b"track": b"TRACKNUMBER", b"disc": b"DISCNUMBER",
              b"comment": b"DESCRIPTION"}
-    renamed, out = out, []
+    renamed, out, idx = out, [], {}
     for k, v in renamed:
-        dict_set(out, names.get(k.lower(), k), v)
-    dict_set(out, b"encoder", b"")
+        dict_set(out, idx, names.get(k.lower(), k), v)
+    dict_set(out, idx, b"encoder", b"")
     # flac has it last, ogg and opus first
     return out + [(b"encoder", b"pydub2")] if format == "flac" else [(b"encoder", b"pydub2")] + out
 
@@ -114,9 +113,13 @@ def _export_pcm(seg, format, codec, parameters):
     pcm = bytearray(n)
     for i in range(3):
         pcm[i::3] = seg._data[i + 1::4]
-    rate, channels = seg.frame_rate, seg.channels
-    return struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", 36 + n, b"WAVE", b"fmt ", 16, 1, channels, rate,
-                       rate * channels * 3, channels * 3, 24, b"data", n) + bytes(pcm)
+    rate, channels = round(seg.frame_rate), seg.channels
+    try:
+        head = struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", 36 + n + n % 2, b"WAVE", b"fmt ", 16, 1, channels, rate,
+                           rate * channels * 3, channels * 3, 24, b"data", n)
+    except struct.error:
+        raise CouldntEncodeError("cant encode this")
+    return head + bytes(pcm) + b"\0" * (n % 2)
 
 
 class ClassPropertyDescriptor(object):
@@ -228,7 +231,7 @@ def _pydub_wav(head):
 
 
 def _own_wav(head, flen, read_at):
-    # pydub cuts at the stated data size and keeps a cut last frame, the decoder reads like ffmpeg. gives the cut and the stray bytes
+    # pydub cuts at the stated data size and keeps a cut last frame, the decoder reads like ffmpeg
     h = extract_wav_headers(head)
     fmt = [x for x in h if x.id == b"fmt "][0]
     align, bits = struct.unpack_from("<HH", head, fmt.position + 20)
