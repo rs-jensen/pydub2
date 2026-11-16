@@ -233,8 +233,15 @@ def mp3_frames(m):
     out = []
     while i + 4 <= len(m) and m[i] == 0xff:
         out.append(i)
-        i += 144000 * [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320][m[i + 2] >> 4] // 44100 + (m[i + 2] >> 1 & 1)
+        kbps = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320][m[i + 2] >> 4]
+        i += 144000 * kbps // 44100 + (m[i + 2] >> 1 & 1)
     return out
+
+
+# big_values of the first granule of a stereo frame to 511, ffmpeg drops the frame
+def big_values(m, at):
+    p = (at + 4) * 8 + 32
+    m[p // 8:p // 8 + 3] = (int.from_bytes(m[p // 8:p // 8 + 3], "big") | 0x1ff << (15 - p % 8)).to_bytes(3, "big")
 
 
 def bits(m, p, n):
@@ -319,10 +326,9 @@ def test_mp3_lsf_intensity_positions(tmp_path):
 def test_mp3_junk_between_frames(tmp_path):
     m = bytearray(open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k"), "rb").read())
     starts = mp3_frames(m)
-    big = (starts[16] + 4) * 8 + 20 + 12
-    m[big // 8:big // 8 + 3] = (int.from_bytes(m[big // 8:big // 8 + 3], "big") | 0x1ff << (15 - big % 8)).to_bytes(3, "big")
-    out = m[:starts[3]] + b"\1\2" + m[starts[3]:starts[5]] + bytes(3) + m[starts[5]:starts[8] - 2] + m[starts[8]:starts[12]]
-    out += b"\7" * 416 + m[starts[12]:]
+    big_values(m, starts[16])
+    out = m[:starts[3]] + b"\1\2" + m[starts[3]:starts[5]] + bytes(3) + m[starts[5]:starts[8] - 2]
+    out += m[starts[8]:starts[12]] + b"\7" * 416 + m[starts[12]:]
     same_as_ffmpeg(tmp_path, "junk.mp3", bytes(out))
     assert len(_pydub2.decode(bytes(out))[0]) < len(_pydub2.decode(bytes(m))[0])
 
@@ -353,9 +359,7 @@ def test_mp3_one_frame(tmp_path):
 def test_mp3_seek_after_a_dropped_frame(tmp_path):
     m = bytearray(open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "320k", samples=CLICKS), "rb").read())
     for k in (20, 21):
-        at = mp3_frames(m)[k]
-        big = (at + 4) * 8 + 20 + 12
-        m[big // 8:big // 8 + 3] = (int.from_bytes(m[big // 8:big // 8 + 3], "big") | 0x1ff << (15 - big % 8)).to_bytes(3, "big")
+        big_values(m, mp3_frames(m)[k])
     d = _pydub2.Decoder(bytes(m))
     whole = d.read()
     for at in range(18 * 1152, 26 * 1152, 300):
@@ -402,19 +406,21 @@ def test_mp2_goes_to_ffmpeg(tmp_path):
 
 # a cover picture of several MB in the comments must not make opening quadratic
 def test_vorbis_big_comment_opens_fast(tmp_path):
-    meta = tmp_path / "meta.txt"
-    meta.write_text(";FFMETADATA1\ncomment=" + "A" * (10 << 20) + "\n")
-    small = make(tmp_path, "small.ogg", 2, "-c:a", "libvorbis")
-    big = make(tmp_path, "big.ogg", 2, "-i", str(meta), "-map_metadata", "1", "-c:a", "libvorbis")
-    times = []
-    for path in (small, big):
-        with open(path, "rb") as f:
+    times, outs = [], []
+    for mb in (1, 10):
+        meta = tmp_path / "meta.txt"
+        meta.write_text(";FFMETADATA1\ncomment=" + "A" * (mb << 20) + "\n")
+        with open(make(tmp_path, "%d.ogg" % mb, 2, "-i", str(meta), "-map_metadata", "1", "-c:a", "libvorbis"), "rb") as f:
             data = f.read()
-        t = time.perf_counter()
-        out = _pydub2.decode(data)
-        times.append(time.perf_counter() - t)
-    assert out == _pydub2.decode(open(small, "rb").read())
-    assert times[1] < 10 * times[0] + 0.5
+        best = 1e9
+        for _ in range(3):
+            t = time.perf_counter()
+            outs.append(_pydub2.decode(data))
+            best = min(best, time.perf_counter() - t)
+        times.append(best)
+    assert all(o == outs[0] for o in outs)
+    # linear is about 10 times the 1 MB file, quadratic about 100 times
+    assert times[1] < 30 * times[0]
 
 
 def test_chained_vorbis_goes_to_ffmpeg(tmp_path):

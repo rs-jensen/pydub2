@@ -262,16 +262,15 @@ static uint32_t be32(const uint8_t *h) {
 // ffmpegs header check. its parser takes no free format frames
 static bool mp3_head(const uint8_t *h) {
     uint32_t v = be32(h);
-    return (v & 0xffe00000) == 0xffe00000 && (v >> 19 & 3) != 1 && (v >> 17 & 3) && (v >> 12 & 15) && (v >> 12 & 15) != 15 &&
-           (v >> 10 & 3) != 3;
+    return (v & 0xffe00000) == 0xffe00000 && (v >> 19 & 3) != 1 && (v >> 17 & 3) && (v >> 12 & 15) &&
+           (v >> 12 & 15) != 15 && (v >> 10 & 3) != 3;
 }
 
 static size_t mp3_size(const uint8_t *h) {
     return (size_t)(drmp3_hdr_frame_bytes(h, 0) + drmp3_hdr_padding(h));
 }
 
-// dr_mp3 gives up on a short Info frame, so find it here. ffmpeg drops the frame and the lame delay and padding
-// count is the number of frames the tag says the file has. returns where the audio starts
+// ffmpeg drops the Info frame and takes the lame delay, padding and frame count from it. returns where audio starts
 static uint64_t mp3_tag(Input &in, size_t &skip, size_t &cut, uint64_t &count) {
     uint8_t h[10];
     uint64_t at = 0;
@@ -338,7 +337,6 @@ static int bits(const uint8_t *o, size_t p, int n) {
     return v;
 }
 
-// where the layer 3 side info of the n byte frame o starts and the bits for each granule, false if it does not fit
 static bool mp3_side(const uint8_t *o, size_t n, size_t &p, size_t &gr, size_t &ng, size_t &nch, size_t &step) {
     bool v1 = o[1] & 8;
     nch = (o[3] >> 6) == 3 ? 1 : 2;
@@ -365,8 +363,7 @@ static bool mp3_bad(const uint8_t *o, size_t n) {
     return false;
 }
 
-// minimp3 drops a frame with a missing bit reservoir, ffmpeg zeroes the granules in the missing part. so do that
-// here, returns how many
+// ffmpeg zeroes the granules a missing bit reservoir would feed, minimp3 drops the frame
 static int mp3_fix(uint8_t *o, size_t n, int have) {
     size_t p, gr, ng, nch, step;
     if (!mp3_side(o, n, p, gr, ng, nch, step)) {
@@ -415,14 +412,12 @@ struct Mp3 : Dec {
     uint8_t head[4];
     bool eof = false;
     size_t skip = 0, cut = 0, spf = 0;
-    uint64_t count = 0;
-    // decoded floats from frame start on, pos is the next frame to hand out. frames count from the first after the Info frame
+    // decoded floats from frame start on, pos is the next frame to hand out
     std::vector<float> buf;
     uint64_t start = 0, pos = 0;
 
     void init() {
-        uint64_t len = in.len, at = mp3_tag(in, skip, cut, count), off = 0;
-        // the bytes from p on, 4096 of them unless the file ends first
+        uint64_t count = 0, len = in.len, at = mp3_tag(in, skip, cut, count), off = 0;
         std::vector<uint8_t> b;
         auto load = [&](uint64_t p) {
             if (p < off || std::min(len, p + 4096) > off + b.size()) {
@@ -438,7 +433,7 @@ struct Mp3 : Dec {
             }
             return (const uint8_t *)b.data() + (p - off);
         };
-        // like ffmpegs mp3 demuxer: start at a header whose next frame has a header like it, give up at the end of the file
+        // like ffmpegs demuxer: start where two headers in a row match, give up at the end of the file
         uint64_t first = at;
         for (uint64_t i = 0; i < 65536; i++) {
             if (at + i + 4 > len) {
@@ -455,9 +450,7 @@ struct Mp3 : Dec {
                 }
             }
         }
-        // like its parser and decoder: a frame is the next header in a 4 byte window that starts empty after each frame.
-        // zeros in front of it are skipped, other junk drops the frame. the padding goes by the time of all frames,
-        // the dropped ones too, and only the first one carries the delay
+        // like its parser: the 4 byte window starts empty after a frame, junk other than zeros drops the next frame
         uint64_t t = 0, e = count * drmp3_hdr_frame_samples(load(first)), drop = 0;
         bool none = true, after = false;
         cut = e < cut ? 0 : cut;
@@ -470,9 +463,10 @@ struct Mp3 : Dec {
             if (h + 4 > len) {
                 break;
             }
-            uint8_t f[4096] = {};
-            size_t n = mp3_size(load(h));
-            memcpy(f, load(h), (size_t)std::min<uint64_t>(n, len - h));
+            uint8_t f[4096];
+            size_t n = mp3_size(load(h)), got = (size_t)std::min<uint64_t>(n, len - h);
+            memcpy(f, load(h), got);
+            memset(f + got, 0, n - got);
             bool bad = (f[1] & 6) == 2 && mp3_bad(f, n), keep = zero && !bad;
             if (keep && none) {
                 memcpy(head, f, 4);
@@ -485,6 +479,7 @@ struct Mp3 : Dec {
             if (zero) {
                 fr.push_back({h, n, bad});
             }
+            // the padding goes by the time of all frames, dropped ones too, and only the first carries the delay
             uint64_t dur = drmp3_hdr_frame_samples(f);
             if (keep && cut && t < e && t + dur > e - cut) {
                 drop += std::min(t + dur - (e - cut), dur);
@@ -513,7 +508,6 @@ struct Mp3 : Dec {
         memset(&dec, 0, sizeof(dec));
     }
 
-    // one frame from the list into out, 0 for a frame ffmpeg drops
     size_t step(float *out) {
         Frame f = fr[k++];
         uint8_t b[4096];
@@ -553,7 +547,7 @@ struct Mp3 : Dec {
         return spf;
     }
 
-    // j and to are dr_mp3 frames. end is where the padding starts, if known
+    // j and to count decoded frames. end is where the padding starts, if known
     void convert(char *out, uint64_t j, uint64_t to, [[maybe_unused]] uint64_t end) {
         size_t c = channels;
         while (j < to) {
