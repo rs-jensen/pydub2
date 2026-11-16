@@ -87,21 +87,45 @@ static float sigmoid(float x) {
     return 1 / (1 + std::exp(-x));
 }
 
-// x is 16 khz mono, one probability per 512 samples like silero's get_speech_timestamps
-static std::vector<float> speech_probs(const std::vector<float> &x, const Cancel &cancel) {
+static const Net &shared() {
     static const Net net = load();
+    return net;
+}
 
-    std::vector<float> probs;
-    float buf[640] = {0};
-    float h[128] = {0}, c[128] = {0};
-    float acc[4 * 258], mag[4 * 129], e0[4 * 128], e1[2 * 64], e2[64], e3[128], g[512];
-    for (size_t start = 0; start < x.size(); start += 512) {
+// x is fed in 16 khz mono, one probability per 512 samples like silero's get_speech_timestamps
+struct Probs {
+    const Net &net = shared();
+    const Cancel &cancel;
+    std::vector<float> out;
+    float buf[640] = {0}, h[128] = {0}, c[128] = {0}, win[512] = {0};
+    size_t have = 0;
+
+    Probs(const Cancel &cancel) : cancel(cancel) {}
+
+    void feed(const float *x, size_t n) {
+        for (size_t i = 0; i < n; i++) {
+            win[have++] = x[i];
+            if (have == 512) {
+                run();
+            }
+        }
+    }
+
+    void finish() {
+        if (have) {
+            run();
+        }
+    }
+
+    void run() {
+        float acc[4 * 258], mag[4 * 129], e0[4 * 128], e1[2 * 64], e2[64], e3[128], g[512];
         cancel();
         // 64 samples of context from the last window, then reflect pad 64 on the right
         std::memmove(buf, buf + 512, 64 * sizeof(float));
         for (size_t i = 0; i < 512; i++) {
-            buf[64 + i] = start + i < x.size() ? x[start + i] : 0;
+            buf[64 + i] = i < have ? win[i] : 0;
         }
+        have = 0;
         for (int i = 0; i < 64; i++) {
             buf[576 + i] = buf[574 - i];
         }
@@ -131,52 +155,56 @@ static std::vector<float> speech_probs(const std::vector<float> &x, const Cancel
         for (int i = 0; i < 128; i++) {
             gates(g, net.ih.data() + i * 512, e3[i], net.hh.data() + i * 512, h[i]);
         }
-        float out = out_b[0];
+        float o = out_b[0];
         for (int i = 0; i < 128; i++) {
             c[i] = sigmoid(g[128 + i]) * c[i] + sigmoid(g[i]) * std::tanh(g[256 + i]);
             h[i] = sigmoid(g[384 + i]) * std::tanh(c[i]);
-            out += out_w[i] * (h[i] > 0 ? h[i] : 0);
+            o += out_w[i] * (h[i] > 0 ? h[i] : 0);
         }
-        probs.push_back(sigmoid(out));
+        out.push_back(sigmoid(o));
     }
-    return probs;
-}
+};
 
 Ranges detect_speech(const Audio &in, double threshold, int min_speech_ms, int min_silence_ms, const Cancel &cancel) {
     if (in.width < 1 || in.width > 4) {
         throw std::invalid_argument("bad sample width");
     }
-    Audio a = in;
-    std::string res;
-    if (in.rate != 16000) {
-        resample(in, 16000, cancel, [&res](size_t n) {
-            res.resize(n);
-            return &res[0];
-        });
-        a.data = res;
-        a.rate = 16000;
-    }
-    size_t n = a.data.size() / a.width / a.channels;
-    std::vector<float> x(n);
-    const uint8_t *p = (const uint8_t *)a.data.data();
-    float scale = (float)(1.0 / ((double)(1u << (8 * a.width - 1)) * (double)a.channels));
-    for (size_t i = 0; i < n; i++) {
-        float sum = 0;
-        for (size_t ch = 0; ch < a.channels; ch++, p += a.width) {
-            if (a.width == 1) {
-                sum += (int8_t)p[0];
-            } else if (a.width == 2) {
-                sum += (int16_t)(p[0] | p[1] << 8);
-            } else if (a.width == 3) {
-                sum += (float)((int32_t)((uint32_t)p[0] << 8 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 24) / 256);
-            } else {
-                sum += (float)(int32_t)((uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24);
+    Probs probs(cancel);
+    size_t n = 0;
+    float scale = (float)(1.0 / ((double)(1u << (8 * in.width - 1)) * (double)in.channels));
+    // the mixdown of a piece of 16 khz audio, a few thousand frames at a time
+    auto feed = [&](std::string_view pcm) {
+        float x[4096];
+        const uint8_t *p = (const uint8_t *)pcm.data();
+        size_t left = pcm.size() / in.width / in.channels;
+        n += left;
+        while (left) {
+            size_t k = std::min<size_t>(left, 4096);
+            for (size_t i = 0; i < k; i++) {
+                float sum = 0;
+                for (size_t ch = 0; ch < in.channels; ch++, p += in.width) {
+                    if (in.width == 1) {
+                        sum += (int8_t)p[0];
+                    } else if (in.width == 2) {
+                        sum += (int16_t)(p[0] | p[1] << 8);
+                    } else if (in.width == 3) {
+                        sum += (float)((int32_t)((uint32_t)p[0] << 8 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 24) / 256);
+                    } else {
+                        sum += (float)(int32_t)((uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24);
+                    }
+                }
+                x[i] = sum * scale;
             }
+            probs.feed(x, k);
+            left -= k;
         }
-        x[i] = sum * scale;
+    };
+    if (in.rate != 16000) {
+        resample_each(in, 16000, cancel, feed);
+    } else {
+        feed(in.data);
     }
-
-    std::vector<float> probs = speech_probs(x, cancel);
+    probs.finish();
 
     // get_speech_timestamps from silero with no padding and no max speech length, in samples
     long long min_speech = 16LL * min_speech_ms, min_silence = 16LL * min_silence_ms;
@@ -184,17 +212,17 @@ Ranges detect_speech(const Audio &in, double threshold, int min_speech_ms, int m
     Ranges out;
     bool on = false;
     long long start = 0, temp_end = 0;
-    for (size_t i = 0; i < probs.size(); i++) {
+    for (size_t i = 0; i < probs.out.size(); i++) {
         long long pos = 512LL * (long long)i;
-        if (probs[i] >= threshold) {
+        if (probs.out[i] >= threshold) {
             temp_end = 0;
         }
-        if (probs[i] >= threshold && !on) {
+        if (probs.out[i] >= threshold && !on) {
             on = true;
             start = pos;
             continue;
         }
-        if (probs[i] < neg && on) {
+        if (probs.out[i] < neg && on) {
             if (!temp_end) {
                 temp_end = pos;
             }

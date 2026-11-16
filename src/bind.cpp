@@ -90,12 +90,12 @@ struct Stream {
 };
 
 // n frames or all that is left, decoded straight into the bytes python gets
-// the header can lie about frames, so only 64 MB is sized from it and the rest grows, unless d.exact
+// the header can lie about frames, so unless d.exact it is only used for n frames and the whole file comes in pieces
 static nb::bytes take(Stream &s, int64_t n) {
     Decoder &d = *s.d;
     size_t fw = d.channels * d.width;
     uint64_t left = n >= 0 ? (uint64_t)n : UINT64_MAX;
-    size_t room = std::min<uint64_t>(n >= 0 ? left : d.frames, n < 0 && d.exact ? UINT64_MAX : ((size_t)64 << 20) / fw) * fw, got = 0;
+    size_t room = (n < 0 ? (d.exact ? d.frames : 0) : std::min<uint64_t>(left, d.exact ? d.frames : ((size_t)64 << 20) / fw)) * fw, got = 0;
     nb::object out = blank(room);
     std::vector<std::string> rest; // pieces, one string that grows would copy itself and hold twice the memory
     size_t more = 0;

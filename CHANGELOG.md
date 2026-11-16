@@ -4,6 +4,14 @@ What changed in each release.
 
 ## [Unreleased]
 
+### Faster and lighter
+
+- Loading ogg vorbis, opus and flac needs about half the memory it did: the peak is now close to the size of the decoded audio. 10 minutes of ogg went from 454 to 234 MiB and of flac from 244 to 126 MiB.
+- This also holds with `pydub2.max_duration` set.
+- `detect_speech` needs a fixed amount of extra memory, not 3 times the audio. On 40 minutes it went from 1.3 GB to 19 MB. The ranges are the same.
+- Writing opus from 44.1 kHz audio on arm64 is about 40 percent faster. 10 minutes took 9.2 s and now take 5.3 s.
+- `overlay` is 3 times faster and `normalize` and `apply_gain` are 1.9 times faster on 60 s of audio.
+
 ### Fixed
 
 - The Windows wheels no longer need the Visual C++ redistributable. `import pydub2` failed with "DLL load failed" on a machine without it.
