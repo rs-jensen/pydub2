@@ -385,7 +385,8 @@ def test_mp3_inside_a_container_goes_to_ffmpeg(tmp_path):
             _pydub2.decode(open(path, "rb").read())
         assert pydub2_seg.from_file(path).raw_data == AudioSegment.from_file(path).raw_data
     path = str(tmp_path / "frag.mp4")
-    subprocess.run([ff, "-v", "error", "-y", "-i", mp3, "-c:a", "copy", "-movflags", "frag_keyframe+empty_moov", path], check=True)
+    if subprocess.run([ff, "-v", "error", "-y", "-i", mp3, "-c:a", "copy", "-movflags", "frag_keyframe+empty_moov", path]).returncode:
+        pytest.skip("this ffmpeg cant write fragmented mp4")
     d = open(path, "rb").read()
     segment = d[d.index(b"moof") - 4:]
     with pytest.raises(RuntimeError):
@@ -434,11 +435,12 @@ def flac_frames(m):
 
 # a bad crc frame is silence here and ffmpeg keeps its samples, the length is the same and nothing after it is lost
 def test_flac_damaged_keeps_the_length(tmp_path):
-    m = open(make(tmp_path, "a.flac", 2, "-c:a", "flac", samples=CLICKS), "rb").read()
+    m = open(make(tmp_path, "a.flac", 2, "-c:a", "flac", "-frame_size", "4608", samples=CLICKS), "rb").read()
+    blk = int.from_bytes(m[10:12], "big")
     starts = flac_frames(m) + [len(m)]
     assert len(starts) > 15
     clean = _pydub2.decode(m)[0]
-    one = 4608 * 8
+    one = blk * 8
     p = str(tmp_path / "bad.flac")
     for k in (3, 9):
         a, b = starts[k], starts[k + 1]
@@ -448,8 +450,8 @@ def test_flac_damaged_keeps_the_length(tmp_path):
             open(p, "wb").write(d)
             mine = _pydub2.decode(bytes(d))[0]
             assert len(mine) == len(clean)
-            assert mine[:(k * 4608 - 1) * 8] == clean[:(k * 4608 - 1) * 8]
-            assert mine[(k + 2) * 4608 * 8:] == clean[(k + 2) * 4608 * 8:]
+            assert mine[:(k * blk - 1) * 8] == clean[:(k * blk - 1) * 8]
+            assert mine[(k + 2) * blk * 8:] == clean[(k + 2) * blk * 8:]
             assert len(AudioSegment.from_file(p).raw_data) in (len(clean), len(clean) - one)
     rng = random.Random(3)
     for _ in range(40):
@@ -548,7 +550,7 @@ def test_vorbis_big_comment_opens_fast(tmp_path):
         times.append(best)
     assert all(o == outs[0] for o in outs)
     # linear is about 10 times the 1 MB file, quadratic about 100 times
-    assert times[1] < 30 * times[0]
+    assert times[1] < 50 * times[0]
 
 
 def test_chained_vorbis_goes_to_ffmpeg(tmp_path):

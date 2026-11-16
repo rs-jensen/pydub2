@@ -4,7 +4,9 @@ All notable changes to pydub2 are written here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
-This is what the first release, 0.1.0, will contain.
+## [0.0.1] - 2026-11-16
+
+The first release.
 
 ### Reading and writing
 
