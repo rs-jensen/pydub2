@@ -79,7 +79,8 @@ silence.split_on_speech(seg)  # list of AudioSegment
 
 Samples are kept as the same integer pcm that pydub uses. `raw_data`, `dBFS` and
 `get_array_of_samples()` give the same numbers as pydub 0.25.1. A copy of pydub's own test
-suite lives in `tests/pydub_suite` and runs against pydub2.
+suite lives in `tests/pydub_suite` and runs against pydub2. Its test audio is made the first time
+it runs, so it needs ffmpeg.
 
 There are a few deliberate differences, for example files that fall back to ffmpeg come out as
 16 bit. They are listed in [docs/differences.md](https://github.com/rs-jensen/pydub2/blob/main/docs/differences.md).
