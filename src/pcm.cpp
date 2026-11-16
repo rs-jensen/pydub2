@@ -12,7 +12,8 @@ static const int minvals[] = {0, -0x80, -0x8000, -0x800000, INT32_MIN};
 
 static void check(const std::string &data, int width, int frame = 1) {
     if (width < 1 || width > 4) throw std::invalid_argument("bad width");
-    if (data.size() % (width * frame)) throw std::invalid_argument("not a whole number of samples");
+    if (frame > 65535) throw std::invalid_argument("too many channels");
+    if (data.size() % ((size_t)width * frame)) throw std::invalid_argument("not a whole number of samples");
 }
 
 static int get(const char *p, int width) {
@@ -51,6 +52,7 @@ static double fbound(double val, double minval, double maxval) {
 }
 
 static int scale(double val, int width) {
+    if (std::isnan(val)) throw std::invalid_argument("not a number");
     return (int)floor(fbound(val, minvals[width], maxvals[width]));
 }
 
