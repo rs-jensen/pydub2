@@ -34,7 +34,7 @@ static float sigmoid(float x) {
 }
 
 // x is 16 khz mono, one probability per 512 samples like silero's get_speech_timestamps
-static std::vector<float> speech_probs(const std::vector<float> &x) {
+static std::vector<float> speech_probs(const std::vector<float> &x, const Cancel &cancel) {
     // silero's stft weights are just a periodic hann times cos and sin, so build them instead of shipping them
     double pi = std::acos(-1.0);
     std::vector<float> basis(258 * 256);
@@ -51,6 +51,7 @@ static std::vector<float> speech_probs(const std::vector<float> &x) {
     float buf[640] = {0};
     float h[128] = {0}, c[128] = {0};
     for (size_t start = 0; start < x.size(); start += 512) {
+        cancel();
         // 64 samples of context from the last window, then reflect pad 64 on the right
         std::memmove(buf, buf + 512, 64 * sizeof(float));
         for (int i = 0; i < 512; i++)
@@ -95,10 +96,10 @@ static std::vector<float> speech_probs(const std::vector<float> &x) {
     return probs;
 }
 
-Ranges detect_speech(const Audio &in, double threshold, int min_speech_ms, int min_silence_ms) {
+Ranges detect_speech(const Audio &in, double threshold, int min_speech_ms, int min_silence_ms, const Cancel &cancel) {
     if (in.width < 1 || in.width > 4)
         throw std::invalid_argument("bad sample width");
-    Audio a = in.rate == 16000 ? in : resample(in, 16000);
+    Audio a = in.rate == 16000 ? in : resample(in, 16000, cancel);
     size_t n = a.data.size() / a.width / a.channels;
     std::vector<float> x(n);
     const uint8_t *p = (const uint8_t *)a.data.data();
@@ -114,7 +115,7 @@ Ranges detect_speech(const Audio &in, double threshold, int min_speech_ms, int m
         x[i] = sum * scale;
     }
 
-    std::vector<float> probs = speech_probs(x);
+    std::vector<float> probs = speech_probs(x, cancel);
 
     // get_speech_timestamps from silero with no padding and no max speech length, in samples
     long long min_speech = 16LL * min_speech_ms, min_silence = 16LL * min_silence_ms;
