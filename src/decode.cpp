@@ -605,6 +605,10 @@ static int64_t vorbis_len(Input &in, std::vector<Page> &pages) {
             break;
         }
         const uint8_t *buf = (const uint8_t *)pg.data();
+        // ffmpeg drops a page cut off by the end of the file and ends there
+        if (r < 0 && in.pos == in.len) {
+            break;
+        }
         if (r < 0) {
             return -1;
         }
@@ -711,8 +715,7 @@ static int64_t vorbis_len(Input &in, std::vector<Page> &pages) {
         return total;
     }
     if (pk[0].eos) {
-        // one page: the parser starts from the block size left over by the length scan
-        prev = bs[flag[mode(pk.back().b)]];
+        prev = bs[0];
         for (Packet &x : pk) {
             skip += dur(prev, x.b);
         }

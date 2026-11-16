@@ -103,6 +103,25 @@ def test_vorbis_length(tmp_path, n, rate, args):
     close(*both(path), 1024)
 
 
+# a sine starts on a short block, one page
+def test_vorbis_short_first_block(tmp_path):
+    path = str(tmp_path / "a.ogg")
+    subprocess.run([ff, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "aevalsrc=0.3*sin(700*t):s=48000:d=0.5",
+                    "-c:a", "libvorbis", path], check=True)
+    close(*both(path), 1024)
+
+
+# a download cut off in the middle of a page
+def test_vorbis_cut_off(tmp_path):
+    path = str(tmp_path / "a.ogg")
+    subprocess.run([ff, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "anoisesrc=a=0.3:d=5", "-c:a", "libvorbis",
+                    path], check=True)
+    with open(path, "rb") as f:
+        whole = f.read()
+    for cut in (len(whole) // 2, len(whole) - 100):
+        same_as_ffmpeg(tmp_path, "cut.ogg", whole[:cut], 1024)
+
+
 # ffmpeg uses its own opus decoder, not libopus, so this is only close
 @pytest.mark.parametrize("channels", [1, 2])
 def test_opus(tmp_path, channels):
