@@ -1,3 +1,4 @@
+import importlib.metadata
 import io
 import json
 import math
@@ -76,6 +77,13 @@ def test_same_as_ffmpeg(name, make, kw):
     assert (got.frame_rate, got.channels) == (ref.frame_rate, ref.channels)
     assert len(b) == len(a) == len(seg.raw_data) // seg.sample_width
     assert snr(a, b) > 60
+
+
+@has_mp3
+def test_versions():
+    import pydub2_mp3
+    assert pydub2_mp3.lame_version == "3.100"
+    assert pydub2_mp3.__version__ == importlib.metadata.version("pydub2-mp3")
 
 
 @has_mp3

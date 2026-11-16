@@ -1,7 +1,12 @@
 import os
 import sys
+from importlib.metadata import PackageNotFoundError, version
 
-__version__ = "3.100.0"
+lame_version = "3.100"
+try:
+    __version__ = version("pydub2-mp3")
+except PackageNotFoundError:
+    __version__ = "0+unknown"
 
 
 def path():
