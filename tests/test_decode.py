@@ -9,6 +9,7 @@ import sys
 import pytest
 
 import _pydub2
+import pydub2
 
 ff = "/opt/homebrew/bin/ffmpeg"
 if not os.path.exists(ff):
@@ -246,6 +247,12 @@ def test_chained_opus_goes_to_ffmpeg(tmp_path):
     assert one[14:18] != two[14:18]
     with pytest.raises(RuntimeError):
         _pydub2.decode(one + two)
+
+
+def test_vorbis_part_goes_to_ffmpeg(tmp_path):
+    path = make(tmp_path, "a.ogg", 2, "-c:a", "libvorbis")
+    for kw in ({"start_second": 0.1}, {"start_second": 0.05, "duration": 0.2}):
+        assert pydub2.AudioSegment.from_file(path, **kw).raw_data == AudioSegment.from_file(path, **kw).raw_data
 
 
 def test_seek_back_after_the_end(tmp_path):
