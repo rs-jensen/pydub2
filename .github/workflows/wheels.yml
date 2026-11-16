@@ -2,6 +2,13 @@ name: wheels
 
 on:
   workflow_dispatch:
+    inputs:
+      only:
+        description: CIBW_BUILD pattern, empty for all
+        default: ""
+      os:
+        description: JSON list of runners, empty for all
+        default: ""
   push:
     tags: ["v*"]
 
@@ -12,13 +19,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-latest, windows-11-arm]
+        os: ${{ fromJSON(inputs.os || '["ubuntu-latest", "ubuntu-24.04-arm", "macos-15", "macos-15-intel", "windows-latest", "windows-11-arm"]') }}
     steps:
       - uses: actions/checkout@v4
       - if: runner.os == 'Windows'
         run: choco install ffmpeg -y --no-progress
       - if: runner.os == 'macOS'
         run: brew install ffmpeg
+      - if: inputs.only != ''
+        shell: bash
+        run: echo "CIBW_BUILD=$ONLY" >> "$GITHUB_ENV"
+        env:
+          ONLY: ${{ inputs.only }}
       - uses: pypa/cibuildwheel@v4.3
       - uses: actions/upload-artifact@v4
         with:
