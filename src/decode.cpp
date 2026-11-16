@@ -469,8 +469,8 @@ struct Mp3 : Dec {
                 memcpy(head, f, 4);
                 none = false;
             }
-            // ffmpeg resamples to the first frame, that we leave to it
-            if (keep && (!drmp3_hdr_compare(head, f) || DRMP3_HDR_IS_MONO(head) != DRMP3_HDR_IS_MONO(f))) {
+            // ffmpeg resamples to the rate of the first frame, that we leave to it
+            if (keep && !drmp3_hdr_compare(head, f)) {
                 fail();
             }
             if (zero) {
@@ -524,8 +524,20 @@ struct Mp3 : Dec {
         // so dr_mp3 takes the frame as it is and keeps its state
         memcpy(dec.header, b, 4);
         drmp3dec_frame_info fi;
-        if (!drmp3dec_decode_frame(&dec, b, f.n, out, &fi)) {
-            memset(out, 0, spf * channels * sizeof(float));
+        float pcm[1152 * 2];
+        if (!drmp3dec_decode_frame(&dec, b, f.n, pcm, &fi)) {
+            memset(pcm, 0, sizeof(pcm));
+        }
+        // ffmpeg keeps the channels of the first frame and mixes the others like swresample
+        int c = DRMP3_HDR_IS_MONO(b) ? 1 : 2;
+        for (size_t i = 0; i < spf; i++) {
+            if (c == channels) {
+                memcpy(out + i * c, pcm + i * c, c * sizeof(float));
+            } else if (c == 2) {
+                out[i] = (pcm[2 * i] + pcm[2 * i + 1]) * 0.5f;
+            } else {
+                out[2 * i] = out[2 * i + 1] = pcm[i] * 0.70710678f;
+            }
         }
         return spf;
     }

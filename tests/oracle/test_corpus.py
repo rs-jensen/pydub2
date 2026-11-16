@@ -28,7 +28,6 @@ EXPECTED = {
     "s24_192000_6ch_1s.flac": ({"params:frames"}, WRONG_IN_PYDUB), "s24_192000_8ch_1s.flac": ({"params:frames"}, WRONG_IN_PYDUB),
     "b6k_48000_2ch.opus": ({"decoder"}, DECODER), "b16k_48000_2ch.opus": ({"decoder"}, DECODER),
     "b32k_48000_2ch.opus": ({"decoder"}, DECODER),
-    "he_mode.mp3": ({"decoder"}, DECODER),
     "Boot_to_the_Head.MP3": ({"decoder"}, "a few broken frames next to junk decode differently"),
 }
 

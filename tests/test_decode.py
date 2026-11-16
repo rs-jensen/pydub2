@@ -319,6 +319,18 @@ def test_mp3_junk_between_frames(tmp_path):
     assert len(_pydub2.decode(bytes(out))[0]) < len(_pydub2.decode(bytes(m))[0])
 
 
+# ffmpeg keeps the channels of the first frame and mixes the rest, a new rate it resamples so that goes to ffmpeg
+def test_mp3_channels_change(tmp_path):
+    args = ["-c:a", "libmp3lame", "-write_xing", "0", "-id3v2_version", "0"]
+    st = open(make(tmp_path, "st.mp3", 2, *args), "rb").read()
+    mo = open(make(tmp_path, "mo.mp3", 1, *args), "rb").read()
+    same_as_ffmpeg(tmp_path, "stmo.mp3", st + mo)
+    same_as_ffmpeg(tmp_path, "most.mp3", mo + st)
+    low = open(make(tmp_path, "low.mp3", 2, "-ar", "22050", *args), "rb").read()
+    with pytest.raises(RuntimeError):
+        _pydub2.decode(st + low)
+
+
 def test_mp3_starts_inside_the_bit_reservoir(tmp_path):
     m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k", "-write_xing", "0"), "rb").read()
     starts = mp3_frames(m)
