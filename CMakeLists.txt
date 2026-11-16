@@ -59,6 +59,10 @@ FetchContent_Declare(samplerate EXCLUDE_FROM_ALL
 if(MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64")
     set(OPUS_DISABLE_INTRINSICS ON CACHE BOOL "")
 endif()
+# without runtime detection opus leaves neon off on arm64, and every arm64 cpu has it
+if(NOT MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+    set(OPUS_PRESUME_NEON ON CACHE BOOL "")
+endif()
 FetchContent_MakeAvailable(ogg vorbis flac opus opusfile opusenc samplerate)
 
 # opusfile and libopusenc only ship autotools, so build their few files here
@@ -81,6 +85,11 @@ target_include_directories(opusenc PUBLIC ${opusenc_SOURCE_DIR}/include)
 target_compile_definitions(opusenc PRIVATE OUTSIDE_SPEEX RANDOM_PREFIX=libopusenc
     PACKAGE_NAME="libopusenc" PACKAGE_VERSION="0.3")
 target_link_libraries(opusenc PUBLIC Opus::opus)
+# libopusenc has an sse resampler only, this adds the neon one
+if(NOT MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+    target_compile_definitions(opusenc PRIVATE USE_NEON)
+    target_include_directories(opusenc PRIVATE ${CMAKE_CURRENT_LIST_DIR}/cmake)
+endif()
 
 add_library(ebur128 STATIC src/third_party/ebur128.c)
 target_include_directories(ebur128 PUBLIC src/third_party PRIVATE src/third_party/queue)

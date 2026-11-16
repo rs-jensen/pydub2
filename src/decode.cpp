@@ -223,6 +223,11 @@ struct Wav : Dec {
     }
 };
 
+// a header can lie about the length, so only believe one the file could hold at 64 times the compression
+static bool plausible(uint64_t frames, size_t fw, uint64_t len) {
+    return frames <= (((uint64_t)64 << 20) + len * 64) / fw;
+}
+
 struct Flac : Dec {
     drflac *f = NULL;
     bool end = false, lost = false, held = false;
@@ -242,6 +247,7 @@ struct Flac : Dec {
         channels = f->channels;
         width = f->bitsPerSample <= 16 ? 2 : 4;
         frames = f->totalPCMFrameCount;
+        exact = plausible(frames, channels * width, in.len);
     }
 
     uint64_t first() {
@@ -1002,6 +1008,7 @@ struct Vorbis : Dec {
         channels = (size_t)info.channels;
         width = 4;
         frames = want > 0 ? (uint64_t)want : 0;
+        exact = plausible(frames, channels * width, in.len);
         if (!want) {
             fail();
         }
@@ -1125,6 +1132,7 @@ struct Opus : Dec {
             fail();
         }
         frames = n > 0 ? (uint64_t)n : 0;
+        exact = plausible(frames, channels * width, in.len);
     }
 
     size_t read(char *out, size_t n) {
