@@ -39,6 +39,7 @@ Two vendored files have a small change so that opening files from several thread
 `src/third_party/dr_mp3.h` has small changes so that it decodes like ffmpeg. Each one is marked with a `pydub2:` comment:
 
 - a short granule ignores its own scfsi bits but no longer clears the ones of the next granule
+- MPEG 2 intensity stereo: the highest scalefactor value is a position like any other, only 16 and up are illegal
 
 The mp3 encoder is not part of this package. It is in the separate package pydub2-mp3 (LAME 3.100,
 LGPL-2.0-or-later) and is loaded at runtime. It is its own shared library, built from the unmodified

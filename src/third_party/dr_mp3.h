@@ -1210,7 +1210,7 @@ static void drmp3_L3_read_scalefactors(drmp3_uint8 *scf, drmp3_uint8 *ist_pos, c
                 DRMP3_ZERO_MEMORY(ist_pos, cnt);
             } else
             {
-                int max_scf = (scfsi < 0) ? (1 << bits) - 1 : -1;
+                int max_scf = -1; /* pydub2: was (1 << bits) - 1 for mpeg 2, ffmpeg keeps those as positions */
                 for (k = 0; k < cnt; k++)
                 {
                     int s = drmp3_bs_get_bits(bitbuf, bits);
@@ -1538,7 +1538,7 @@ static void drmp3_L3_stereo_top_band(const float *right, const drmp3_uint8 *sfb,
 static void drmp3_L3_stereo_process(float *left, const drmp3_uint8 *ist_pos, const drmp3_uint8 *sfb, const drmp3_uint8 *hdr, int max_band[3], int mpeg2_sh)
 {
     static const float g_pan[7*2] = { 0,1,0.21132487f,0.78867513f,0.36602540f,0.63397460f,0.5f,0.5f,0.63397460f,0.36602540f,0.78867513f,0.21132487f,1,0 };
-    unsigned i, max_pos = DRMP3_HDR_TEST_MPEG1(hdr) ? 7 : 64;
+    unsigned i, max_pos = DRMP3_HDR_TEST_MPEG1(hdr) ? 7 : 16; /* pydub2: was 64, ffmpeg calls 16 and up illegal */
 
     for (i = 0; sfb[i]; i++)
     {

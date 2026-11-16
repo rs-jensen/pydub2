@@ -285,6 +285,20 @@ def test_mp3_scfsi_after_a_short_granule(tmp_path):
     same_as_ffmpeg(tmp_path, "scfsi.mp3", bytes(m))
 
 
+# mpeg 2 intensity stereo, the right channel is all zero so every band takes the left one at the position in its
+# scalefactors. ffmpeg only calls 16 and up illegal, not the highest value the scalefactor size allows
+def test_mp3_lsf_intensity_positions(tmp_path):
+    def b(v, n):
+        return format(v, "0%db" % n)
+
+    def granule(part, gain, sfc):
+        return b(part, 12) + b(0, 9) + b(gain, 8) + b(sfc, 9) + "0" + b(0, 22) + "01"
+    # 42 count1 quads of four ones on the left, then the right scalefactors: 7 of 3 bits and 7 of 5 bits
+    data = b(0, 10) + granule(42 * 8, 170, 0) + granule(56, 0, 276) + "0" * 8 * 42 + b(7, 3) * 7 + b(20, 5) * 7
+    frame = b"\xff\xf3\x40\x50" + int(data, 2).to_bytes(len(data) // 8, "big")
+    same_as_ffmpeg(tmp_path, "is.mp3", (frame + bytes(104 - len(frame))) * 4)
+
+
 def test_mp3_starts_inside_the_bit_reservoir(tmp_path):
     m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k", "-write_xing", "0"), "rb").read()
     starts = mp3_frames(m)
