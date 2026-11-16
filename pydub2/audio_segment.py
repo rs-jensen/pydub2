@@ -7,7 +7,7 @@ import subprocess
 import sys
 import struct
 import wave
-from .utils import fsdecode, get_encoder_name, mediainfo_json
+from .utils import dict_set, fsdecode, get_encoder_name, mediainfo_json
 from .logging_utils import log_conversion, log_subprocess_output
 import base64
 from collections import namedtuple
@@ -58,6 +58,29 @@ def _encode(data, rate, *args):
         return _pydub2.encode(data, round(rate), *args)
     except RuntimeError as e:
         raise CouldntEncodeError(str(e))
+
+
+def _vorbis_tags(tags, format):
+    # what ffmpeg makes of -metadata: key=value split at the first =, a set matches keys without case,
+    # an empty value deletes, and the muxer renames four keys
+    if not isinstance(tags, dict):
+        raise InvalidTag("Tags must be a dictionary.")
+    out = []
+    for k, v in tags.items():
+        arg = os.fsencode("%s=%s" % (k, v))
+        if b"\0" in arg:
+            raise ValueError("embedded null byte")
+        k, _, v = arg.partition(b"=")
+        if k:
+            dict_set(out, k, v)
+    names = {b"album_artist": b"ALBUMARTIST", b"track": b"TRACKNUMBER", b"disc": b"DISCNUMBER",
+             b"comment": b"DESCRIPTION"}
+    renamed, out = out, []
+    for k, v in renamed:
+        dict_set(out, names.get(k.lower(), k), v)
+    dict_set(out, b"encoder", b"")
+    # flac has it last, ogg and opus first
+    return out + [(b"encoder", b"pydub2")] if format == "flac" else [(b"encoder", b"pydub2")] + out
 
 
 def _export_pcm(seg, format, codec, parameters):
@@ -909,7 +932,7 @@ class AudioSegment(object):
 
         # wav ignores tags and bitrate in pydub too
         if codec is None and parameters is None and (
-                format == "wav" or (format in ("flac", "ogg", "opus") and tags is None and cover is None)):
+                format == "wav" or (format in ("flac", "ogg", "opus") and cover is None)):
             rate = 0
             if bitrate and format in ("ogg", "opus"):
                 bitrate = str(bitrate).lower()
@@ -927,7 +950,8 @@ class AudioSegment(object):
                     raise CouldntEncodeError(str(e))
                 out_f.write(data)
             else:
-                out_f.write(_encode(data, self.frame_rate, self.channels, width, format, rate))
+                out_f.write(_encode(data, self.frame_rate, self.channels, width, format, rate,
+                                    [] if tags is None or format == "wav" else _vorbis_tags(tags, format)))
             out_f.seek(0)
             return out_f
 

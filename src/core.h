@@ -25,6 +25,8 @@ struct Audio {
 
 typedef std::vector<std::pair<int, int>> Ranges; // [start, end) in ms
 
+typedef std::vector<std::pair<std::string, std::string>> Tags; // vorbis comments, key and value as bytes
+
 // the long loops call this every so often, it throws to stop the work
 typedef std::function<void()> Cancel;
 
@@ -52,9 +54,11 @@ std::unique_ptr<Decoder> open(const std::filesystem::path &path);
 // encode.cpp
 // format is wav, flac, ogg or opus. bitrate in bits per second, 0 picks a default
 // throws std::invalid_argument for a format we dont have
+// tags are written as vorbis comments to flac, ogg and opus, wav has none
 // the 44 bytes in front of the samples, so a writer can send the samples as they are
 std::string wav_head(const Audio &a);
-void encode(const Audio &a, const std::string &format, int bitrate, const Cancel &cancel, const Alloc &alloc);
+void encode(const Audio &a, const std::string &format, int bitrate, const Tags &tags, const Cancel &cancel,
+            const Alloc &alloc);
 
 // pcm.cpp
 // these do the same math as the old audioop module so the numbers match pydub

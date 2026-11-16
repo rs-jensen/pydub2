@@ -124,7 +124,7 @@ static FLAC__StreamEncoderTellStatus flac_tell(const FLAC__StreamEncoder *, FLAC
     return FLAC__STREAM_ENCODER_TELL_STATUS_OK;
 }
 
-static std::string flac(const Audio &a, const Cancel &cancel) {
+static std::string flac(const Audio &a, const Tags &tags, const Cancel &cancel) {
     if (a.channels > 8) {
         throw std::runtime_error("cant encode this");
     }
@@ -168,6 +168,27 @@ static std::string flac(const Audio &a, const Cancel &cancel) {
     if (!ok) {
         throw std::runtime_error("cant encode this");
     }
+    if (!tags.empty()) {
+        // not through libFLAC, its metadata calls drop keys and values ffmpeg writes as they are
+        std::string c;
+        put32(c, strlen(FLAC__VENDOR_STRING));
+        c += FLAC__VENDOR_STRING;
+        put32(c, tags.size());
+        for (auto &t : tags) {
+            put32(c, t.first.size() + 1 + t.second.size());
+            c += t.first + "=" + t.second;
+        }
+        if (c.size() >= 1 << 24) {
+            throw std::runtime_error("cant encode this");
+        }
+        // after the stream info block, which stops being the last one
+        std::string head = "\x84";
+        head += (char)(c.size() >> 16);
+        head += (char)(c.size() >> 8);
+        head += (char)c.size();
+        s.out[4] = 0;
+        s.out.insert(42, head + c);
+    }
     return s.out;
 }
 
@@ -191,7 +212,7 @@ static void blocks(vorbis_dsp_state *vd, vorbis_block *vb, ogg_stream_state *os,
     }
 }
 
-static std::string ogg(const Audio &a, int bitrate, const Cancel &cancel) {
+static std::string ogg(const Audio &a, int bitrate, const Tags &tags, const Cancel &cancel) {
     std::vector<float> pcm = floats(a);
     vorbis_info vi;
     vorbis_info_init(&vi);
@@ -211,6 +232,9 @@ static std::string ogg(const Audio &a, int bitrate, const Cancel &cancel) {
     }
     vorbis_comment vc;
     vorbis_comment_init(&vc);
+    for (auto &t : tags) {
+        vorbis_comment_add(&vc, (t.first + "=" + t.second).c_str());
+    }
     vorbis_dsp_state vd;
     vorbis_analysis_init(&vd, &vi);
     vorbis_block vb;
@@ -272,11 +296,14 @@ static int opus_close(void *) {
     return 0;
 }
 
-static std::string opus(const Audio &a, int bitrate, const Cancel &cancel) {
+static std::string opus(const Audio &a, int bitrate, const Tags &tags, const Cancel &cancel) {
     std::string out;
     std::vector<float> pcm = floats(a);
     OpusEncCallbacks cb = {opus_write, opus_close};
     OggOpusComments *com = ope_comments_create();
+    for (auto &t : tags) {
+        ope_comments_add(com, t.first.c_str(), t.second.c_str());
+    }
     int err = 0;
     OggOpusEnc *enc = ope_encoder_create_callbacks(&cb, &out, com, a.rate, (int)a.channels, a.channels > 2, &err);
     ope_comments_destroy(com);
@@ -323,7 +350,8 @@ static void copy(const std::string &s, const Alloc &alloc) {
     memcpy(alloc(s.size()), s.data(), s.size());
 }
 
-void encode(const Audio &a, const std::string &format, int bitrate, const Cancel &cancel, const Alloc &alloc) {
+void encode(const Audio &a, const std::string &format, int bitrate, const Tags &tags, const Cancel &cancel,
+            const Alloc &alloc) {
     if (a.width < 1 || a.width > 4) {
         throw std::invalid_argument("bad sample width");
     }
@@ -331,17 +359,17 @@ void encode(const Audio &a, const std::string &format, int bitrate, const Cancel
         return wav(a, alloc);
     }
     if (format == "flac") {
-        return copy(flac(a, cancel), alloc);
+        return copy(flac(a, tags, cancel), alloc);
     }
     if (format == "ogg") {
-        return copy(ogg(a, bitrate, cancel), alloc);
+        return copy(ogg(a, bitrate, tags, cancel), alloc);
     }
     if (format == "opus") {
         // libopusenc corrupts the heap when it resamples up from below about 90 hz
         if (a.rate < 100) {
             throw std::runtime_error("cant encode this");
         }
-        return copy(opus(a, bitrate, cancel), alloc);
+        return copy(opus(a, bitrate, tags, cancel), alloc);
     }
     throw std::invalid_argument("cant write this format");
 }
