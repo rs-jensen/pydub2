@@ -204,6 +204,13 @@ def test_wav_lies_about_size():
     assert data == b"\1\0" * 10
 
 
+# a chunk size near 4 GB must not wrap round and send the chunk walk into the chunk, to the fake data chunk in it
+def test_wav_huge_chunk_after_data():
+    head = b"RIFF" + struct.pack("<I", 0) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, 8000, 16000, 2, 16)
+    wav = head + b"data" + struct.pack("<I", 4) + b"\1\0\2\0" + b"junk\xff\xff\xff\xff" + b"data\2\0\0\0\x09\0"
+    assert _pydub2.decode(wav)[0] == b"\1\0\2\0"
+
+
 def test_empty_wav():
     head = b"RIFF" + struct.pack("<I", 36) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 2, 8000, 32000, 4, 16)
     assert _pydub2.decode(head + b"data" + struct.pack("<I", 0)) == (b"", 8000, 2, 2)

@@ -165,7 +165,8 @@ struct Wav : Dec {
                     at = next + 8;
                     break;
                 }
-                next += 8 + le32(h + 4) + (h[4] & 1u);
+                // in 64 bits, a size near 4 GB must not wrap round to a small step
+                next += 8 + (uint64_t)le32(h + 4) + (h[4] & 1u);
             }
         }
         seek_to(&in, w.dataChunkDataPos);
