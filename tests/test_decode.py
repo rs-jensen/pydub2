@@ -7,6 +7,7 @@ import random
 import struct
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -32,8 +33,12 @@ random.seed(1)
 SAMPLES = [0.5 * math.sin(i * 0.06) + 0.1 * random.uniform(-1, 1) for i in range(RATE // 2)]
 
 
-def make(tmp_path, name, channels, *args):
-    raw = b"".join(struct.pack("<f", x * (1 if c == 0 else 0.7)) for x in SAMPLES for c in range(2))
+CLICKS = [0.4 * math.sin(i * 0.05) * (i % 4410 > 200) + (random.uniform(-0.6, 0.6) if i % 4410 < 30 else 0)
+          for i in range(RATE * 2)]
+
+
+def make(tmp_path, name, channels, *args, samples=SAMPLES):
+    raw = b"".join(struct.pack("<f", x * (1 if c == 0 else 0.7)) for x in samples for c in range(2))
     path = str(tmp_path / name)
     cmd = [ff, "-y", "-loglevel", "error", "-f", "f32le", "-ar", str(RATE), "-ac", "2", "-i", "-",
            "-ac", str(channels), *args, path]
@@ -200,6 +205,13 @@ def test_wav_lies_about_size():
     assert data == b"\1\0" * 10
 
 
+# a chunk size near 4 GB must not wrap round and send the chunk walk into the chunk, to the fake data chunk in it
+def test_wav_huge_chunk_after_data():
+    head = b"RIFF" + struct.pack("<I", 0) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, 8000, 16000, 2, 16)
+    wav = head + b"data" + struct.pack("<I", 4) + b"\1\0\2\0" + b"junk\xff\xff\xff\xff" + b"data\2\0\0\0\x09\0"
+    assert _pydub2.decode(wav)[0] == b"\1\0\2\0"
+
+
 def test_empty_wav():
     head = b"RIFF" + struct.pack("<I", 36) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 2, 8000, 32000, 4, 16)
     assert _pydub2.decode(head + b"data" + struct.pack("<I", 0)) == (b"", 8000, 2, 2)
@@ -221,8 +233,22 @@ def mp3_frames(m):
     out = []
     while i + 4 <= len(m) and m[i] == 0xff:
         out.append(i)
-        i += 144000 * 128 // 44100 + (m[i + 2] >> 1 & 1)
+        kbps = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320][m[i + 2] >> 4]
+        i += 144000 * kbps // 44100 + (m[i + 2] >> 1 & 1)
     return out
+
+
+# big_values of the first granule of a stereo frame to 511, ffmpeg drops the frame
+def big_values(m, at):
+    p = (at + 4) * 8 + 32
+    m[p // 8:p // 8 + 3] = (int.from_bytes(m[p // 8:p // 8 + 3], "big") | 0x1ff << (15 - p % 8)).to_bytes(3, "big")
+
+
+def bits(m, p, n):
+    v = 0
+    for k in range(p, p + n):
+        v = v << 1 | m[k // 8] >> (7 - k % 8) & 1
+    return v
 
 
 def same_as_ffmpeg(tmp_path, name, data, limit=1):
@@ -256,7 +282,98 @@ def test_mp3_end(tmp_path):
         for tail in tags:
             same_as_ffmpeg(tmp_path, "tag.mp3", m[:starts[k]] + tail)
         for cut in (4, 40, 200):
-            same_as_ffmpeg(tmp_path, "cut.mp3", m[:starts[k] + cut], 328)
+            same_as_ffmpeg(tmp_path, "cut.mp3", m[:starts[k] + cut])
+
+
+# ffmpeg stops the huffman data at the cut, past it a granule that starts in the bit reservoir reads zeros
+def test_mp3_cut_inside_a_granule(tmp_path):
+    m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k", samples=CLICKS), "rb").read()
+    starts = mp3_frames(m)
+    for cut in (40, 60, 100, 150):
+        same_as_ffmpeg(tmp_path, "cut.mp3", m[:starts[10] + cut])
+
+
+# some encoders set scfsi on a long granule after a short one, ffmpeg copies the scalefactors then
+def test_mp3_scfsi_after_a_short_granule(tmp_path):
+    m = bytearray(open(make(tmp_path, "a.mp3", 1, "-c:a", "libmp3lame", "-b:a", "64k", samples=CLICKS), "rb").read())
+    hit = 0
+    for at in mp3_frames(m):
+        # mono side info: 9 bits main_data_begin, 5 private, 4 scfsi, then 59 per granule
+        q = (at + 4) * 8 + 18
+        if bits(m, q + 33, 3) == 6 and bits(m, q + 59 + 33, 3) != 6 and bits(m, q + 59 + 29, 4) == 0:
+            m[at + 5] |= 3
+            m[at + 6] |= 0xc0
+            hit += 1
+    assert hit
+    same_as_ffmpeg(tmp_path, "scfsi.mp3", bytes(m))
+
+
+# mpeg 2 intensity stereo, the right channel is all zero so every band takes the left one at the position in its
+# scalefactors. ffmpeg only calls 16 and up illegal, not the highest value the scalefactor size allows
+def test_mp3_lsf_intensity_positions(tmp_path):
+    def b(v, n):
+        return format(v, "0%db" % n)
+
+    def granule(part, gain, sfc):
+        return b(part, 12) + b(0, 9) + b(gain, 8) + b(sfc, 9) + "0" + b(0, 22) + "01"
+    # 42 count1 quads of four ones on the left, then the right scalefactors: 7 of 3 bits and 7 of 5 bits
+    data = b(0, 10) + granule(42 * 8, 170, 0) + granule(56, 0, 276) + "0" * 8 * 42 + b(7, 3) * 7 + b(20, 5) * 7
+    frame = b"\xff\xf3\x40\x50" + int(data, 2).to_bytes(len(data) // 8, "big")
+    same_as_ffmpeg(tmp_path, "is.mp3", (frame + bytes(104 - len(frame))) * 4)
+
+
+# ffmpeg drops the frame after junk unless the junk is all zeros, and a frame with big_values over 288
+def test_mp3_junk_between_frames(tmp_path):
+    m = bytearray(open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k"), "rb").read())
+    starts = mp3_frames(m)
+    big_values(m, starts[16])
+    out = m[:starts[3]] + b"\1\2" + m[starts[3]:starts[5]] + bytes(3) + m[starts[5]:starts[8] - 2]
+    out += m[starts[8]:starts[12]] + b"\7" * 416 + m[starts[12]:]
+    same_as_ffmpeg(tmp_path, "junk.mp3", bytes(out))
+    assert len(_pydub2.decode(bytes(out))[0]) < len(_pydub2.decode(bytes(m))[0])
+
+
+# ffmpeg keeps the channels of the first frame and mixes the rest, a new rate it resamples so that goes to ffmpeg
+def test_mp3_channels_change(tmp_path):
+    args = ["-c:a", "libmp3lame", "-write_xing", "0", "-id3v2_version", "0"]
+    st = open(make(tmp_path, "st.mp3", 2, *args), "rb").read()
+    mo = open(make(tmp_path, "mo.mp3", 1, *args), "rb").read()
+    same_as_ffmpeg(tmp_path, "stmo.mp3", st + mo)
+    same_as_ffmpeg(tmp_path, "most.mp3", mo + st)
+    low = open(make(tmp_path, "low.mp3", 2, "-ar", "22050", *args), "rb").read()
+    with pytest.raises(RuntimeError):
+        _pydub2.decode(st + low)
+
+
+# ffmpeg wants two frames in a row to start, a single frame after the Info frame is not an mp3 to it
+def test_mp3_one_frame(tmp_path):
+    m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k"), "rb").read()
+    path = save(tmp_path, "one.mp3", m[:mp3_frames(m)[2]])
+    with pytest.raises(Exception):
+        AudioSegment.from_file(path)
+    with pytest.raises(pydub2.exceptions.CouldntDecodeError):
+        pydub2.AudioSegment.from_file(path)
+
+
+# a seek right after a frame ffmpeg drops gives the same samples as a read from the start
+def test_mp3_seek_after_a_dropped_frame(tmp_path):
+    m = bytearray(open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "320k", samples=CLICKS), "rb").read())
+    for k in (20, 21):
+        big_values(m, mp3_frames(m)[k])
+    d = _pydub2.Decoder(bytes(m))
+    whole = d.read()
+    for at in range(18 * 1152, 26 * 1152, 300):
+        d.seek(at)
+        assert d.read(1500) == whole[at * 4:(at + 1500) * 4]
+
+
+# the private bits in the side info are no scfsi, set them in every frame
+@pytest.mark.parametrize("channels", [1, 2])
+def test_mp3_private_bits(tmp_path, channels):
+    m = bytearray(open(make(tmp_path, "a.mp3", channels, "-c:a", "libmp3lame", "-b:a", "128k"), "rb").read())
+    for at in mp3_frames(m)[1:]:
+        m[at + 5] |= 0x7c if channels == 1 else 0x70
+    same_as_ffmpeg(tmp_path, "priv.mp3", bytes(m))
 
 
 def test_mp3_starts_inside_the_bit_reservoir(tmp_path):
@@ -285,6 +402,25 @@ def test_mp2_goes_to_ffmpeg(tmp_path):
     with open(make(tmp_path, "a.mp2", 2, "-c:a", "mp2"), "rb") as f:
         with pytest.raises(RuntimeError):
             _pydub2.decode(f.read())
+
+
+# a cover picture of several MB in the comments must not make opening quadratic
+def test_vorbis_big_comment_opens_fast(tmp_path):
+    times, outs = [], []
+    for mb in (1, 10):
+        meta = tmp_path / "meta.txt"
+        meta.write_text(";FFMETADATA1\ncomment=" + "A" * (mb << 20) + "\n")
+        with open(make(tmp_path, "%d.ogg" % mb, 2, "-i", str(meta), "-map_metadata", "1", "-c:a", "libvorbis"), "rb") as f:
+            data = f.read()
+        best = 1e9
+        for _ in range(3):
+            t = time.perf_counter()
+            outs.append(_pydub2.decode(data))
+            best = min(best, time.perf_counter() - t)
+        times.append(best)
+    assert all(o == outs[0] for o in outs)
+    # linear is about 10 times the 1 MB file, quadratic about 100 times
+    assert times[1] < 30 * times[0]
 
 
 def test_chained_vorbis_goes_to_ffmpeg(tmp_path):
