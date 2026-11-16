@@ -37,9 +37,18 @@ def secret(tmp_path, monkeypatch):
     return tmp_path
 
 
+WIN_PEAK = "import ctypes\nfrom ctypes import wintypes as w\n" \
+    "class C(ctypes.Structure):\n _fields_ = [('cb', w.DWORD), ('f', w.DWORD)] + [(n, ctypes.c_size_t) for n in 'abcdefgh']\n" \
+    "c = C(cb=ctypes.sizeof(C))\nk = ctypes.WinDLL('kernel32')\nk.GetCurrentProcess.restype = w.HANDLE\n" \
+    "p = ctypes.WinDLL('psapi')\np.GetProcessMemoryInfo.argtypes = [w.HANDLE, ctypes.c_void_p, w.DWORD]\n" \
+    "p.GetProcessMemoryInfo(k.GetCurrentProcess(), ctypes.byref(c), c.cb)\nprint(c.h / 1e6)"
+# linux keeps the high water mark of the parent over exec, so ru_maxrss would be the pytest process
+UNIX_PEAK = "import sys\nif sys.platform == 'linux':\n print(int([l for l in open('/proc/self/status') if l.startswith('VmHWM')][0].split()[1]) / 1e3)\n" \
+    "else:\n import resource\n print(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6)"
+
+
 def peak_mb(code):
-    code = "import resource, sys\nimport _pydub2\n" + code + "\nr = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss\n" \
-        "print(r / (1 if sys.platform == 'darwin' else 1024) / 1e6)"
+    code = "import _pydub2\n" + code + "\n" + (WIN_PEAK if sys.platform == "win32" else UNIX_PEAK)
     env = dict(os.environ, PYTHONPATH=os.pathsep.join(sys.path))
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
     assert out.returncode == 0, out.stderr
@@ -230,7 +239,7 @@ def test_max_duration_on_the_ffmpeg_path(secret, monkeypatch):
 @pytest.mark.parametrize("name", ["long.wav", "long.flac", "long.mp3", "long.ogg"])
 def test_max_duration_on_the_native_path(tmp_path, monkeypatch, name):
     subprocess.run([ffmpeg, "-v", "error", "-f", "lavfi", "-i", "anoisesrc=d=1800:r=8000:a=0.1", "-ac", "1",
-                    str(tmp_path / name)], check=True)
+                    *{"long.ogg": ["-c:a", "libvorbis"]}.get(name, []), str(tmp_path / name)], check=True)
     import tracemalloc
     peaks = []
     for limit in (None, 10):

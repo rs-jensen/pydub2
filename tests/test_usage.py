@@ -33,11 +33,9 @@ def noise(width, channels=2, frames=3000):
     return array({2: "h", 4: "i"}[width], vals).tobytes()
 
 
-def no_ffprobe(monkeypatch, tmp_path):
-    bin = tmp_path / "bin"
-    bin.mkdir()
-    os.symlink(ffmpeg, bin / "ffmpeg")
-    monkeypatch.setenv("PATH", str(bin))
+def no_ffprobe(monkeypatch):
+    which = utils2.which
+    monkeypatch.setattr(utils2, "which", lambda p: None if p in ("ffprobe", "avprobe") else which(p))
 
 
 @need_ffmpeg
@@ -61,7 +59,7 @@ def test_width_follows_the_stream(tmp_path, monkeypatch, name, args, probe):
     make(path, *args)
     a = pydub.AudioSegment.from_file(str(path))
     if not probe:
-        no_ffprobe(monkeypatch, tmp_path)
+        no_ffprobe(monkeypatch)
     b = AudioSegment.from_file(str(path))
     assert (a.sample_width, a.raw_data) == (b.sample_width, b.raw_data)
 
@@ -113,7 +111,7 @@ def test_mediainfo_without_ffprobe(tmp_path, monkeypatch):
     keys = ["codec_name", "codec_type", "codec_tag_string", "format_name", "sample_rate", "channels",
             "sample_fmt", "bits_per_sample"]
     want = [(pydub.utils.mediainfo(p), pydub.utils.mediainfo_json(p)) for p in paths]
-    no_ffprobe(monkeypatch, tmp_path)
+    no_ffprobe(monkeypatch)
     for p, (flat, js) in zip(paths, want):
         got = utils2.mediainfo(p)
         assert {k: got.get(k) for k in keys} == {k: flat.get(k) for k in keys}, p
@@ -124,7 +122,7 @@ def test_mediainfo_without_ffprobe(tmp_path, monkeypatch):
 
 
 def test_mediainfo_chunks_and_tags_without_ffprobe(tmp_path, monkeypatch):
-    no_ffprobe(monkeypatch, tmp_path)
+    no_ffprobe(monkeypatch)
     wav = AudioSegment.silent(100, 8000).export(io.BytesIO(), format="wav").getvalue()
     list_chunk = b"LIST" + struct.pack("<I", 12) + b"INFOfmt abcd"
     got = utils2.mediainfo_json(io.BytesIO(wav[:12] + list_chunk + wav[12:]))["streams"][0]

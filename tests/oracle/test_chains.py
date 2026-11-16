@@ -1,4 +1,5 @@
 import array
+import ctypes
 import faulthandler
 import importlib
 import io
@@ -8,7 +9,6 @@ import json
 import os
 import random
 import re
-import signal
 import subprocess
 import sys
 import threading
@@ -31,8 +31,8 @@ class Timeout(BaseException):
     pass
 
 
-def on_alarm(sig, frame):
-    raise Timeout()
+def on_alarm(tid):
+    ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(tid), ctypes.py_object(Timeout))
 
 
 class Lib:
@@ -420,14 +420,14 @@ def run(L, spec, steps, seed, recs):
 def timed(L, spec, steps, seed, limit=TIMEOUT):
     recs = []
     STATE["lib"] = L.AS.__module__.split(".")[0]
-    signal.signal(signal.SIGALRM, on_alarm)
-    signal.setitimer(signal.ITIMER_REAL, limit)
+    timer = threading.Timer(limit, on_alarm, [threading.get_ident()])
+    timer.start()
     try:
         run(L, spec, steps, seed, recs)
     except Timeout:
         return recs, True
     finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
+        timer.cancel()
     return recs, False
 
 
