@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 import os
@@ -134,6 +135,7 @@ others = [
     [(b"ALBUMARTIST", b"1"), (b"ALBUMARTIST", b"2"), (b"x", b"y")],
     [(b"nokey", b""), (b"ARTIST", b"a"), (b"TrackNumber", b"7"), (b"description", b"d")],
     [(b"x", b"\xff\xfe"), (b"y", b"\xc3")],
+    [(b"title", b"t"), (b"Metadata_Block_Picture", b"AAAA"), (b"artist", b"a")],
 ]
 
 
@@ -234,3 +236,42 @@ def test_tags_are_utf8_whatever_the_filesystem_says(tmp_path, monkeypatch):
     ours().export(p, format="flac", tags={"title": "\u00c5l \u65e5\u672c"}).close()
     no_ffprobe(monkeypatch)
     assert utils2.mediainfo_json(p)["format"]["tags"]["title"] == "\u00c5l \u65e5\u672c"
+
+
+def cover(n):
+    img = b"\xff\xd8\xff\xe0" + os.urandom(n)
+    pic = struct.pack(">II", 3, 10) + b"image/jpeg" + struct.pack(">I", 0) + struct.pack(">IIIII", 1, 1, 24, 0, len(img)) + img
+    return base64.b64encode(pic)
+
+
+@pytest.mark.parametrize("format", ["ogg", "opus"])
+def test_a_cover_over_the_cap_leaves_the_other_tags(format):
+    tags = [(b"title", b"T"), (b"METADATA_BLOCK_PICTURE", cover(13 << 20)), (b"artist", b"A")]
+    data = _pydub2.encode(raw(), 22050, 1, 2, format, 0, tags)
+    assert len(data) > 17 << 20
+    f = io.BytesIO(data)
+    got = utils2._convert(utils2._ogg_tags(lambda i, n: (f.seek(i), f.read(n))[1], 7 if format == "ogg" else 8), {})
+    assert got == {"title": "T", "artist": "A"}
+
+
+@need_ffmpeg
+def test_cover_and_many_tags_like_ffprobe(tmp_path, monkeypatch):
+    many = [(b"k%d" % i, b"v") for i in range(5000)] + [(b"title", b"last")]
+    paths = {"a.flac": _pydub2.encode(raw(), 22050, 1, 2, "flac", 0, many),
+             "b.opus": _pydub2.encode(raw(), 22050, 1, 2, "opus", 0, [(b"title", b"T"), (b"METADATA_BLOCK_PICTURE", cover(5 << 20))])}
+    want = {}
+    for name, data in paths.items():
+        (tmp_path / name).write_bytes(data)
+        want[name] = probe(tmp_path / name)
+    assert len(dict(want["a.flac"][0])) > 4096
+    no_ffprobe(monkeypatch)
+    for name in paths:
+        assert where(utils2.mediainfo_json(str(tmp_path / name))) == want[name]
+
+
+@pytest.mark.parametrize("format", ["ogg", "opus"])
+def test_a_cut_comment_page_gives_what_was_read(format):
+    data = _pydub2.encode(raw(), 22050, 1, 2, format, 0, [(b"title", b"T" * 150000), (b"artist", b"A")])
+    for cut in range(200, 170000, 997):
+        f = io.BytesIO(data[:cut])
+        utils2._ogg_tags(lambda i, n: (f.seek(i), f.read(n))[1], 7 if format == "ogg" else 8)
