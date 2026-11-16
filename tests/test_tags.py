@@ -3,6 +3,7 @@ import io
 import json
 import os
 import random
+import re
 import shutil
 import struct
 import subprocess
@@ -339,6 +340,12 @@ def mp3_audio(tmp_path_factory):
     return p.read_bytes()
 
 
+def ffprobe_version():
+    out = subprocess.run(["ffprobe", "-version"], capture_output=True, text=True).stdout
+    m = re.search(r"version n?(\d+)\.(\d+)", out)
+    return (int(m.group(1)), int(m.group(2))) if m else (99, 0)
+
+
 def same_as_ffprobe(path, monkeypatch):
     want = probe(path)
     no_ffprobe(monkeypatch)
@@ -374,6 +381,8 @@ def test_id3_of_ffmpeg(tmp_path, monkeypatch, name, version, v1):
 @pytest.mark.parametrize("args", [[], ["--tt", "T", "--ta", "A", "--tl", "Al", "--ty", "2020", "--tn", "4", "--tg", "13", "--add-id3v2"],
                                   ["--id3v1-only", "--tt", "T", "--ta", "A"], ["--id3v2-only", "--tt", "T", "--tc", "C"]])
 def test_id3_of_lame(tmp_path, monkeypatch, args):
+    if args[:1] == ["--id3v2-only"] and ffprobe_version() < (8, 1):
+        pytest.skip("older ffprobe drops this comment")
     wav, p = str(tmp_path / "a.wav"), str(tmp_path / "a.mp3")
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=duration=1", wav], check=True)
     subprocess.run(["lame", "--quiet", *args, wav, p], check=True)
@@ -390,6 +399,7 @@ def test_id3_values():
         == {"title": "T", "genre": "Pop", "date": "1999-03-15"}
     assert id3_of(id3_tag([id3_frame(b"TT2", b"\1" + utf16("å"), 2)], 2)) == {"title": "å"}
     assert id3_of(id3_tag([id3_frame(b"COMM", b"\0eng\0hi")])) == {"comment": "hi"}
+    assert id3_of(id3_tag([id3_frame(b"COMM", b"\1eng\0\0\xff\xfeC\0")])) == {"comment": "C"}
     assert id3_of(id3_tag([t(b"TIT2", b"a"), t(b"TIT2", b"b")])) == {"title": "a"}
     assert id3_of(b"x" * 200 + id3v1(track=3)) == {
         "title": "Title", "artist": "Artist", "album": "Album", "date": "1999", "comment": "Comment", "track": "3", "genre": "Pop"}

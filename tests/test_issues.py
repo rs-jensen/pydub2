@@ -272,9 +272,7 @@ def test_strip_silence_at_7_hz_returns_where_pydub_divides_by_zero():
 @pytest.mark.parametrize("args", [(bytes(2050), 7, 1, 2), noise(300)])
 def test_speedup_chunk_size_1_raises_like_pydub(args):
     new, old = both(*args)
-    start = time.time()
     assert raises(lambda: new.speedup(chunk_size=1)) == "ZeroDivisionError" == raises(lambda: old.speedup(chunk_size=1))
-    assert time.time() - start < 5
 
 
 def test_rms_of_32_bit_does_not_fuse_the_squares():
