@@ -222,9 +222,12 @@ void ratecv(std::string_view data, int width, int channels, int inrate, int outr
 
 // the same walk as the python loops in pydub, one float operation after another
 static int toint(double v, int width) {
-    if (std::isnan(v)) throw std::invalid_argument("not a number");
-    if (!(v > -4e18 && v < 4e18) || (long long)v < minvals[width] || (long long)v > maxvals[width])
+    if (std::isnan(v)) {
+        throw std::invalid_argument("not a number");
+    }
+    if (!(v > -4e18 && v < 4e18) || (long long)v < minvals[width] || (long long)v > maxvals[width]) {
         throw std::overflow_error("sample out of range");
+    }
     return (int)(long long)v;
 }
 
@@ -234,7 +237,9 @@ void lowpass(std::string_view data, int width, int channels, double alpha, const
     memcpy(out, data.data(), data.size());
     size_t n = data.size() / width / channels;
     std::vector<double> last(channels);
-    for (int c = 0; c < channels && n; c++) last[c] = get(&data[c * width], width);
+    for (int c = 0; c < channels && n; c++) {
+        last[c] = get(&data[c * width], width);
+    }
     for (size_t i = 1; i < n; i++) {
         for (int c = 0; c < channels; c++) {
             size_t at = (i * channels + c) * width;
@@ -250,14 +255,20 @@ void highpass(std::string_view data, int width, int channels, double alpha, cons
     memcpy(out, data.data(), data.size());
     size_t n = data.size() / width / channels;
     std::vector<double> last(channels);
-    for (int c = 0; c < channels && n; c++) last[c] = get(&data[c * width], width);
+    for (int c = 0; c < channels && n; c++) {
+        last[c] = get(&data[c * width], width);
+    }
     for (size_t i = 1; i < n; i++) {
         for (int c = 0; c < channels; c++) {
             size_t at = (i * channels + c) * width;
             last[c] = alpha * ((last[c] + (double)get(&data[at], width)) - (double)get(&data[at - channels * width], width));
             double v = last[c];
-            if ((double)minvals[width] > v) v = minvals[width];
-            if ((double)maxvals[width] < v) v = maxvals[width];
+            if ((double)minvals[width] > v) {
+                v = minvals[width];
+            }
+            if ((double)maxvals[width] < v) {
+                v = maxvals[width];
+            }
             put(out + at, width, toint(v, width));
         }
     }
@@ -286,26 +297,40 @@ void compress(std::string_view data, int width, int channels, double thresh, dou
         size_t lo = look <= 0 ? i : i > (size_t)look ? i - look : 0;
         unsigned int now = 0;
         if (i > lo && exact) {
-            while (hi < i) sum += frame(hi++);
-            while (from < lo) sum -= frame(from++);
+            while (hi < i) {
+                sum += frame(hi++);
+            }
+            while (from < lo) {
+                sum -= frame(from++);
+            }
             now = (unsigned int)sqrt((double)sum / (double)((i - lo) * channels));
         } else if (i > lo) {
             now = (unsigned int)rms(data.substr(lo * fw, (i - lo) * fw), width);
         }
-        if (atten == 0.0 && now <= thresh) continue;
+        if (atten == 0.0 && now <= thresh) {
+            continue;
+        }
         double db = 0.0;
         if (now != 0) {
-            if (thresh == 0) throw std::domain_error("float division by zero");
+            if (thresh == 0) {
+                throw std::domain_error("float division by zero");
+            }
             db = 20 * (std::log(now / thresh) / std::log(10.0));
-            if (0 > db) db = 0;
+            if (0 > db) {
+                db = 0;
+            }
         }
         double most = (1 - (1.0 / ratio)) * db;
         if (now > thresh && atten <= most) {
             atten += most / attack_frames;
-            if (most < atten) atten = most;
+            if (most < atten) {
+                atten = most;
+            }
         } else {
             atten -= most / release_frames;
-            if (0 > atten) atten = 0;
+            if (0 > atten) {
+                atten = 0;
+            }
         }
         if (atten != 0.0) {
             double factor = std::pow(10.0, -atten / 20);
