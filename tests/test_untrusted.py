@@ -25,7 +25,7 @@ SCRIPT = b"ffconcat version 1.0\nfile secret.wav\n"
 
 def tone(path, secs=1.0, *args):
     subprocess.run([ffmpeg, "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=%s" % secs,
-                    "-ar", "16000", *args, str(path)], check=True)
+                    *args, "-ar", "16000", str(path)], check=True)
 
 
 @pytest.fixture
