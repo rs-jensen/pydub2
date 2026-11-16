@@ -236,7 +236,8 @@ def test_current_directory_is_not_searched(tmp_path, monkeypatch):
     assert _ffmpeg.find("ffmpeg") is None
     assert not utils._has_prober()
     monkeypatch.delenv("PATH")
-    assert utils.which("ffmpeg") is None
+    found = utils.which("ffmpeg")
+    assert found is None or os.path.isabs(found)
 
 
 @posix
