@@ -209,6 +209,37 @@ def test_max_duration_on_the_ffmpeg_path(secret, monkeypatch):
     assert len(AudioSegment.from_file(str(secret / "long.m4a"))) > 2900
 
 
+@need_ffmpeg
+@pytest.mark.parametrize("name", ["long.wav", "long.flac", "long.mp3", "long.ogg"])
+def test_max_duration_on_the_native_path(tmp_path, monkeypatch, name):
+    subprocess.run([ffmpeg, "-v", "error", "-f", "lavfi", "-i", "anoisesrc=d=1800:r=8000:a=0.1", "-ac", "1",
+                    str(tmp_path / name)], check=True)
+    import tracemalloc
+    peaks = []
+    for limit in (None, 10):
+        monkeypatch.setattr(pydub2, "max_duration", limit)
+        tracemalloc.start()
+        try:
+            AudioSegment.from_file(str(tmp_path / name))
+        except CouldntDecodeError:
+            pass
+        peaks.append(tracemalloc.get_traced_memory()[1])
+        tracemalloc.stop()
+    assert peaks[1] < 2 << 20 < 20 << 20 < peaks[0]
+    monkeypatch.setattr(pydub2, "max_duration", 10)
+    with pytest.raises(CouldntDecodeError):
+        AudioSegment.from_file(str(tmp_path / name))
+    with pytest.raises(CouldntDecodeError):
+        AudioSegment.from_file(str(tmp_path / name), start_second=1)
+    assert len(AudioSegment.from_file(str(tmp_path / name), start_second=1, duration=9)) == 9000
+    chunks = AudioSegment.stream(str(tmp_path / name), chunk_ms=3000)
+    assert [len(next(chunks)) for _ in range(3)] == [3000] * 3
+    with pytest.raises(CouldntDecodeError):
+        next(chunks)
+    monkeypatch.setattr(pydub2, "max_duration", 1800)
+    assert len(AudioSegment.from_file(str(tmp_path / name))) == 1800000
+
+
 @posix
 def test_ffmpeg_timeout(tmp_path, monkeypatch):
     slow = tmp_path / "ffmpeg"

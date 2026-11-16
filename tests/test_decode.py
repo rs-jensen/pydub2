@@ -184,6 +184,25 @@ def test_mp3_second_tag_and_junk(tmp_path):
     same_as_ffmpeg(tmp_path, "pad.mp3", m[:i] + b"\0" * 64 + m[i:])
 
 
+def test_mp3_end(tmp_path):
+    m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k"), "rb").read()
+    starts = mp3_frames(m)
+    ape = b"APETAGEX" + struct.pack("<IIII", 2000, 32 + 10, 1, 1 << 31) + bytes(8)
+    tags = [b"TAG" + bytes(125), ape[:32] + b"\0" * 10 + ape, b"\1" * 3000]
+    for k in (len(starts) - 1, len(starts) - 5):
+        for tail in tags:
+            same_as_ffmpeg(tmp_path, "tag.mp3", m[:starts[k]] + tail)
+        for cut in (4, 40, 200):
+            same_as_ffmpeg(tmp_path, "cut.mp3", m[:starts[k] + cut], 328)
+
+
+def test_mp3_starts_inside_the_bit_reservoir(tmp_path):
+    m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k", "-write_xing", "0"), "rb").read()
+    starts = mp3_frames(m)
+    for k in (3, 5, 11, 12):
+        same_as_ffmpeg(tmp_path, "cut.mp3", m[starts[k]:])
+
+
 def test_mp2_goes_to_ffmpeg(tmp_path):
     with open(make(tmp_path, "a.mp2", 2, "-c:a", "mp2"), "rb") as f:
         with pytest.raises(RuntimeError):
