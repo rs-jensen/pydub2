@@ -207,11 +207,18 @@ def test_max_duration_on_the_ffmpeg_path(secret, monkeypatch):
 def test_max_duration_on_the_native_path(tmp_path, monkeypatch, name):
     subprocess.run([ffmpeg, "-v", "error", "-f", "lavfi", "-i", "anoisesrc=d=1800:r=8000:a=0.1", "-ac", "1",
                     str(tmp_path / name)], check=True)
-    code = "import pydub2\npydub2.max_duration = %s\ntry:\n    pydub2.AudioSegment.from_file(sys.argv[1])\n" \
-        "except pydub2.exceptions.CouldntDecodeError:\n    pass"
-    full = peak_mb(code.replace("sys.argv[1]", repr(str(tmp_path / name))) % None)
-    capped = peak_mb(code.replace("sys.argv[1]", repr(str(tmp_path / name))) % 10)
-    assert capped < full / 2
+    import tracemalloc
+    peaks = []
+    for limit in (None, 10):
+        monkeypatch.setattr(pydub2, "max_duration", limit)
+        tracemalloc.start()
+        try:
+            AudioSegment.from_file(str(tmp_path / name))
+        except CouldntDecodeError:
+            pass
+        peaks.append(tracemalloc.get_traced_memory()[1])
+        tracemalloc.stop()
+    assert peaks[1] < 2 << 20 < 20 << 20 < peaks[0]
     monkeypatch.setattr(pydub2, "max_duration", 10)
     with pytest.raises(CouldntDecodeError):
         AudioSegment.from_file(str(tmp_path / name))
