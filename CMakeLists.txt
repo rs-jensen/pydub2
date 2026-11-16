@@ -62,10 +62,6 @@ FetchContent_Declare(samplerate EXCLUDE_FROM_ALL
 if(MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64")
     set(OPUS_DISABLE_INTRINSICS ON CACHE BOOL "")
 endif()
-# without runtime detection opus leaves neon off on arm64, and every arm64 cpu has it
-if(NOT MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-    set(OPUS_PRESUME_NEON ON CACHE BOOL "")
-endif()
 FetchContent_MakeAvailable(ogg vorbis flac opus opusfile opusenc samplerate)
 
 # opusfile and libopusenc only ship autotools, so build their few files here

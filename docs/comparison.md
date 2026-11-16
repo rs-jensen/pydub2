@@ -42,19 +42,19 @@ Seconds of wall time on a 10 minute speech file, lower is better. The music file
 |---|---|---|---|---|---|
 | import, milliseconds | 4.9 | 7.5 | 36 | 81 | 49 |
 | load wav | 0.061 | 0.051 | 0.054 | 0.22 | 0.081 |
-| load flac | 0.32 | 0.33 | 0.52 | 0.65 | 0.39 |
+| load flac | 0.32 | 0.32 | 0.52 | 0.65 | 0.39 |
 | load mp3 | 0.76 | 0.40 | 0.53 | 0.71 | 0.31 |
-| load ogg | 0.86 | 0.55 | 0.79 | 0.84 | 0.52 |
-| load opus | 1.4 | 0.97 | 3.3 | 1.2 | not supported |
+| load ogg | 0.86 | 0.54 | 0.79 | 0.84 | 0.52 |
+| load opus | 1.4 | 0.96 | 3.3 | 1.2 | not supported |
 | 10 s out of an mp3 | 0.40 | 0.045 | 0.055 | 0.13 | 0.17 |
 | 10 s out of an ogg | 0.39 | 0.50 | 0.049 | 0.12 | 0.063 |
 | export flac | 1.1 | 0.67 | 0.75 | 0.87 | not supported |
 | export ogg | 5.8 | 4.7 | crashed | not supported | not supported |
-| export opus | 4.9 | 9.4 | not supported | 20 | not supported |
+| export opus | 4.9 | 6.2 | not supported | 20 | not supported |
 | export mp3 | 6.5 | 5.8 with `pydub2-mp3`, 6.5 without | 5.2 | 5.6 | not supported |
-| peak memory, load flac, MiB | 393 | 243 | 131 | 250 | 301 |
-| peak memory, load ogg, MiB | 677 | 443 | 131 | 262 | 301 |
-| peak memory, load opus, MiB | 731 | 475 | 140 | 283 | not supported |
+| peak memory, load flac, MiB | 393 | 133 | 131 | 250 | 301 |
+| peak memory, load ogg, MiB | 677 | 237 | 131 | 262 | 301 |
+| peak memory, load opus, MiB | 731 | 253 | 140 | 283 | not supported |
 
 pydub exports mp3 through ffmpeg, and so does pydub2 when `pydub2-mp3` is not installed. soundfile cannot write opus at 44.1 kHz and the PyAV wheel has no vorbis encoder. soundfile crashed the process with a segmentation fault every time I wrote 10 minutes of stereo to ogg. It wrote 60 seconds fine.
 
@@ -63,8 +63,8 @@ The editing functions only exist in the pydub family. Seconds on the 10 minute f
 | | pydub | pydub2 |
 |---|---|---|
 | `set_frame_rate(16000)` | 0.39 (PyAV 0.32, miniaudio 0.20) | 0.21 |
-| `overlay` | 0.056 | 0.13 |
-| `normalize` | 0.099 | 0.16 |
+| `overlay` | 0.056 | 0.054 |
+| `normalize` | 0.099 | 0.090 |
 | `compress_dynamic_range` | 69 | 0.56 |
 | `low_pass_filter` | 7.3 | 0.17 |
 | `detect_silence` | 70 | 0.14 |
@@ -77,14 +77,14 @@ The editing functions only exist in the pydub family. Seconds on the 10 minute f
 
 Where pydub2 is slower or heavier than something else in these runs:
 
-- `overlay` and `normalize` take about 2.4 and 1.6 times as long as pydub, which uses the C `audioop`. Both are still under 0.2 seconds for 10 minutes.
+- `overlay` and `normalize` take as long as pydub, which uses the C `audioop`, or a little less. Both are under 0.1 seconds for 10 minutes.
 - Importing it takes 7.5 ms against 4.9 for pydub. soundfile, PyAV and miniaudio take longer than pydub2.
 - Taking 10 seconds out of an ogg file takes 0.50 seconds for a 10 minute file and 0.26 for a 1 minute file, because pydub2 decodes from the start. soundfile needs 0.05, miniaudio 0.06 and PyAV 0.12. pydub needs 0.39, so this is the one row where pydub2 reads slower than pydub. For mp3 and flac the 10 second read takes 0.04 to 0.05 seconds.
-- Opus export is the slowest part of pydub2: 9.4 seconds for 10 minutes, about twice what ffmpeg needs through pydub (4.9). It is still faster than PyAV (20).
+- Opus export takes 6.2 seconds for 10 minutes, a little more than ffmpeg through pydub (4.9). It is faster than PyAV (20). This is measured on Apple silicon, where the resampler inside the opus encoder has a neon version.
 - mp3 export with `pydub2-mp3` is about 10 percent behind soundfile (5.8 against 5.2) and 3 percent behind PyAV.
 - Reading mp3 and ogg is a little slower than miniaudio (0.40 against 0.31 for mp3, 0.55 against 0.52 for ogg).
-- Memory: decoding 10 minutes of ogg or opus peaks at 443 to 475 MiB for pydub2 against 131 to 140 for soundfile and 262 to 283 for PyAV. Flac is 243 against 131. Exporting 10 minutes of ogg or opus peaks at about 360 MiB against 164 for pydub.
-- `to_numpy()` was slower than `np.array(seg.get_array_of_samples())` in these runs (0.065 against 0.039 seconds for a 60 second mp3). I did not look into why.
+- Memory: decoding 10 minutes of ogg or opus peaks at 237 to 253 MiB for pydub2 against 131 to 140 for soundfile and 262 to 283 for PyAV. Flac is 133 against 131. Exporting 10 minutes of ogg or opus peaks at about 360 MiB against 164 for pydub.
+- `to_numpy()` is as fast as `np.array(seg.get_array_of_samples())` or faster (0.037 against 0.037 seconds for a 60 second mp3, 0.003 against 0.004 for wav). An earlier run looked slower because it timed the import of numpy.
 
 Size on macOS arm64 with Python 3.13, without numpy:
 

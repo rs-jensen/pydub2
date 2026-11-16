@@ -41,7 +41,7 @@ struct Decoder {
     size_t width = 0;
     bool chained = false; // opus with more than one link, libopus starts each link fresh where ffmpeg decodes across
     uint64_t frames = 0; // what a read from the start gives, from the header for flac and opus so it can lie
-    bool exact = false; // frames is counted from the file, a reader can size a buffer from it
+    bool exact = false; // frames is counted or fits the file size, a reader can size a buffer from it
     virtual ~Decoder() {}
     // up to n frames into out, returns bytes. less only at the end
     virtual size_t read(char *out, size_t n) = 0;

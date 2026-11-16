@@ -311,3 +311,18 @@ def test_flac_passes_strict_readers(tmp_path, width, channels, tags):
             ran += 1
     if not ran:
         pytest.skip("no flac or ffprobe")
+
+
+def test_opus_resampled_inside_like_resampled_before():
+    # the resampler inside libopusenc has a neon and a plain version, both have to land where the plain one did
+    data = music(44100, 2)
+    inside = _pydub2.encode(data, 44100, 2, 2, "opus")
+    before = _pydub2.encode(_pydub2.resample(data, 44100, 2, 2, 48000), 48000, 2, 2, "opus")
+    assert abs(len(inside) / len(before) - 1) < 0.06
+
+    def pcm(out):
+        return array.array("h", (np.frombuffer(_pydub2.decode(out)[0], "<i4") >> 16).astype("<i2").tobytes())
+
+    a, b = pcm(inside), pcm(before)
+    assert abs(len(a) - len(b)) < 48000 * 2 // 20
+    assert best_corr(b[::2], a[::2]) > 0.95

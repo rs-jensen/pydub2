@@ -95,7 +95,7 @@ static nb::bytes take(Stream &s, int64_t n) {
     Decoder &d = *s.d;
     size_t fw = d.channels * d.width;
     uint64_t left = n >= 0 ? (uint64_t)n : UINT64_MAX;
-    size_t room = (n < 0 ? (d.exact ? d.frames : 0) : std::min<uint64_t>(left, ((size_t)64 << 20) / fw)) * fw, got = 0;
+    size_t room = (n < 0 ? (d.exact ? d.frames : 0) : std::min<uint64_t>(left, d.exact ? d.frames : ((size_t)64 << 20) / fw)) * fw, got = 0;
     nb::object out = blank(room);
     std::vector<std::string> rest; // pieces, one string that grows would copy itself and hold twice the memory
     size_t more = 0;

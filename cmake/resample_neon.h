@@ -1,3 +1,5 @@
+// resample_sse.h of libopusenc 0.3 for arm64, the same two functions with neon, see THIRD_PARTY.md
+#ifdef __aarch64__
 #include <arm_neon.h>
 
 #define OVERRIDE_INNER_PRODUCT_SINGLE
@@ -27,3 +29,4 @@ static inline float interpolate_product_single(const float *a, const float *b, u
    }
    return vaddvq_f32(vmulq_f32(vld1q_f32(frac), vaddq_f32(vaddq_f32(s0, s1), vaddq_f32(s2, s3))));
 }
+#endif
