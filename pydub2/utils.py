@@ -6,6 +6,7 @@ import re
 import struct
 import sys
 import subprocess
+import zlib
 from subprocess import Popen, PIPE
 from math import log, ceil
 from io import BytesIO
@@ -14,6 +15,7 @@ from warnings import warn
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import lru_cache, wraps
+from itertools import islice
 from bisect import bisect_right
 
 import _pydub2
@@ -355,9 +357,10 @@ def _run_prober(filepath, read_ahead_limit):
 LIMIT = 16 << 20
 MAX_TAGS = 1 << 16
 MAX_STEPS = 1 << 14
+MAX_FRAMES = 4096
 
 
-def dict_set(items, idx, k, v, join=False):
+def dict_set(items, idx, k, v, join=False, keep=False):
     # av_dict_set: keys match without case, the old entry is swapped out for the last one and the new goes
     # at the end, an empty value deletes. idx finds an entry by its lowercase key
     i = idx.pop(k.lower(), None)
@@ -373,7 +376,7 @@ def dict_set(items, idx, k, v, join=False):
             old += b";"
             old += v
             v = old
-    if v:
+    if v or keep:
         idx[k.lower()] = len(items)
         items.append((k, v))
 
@@ -492,6 +495,262 @@ def _wav_tags(at, spans):
     return out
 
 
+GENRES = (
+    "Blues,Classic Rock,Country,Dance,Disco,Funk,Grunge,Hip-Hop,Jazz,Metal,New Age,Oldies,Other,Pop,R&B,"
+    "Rap,Reggae,Rock,Techno,Industrial,Alternative,Ska,Death Metal,Pranks,Soundtrack,Euro-Techno,Ambient,"
+    "Trip-Hop,Vocal,Jazz+Funk,Fusion,Trance,Classical,Instrumental,Acid,House,Game,Sound Clip,Gospel,"
+    "Noise,AlternRock,Bass,Soul,Punk,Space,Meditative,Instrumental Pop,Instrumental Rock,Ethnic,Gothic,"
+    "Darkwave,Techno-Industrial,Electronic,Pop-Folk,Eurodance,Dream,Southern Rock,Comedy,Cult,Gangsta,"
+    "Top 40,Christian Rap,Pop/Funk,Jungle,Native American,Cabaret,New Wave,Psychedelic,Rave,Showtunes,"
+    "Trailer,Lo-Fi,Tribal,Acid Punk,Acid Jazz,Polka,Retro,Musical,Rock & Roll,Hard Rock,Folk,Folk-Rock,"
+    "National Folk,Swing,Fast Fusion,Bebop,Latin,Revival,Celtic,Bluegrass,Avantgarde,Gothic Rock,"
+    "Progressive Rock,Psychedelic Rock,Symphonic Rock,Slow Rock,Big Band,Chorus,Easy Listening,Acoustic,"
+    "Humour,Speech,Chanson,Opera,Chamber Music,Sonata,Symphony,Booty Bass,Primus,Porn Groove,Satire,"
+    "Slow Jam,Club,Tango,Samba,Folklore,Ballad,Power Ballad,Rhythmic Soul,Freestyle,Duet,Punk Rock,"
+    "Drum Solo,A Cappella,Euro-House,Dance Hall,Goa,Drum & Bass,Club-House,Hardcore Techno,Terror,Indie,"
+    "BritPop,Negerpunk,Polsk Punk,Beat,Christian Gangsta Rap,Heavy Metal,Black Metal,Crossover,"
+    "Contemporary Christian,Christian Rock,Merengue,Salsa,Thrash Metal,Anime,Jpop,Synthpop,Abstract,"
+    "Art Rock,Baroque,Bhangra,Big Beat,Breakbeat,Chillout,Downtempo,Dub,EBM,Eclectic,Electro,"
+    "Electroclash,Emo,Experimental,Garage,Global,IDM,Illbient,Industro-Goth,Jam Band,Krautrock,Leftfield,"
+    "Lounge,Math Rock,New Romantic,Nu-Breakz,Post-Punk,Post-Rock,Psytrance,Shoegaze,Space Rock,Trop Rock,"
+    "World Music,Neoclassical,Audiobook,Audio Theatre,Neue Deutsche Welle,Podcast,Indie Rock,G-Funk,"
+    "Dubstep,Garage Rock,Psybient"
+).split(",")
+
+_id3_names = [dict(x.split(b"=") for x in t.split()) for t in (
+    b"talb=album tcom=composer tcon=genre tcop=copyright tenc=encoded_by tit2=title tlan=language tpe1=artist "
+    b"tpe2=album_artist tpe3=performer tpos=disc tpub=publisher trck=track tsse=encoder uslt=lyrics",
+    b"tal=album tco=genre tcp=compilation tt2=title ten=encoded_by tp1=artist tp2=album_artist tp3=performer "
+    b"trk=track",
+    b"tcmp=compilation tdrc=date tdrl=date tden=creation_time tsoa=album-sort tsop=artist-sort tsot=title-sort "
+    b"tit1=grouping")]
+
+
+def _syncsafe(b):
+    return sum((x & 127) << 7 * (3 - i) for i, x in enumerate(b))
+
+
+def _put(items, idx, k, v):
+    # like av_dict_set with DONT_OVERWRITE, the first one stays
+    if k.lower() not in idx:
+        idx[k.lower()] = len(items)
+        items.append((k, v))
+
+
+def _id3_str(d, i, enc):
+    # like decode_str in ffmpeg: utf-8 bytes and the index after the end, None when ffmpeg gives up
+    if enc in (0, 3):
+        j = d.find(b"\0", i)
+        e = len(d) if j < 0 else j
+        s = d[i:e]
+        return (s.decode("latin-1").encode() if enc == 0 else s), min(e + 1, len(d))
+    if enc not in (1, 2):
+        return b"", i
+    codec = "utf-16-be"
+    if enc == 1:
+        if d[i:i + 2] not in (b"\xff\xfe", b"\xfe\xff"):
+            return None, i + 2
+        codec = "utf-16-le" if d[i] == 255 else codec
+        i += 2
+    j = d.find(b"\0\0", i)
+    while j >= 0 and (j - i) % 2:
+        j = d.find(b"\0\0", j + 1)
+    e = len(d) if j < 0 else j
+    s = d[i:e - (e - i) % 2]
+    try:
+        s.decode(codec)
+    except UnicodeDecodeError as x:
+        s = s[:x.start]
+    return s.decode(codec).encode(), min(e + 2, len(d))
+
+
+def _id3_frame(tag, d, items, idx, priv):
+    if tag[:1] == b"T":
+        s, i = _id3_str(d, 1, d[0])
+        if s is None:
+            return
+        key = tag.split(b"\0")[0]
+        g = re.match(rb"\(?\s*\+?0*(\d{1,6})", s)
+        if key in (b"TCON", b"TCO") and g and int(g[1]) < 192:
+            s = GENRES[int(g[1])].encode()
+        elif key in (b"TXXX", b"TXX"):
+            key = s
+            s, i = _id3_str(d, i, d[0])
+            if s is None:
+                return
+        elif not s:
+            return
+        _put(items, idx, key, s)
+    elif tag in (b"COM", b"COMM", b"USLT") and len(d) > 3:
+        k, i = _id3_str(d, 4, d[0])
+        v, i = _id3_str(d, i, d[0]) if k is not None else (None, i)
+        if v is None:
+            return
+        if tag == b"USLT":
+            dict_set(items, idx, b"lyrics-" + (k + b"-" if k else b"") + d[1:4].split(b"\0")[0], v, keep=True)
+        else:
+            _put(items, idx, k or b"comment", v)
+    elif tag == b"PRIV":
+        k, i = _id3_str(d, 0, 0)
+        # unicode_escape writes \n, \t and \\ where ffmpeg writes \x0a, \x09 and \x5c
+        v = d[i:].decode("latin-1").encode("unicode_escape")
+        for a, b in ((b"\\\\", b"\\x5c"), (b"\\n", b"\\x0a"), (b"\\r", b"\\x0d"), (b"\\t", b"\\x09")):
+            v = v.replace(a, b)
+        priv.append((b"id3v2_priv." + k, v))
+
+
+def _is_tag(b):
+    return re.fullmatch(rb"[A-Z0-9]{4}|\0{4}", b) is not None
+
+
+def _inflate(d, dlen):
+    # the data and what it cost, a stream that fails or stops short still costs what it inflated (all of dlen on an error)
+    if not d or dlen <= 0 or dlen // 32768 > len(d):
+        return b"", 0
+    z = zlib.decompressobj()
+    try:
+        out = z.decompress(d, dlen)
+    except zlib.error:
+        return b"", dlen
+    return (out if z.eof else b""), len(out)
+
+
+def _id3v2_frames(f, end):
+    # (frame id, data) of the frames of all id3v2 tags at the start, one tag after the other like ffmpeg does
+    # a frame it cant use gets empty data, so it still counts for the cap
+    pos, room = 0, LIMIT
+    for _ in range(MAX_STEPS):
+        end[0] = pos
+        f.seek(pos)
+        h = f.read(10)
+        if len(h) < 10 or h[:3] != b"ID3" or 255 in h[3:5] or any(x & 128 for x in h[6:10]):
+            return
+        ver, flags = h[3], h[5]
+        size = _syncsafe(h[6:10])
+        pos += 10 + size
+        b = f.read(min(size, room))
+        room -= len(b)
+        w, i = (6, 0) if ver == 2 else (10, 0)
+        if ver not in (2, 3, 4) or ver == 2 and flags & 64:
+            continue
+        if ver > 2 and flags & 64:
+            i = _syncsafe(b[:4]) + (4 if ver == 3 else 0)
+            if i > len(b) or ver == 4 and i < 4:
+                continue
+        if ver == 4 and flags & 16:
+            pos += 10
+        while len(b) - i >= w:
+            if ver == 2:
+                tag, n, fl = b[i:i + 3], int.from_bytes(b[i + 3:i + 6], "big"), 0
+            else:
+                tag, n, fl = b[i:i + 4], int.from_bytes(b[i + 4:i + 8], "big"), int.from_bytes(b[i + 8:i + 10], "big")
+                if ver == 4 and n > 127:
+                    s = _syncsafe(b[i + 4:i + 8])
+                    if n >= len(b) - i or _is_tag(b[i + 10 + s:i + 14 + s]):
+                        n = s
+                    elif not _is_tag(b[i + 10 + n:i + 14 + n]):
+                        break
+            if n > 1 << 28 or i + w + n > len(b):
+                break
+            d = b[i + w:i + w + n]
+            i += w + n
+            dlen = n
+            if n and fl & 1:
+                if n < 4:
+                    break
+                dlen, d = int.from_bytes(d[:4], "big"), d[4:]
+            if fl & 4:
+                d = b""
+            elif n and not tag[0]:
+                break
+            else:
+                if fl & 2 or flags & 128:
+                    d = d.replace(b"\xff\x00", b"\xff")
+                if fl & 8:
+                    d, cost = _inflate(d, min(dlen, room))
+                    room -= cost
+            yield tag, d
+
+
+def _id3v1(f, size):
+    if size <= 128:
+        return []
+    f.seek(size - 128)
+    b = f.read(128)
+    if b[:3] != b"TAG":
+        return []
+    out = []
+    for k, i, n in ((b"title", 3, 30), (b"artist", 33, 30), (b"album", 63, 30), (b"date", 93, 4), (b"comment", 97, 30)):
+        s = b[i:i + n].split(b"\0")[0].rstrip(b" ")
+        if s:
+            out.append((k, s))
+    if b[125] == 0 and b[126]:
+        out.append((b"track", b"%d" % b[126]))
+    if b[127] < 192:
+        out.append((b"genre", GENRES[b[127]].encode()))
+    return out
+
+
+def _date_part(items, idx, *keys):
+    for k in keys:
+        i = idx.get(k.lower())
+        if i is not None and items[i][0] == k and len(items[i][1]) == 4 and items[i][1].isdigit():
+            v = items[i][1]
+            for k in keys:
+                dict_set(items, idx, k, b"")
+            return v
+
+
+def _xing_encoder(f, start):
+    # ffmpeg only trusts the encoder name in the Xing or Info frame when the crc at its end is right
+    f.seek(start)
+    b = f.read(200)
+    if len(b) < 4 or b[0] != 255 or b[1] & 0xe0 != 0xe0:
+        return None
+    version, layer, bitrate, rate = b[1] >> 3 & 3, b[1] >> 1 & 3, b[2] >> 4, b[2] >> 2 & 3
+    if version == 1 or layer != 1 or bitrate == 15 or rate == 3:
+        return None
+    off = 4 + (32, 17, 17, 9)[2 * (version != 3) + (b[3] >> 6 == 3)]
+    if b[off:off + 4] not in (b"Xing", b"Info"):
+        return None
+    flags = int.from_bytes(b[off + 4:off + 8], "big")
+    p = off + 8 + 4 * (flags & 1) + 4 * (flags >> 1 & 1) + 100 * (flags >> 2 & 1) + 4 * (flags >> 3 & 1)
+    crc = 0
+    for x in b[:p + 34]:
+        crc ^= x
+        for _ in range(8):
+            crc = (crc >> 1) ^ (0xA001 if crc & 1 else 0)
+    if len(b) >= p + 36 and crc == int.from_bytes(b[p + 34:p + 36], "big"):
+        return b[p:p + 9].split(b"\0")[0].decode(errors="replace")
+
+
+def _mp3_tags(f, size):
+    items, idx, priv, end = [], {}, [], [0]
+    for tag, d in islice(_id3v2_frames(f, end), MAX_FRAMES):
+        if d:
+            _id3_frame(tag, d, items, idx, priv)
+    for names in _id3_names:
+        new, idx = [], {}
+        for k, v in items:
+            dict_set(new, idx, names.get(k.lower(), k), v, keep=True)
+        items = new
+    date = _date_part(items, idx, b"TYER", b"TYE")
+    if date:
+        day = _date_part(items, idx, b"TDAT", b"TDA")
+        if day:
+            date += b"-" + day[2:] + b"-" + day[:2]
+            hm = _date_part(items, idx, b"TIME", b"TIM")
+            if hm:
+                date += b" " + hm[:2] + b":" + hm[2:]
+        dict_set(items, idx, b"date", date)
+    if not items:
+        for k, v in _id3v1(f, size):
+            _put(items, idx, k, v)
+    for k, v in priv:
+        _put(items, idx, k, v)
+    return {k.decode(errors="replace"): v.decode(errors="replace") for k, v in items}, _xing_encoder(f, end[0])
+
+
 def _native_info(f, source):
     try:
         d = _pydub2.Decoder(source)
@@ -512,7 +771,7 @@ def _native_info(f, source):
     raw = "N/A"
     bits = "0"
     tag = 0
-    tags, in_stream = {}, False
+    tags, in_stream, enc = {}, False, None
     head = at(0, 22)
     if head[:4] in (b"RIFF", b"RF64"):
         chunk, lists = None, []
@@ -551,6 +810,7 @@ def _native_info(f, source):
         in_stream = True
     else:
         name, fmt, format_name = "mp3", "fltp", "mp3"
+        tags, enc = _mp3_tags(f, size)
     stream = {
         "index": "0", "codec_name": name, "codec_type": "audio",
         "codec_tag_string": "[%d][0][0][0]" % tag, "codec_tag": "0x%04x" % tag,
@@ -558,6 +818,8 @@ def _native_info(f, source):
         "bits_per_sample": bits, "bits_per_raw_sample": raw,
         "duration": "%.6f" % (frames / rate),
     }
+    if enc is not None:
+        stream["tags"] = {"encoder": enc}
     fmt = {"nb_streams": "1", "format_name": format_name, "size": str(size)}
     if tags:
         (stream if in_stream else fmt)["tags"] = tags
