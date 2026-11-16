@@ -68,6 +68,11 @@ void tostereo(std::string_view data, int width, double lfac, double rfac, const 
 void reverse(std::string_view data, int width, const Alloc &alloc);
 int avg(std::string_view data, int width);
 void bias(std::string_view data, int width, int bias, const Alloc &alloc);
+// the loops of the low pass, high pass and compress_dynamic_range effects, alpha and the rest as pydub works them out
+void lowpass(std::string_view data, int width, int channels, double alpha, const Alloc &alloc);
+void highpass(std::string_view data, int width, int channels, double alpha, const Alloc &alloc);
+void compress(std::string_view data, int width, int channels, double thresh, double ratio, double attack_frames,
+              double release_frames, long long look, const Alloc &alloc);
 // state is always None in pydub so there is none here
 void ratecv(std::string_view data, int width, int channels, int inrate, int outrate, const Alloc &alloc);
 

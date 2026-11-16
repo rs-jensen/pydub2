@@ -221,6 +221,41 @@ NB_MODULE(_pydub2, m) {
         return out;
     });
 
+    m.def("lowpass", [](nb::bytes data, int width, int channels, double alpha) {
+        std::string_view s = str(data);
+        nb::object out;
+        {
+            nb::gil_scoped_release g;
+            lowpass(s, width, channels, alpha, into(out));
+        }
+        return out;
+    });
+
+    m.def("highpass", [](nb::bytes data, int width, int channels, double alpha) {
+        std::string_view s = str(data);
+        nb::object out;
+        {
+            nb::gil_scoped_release g;
+            highpass(s, width, channels, alpha, into(out));
+        }
+        return out;
+    });
+
+    m.def("compress", [](nb::bytes data, int width, int channels, double thresh, double ratio, double attack_frames,
+                         double release_frames, long long look) {
+        std::string_view s = str(data);
+        nb::object out;
+        try {
+            nb::gil_scoped_release g;
+            compress(s, width, channels, thresh, ratio, attack_frames, release_frames, look, into(out));
+        } catch (std::domain_error &e) {
+            // pydub divides by a threshold of 0 in python
+            PyErr_SetString(PyExc_ZeroDivisionError, e.what());
+            throw nb::python_error();
+        }
+        return out;
+    });
+
     m.def("add", [](nb::bytes a, nb::bytes b, int width) {
         std::string_view x = str(a), y = str(b);
         nb::object out;
