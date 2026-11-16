@@ -1,3 +1,4 @@
+#include <chrono>
 #include <mutex>
 
 #include <nanobind/nanobind.h>
@@ -8,6 +9,25 @@
 
 namespace nb = nanobind;
 using namespace pydub2;
+
+// signals only reach the main thread, the others get a check that does nothing
+static unsigned long main_thread;
+
+// every 100 ms the long loops take the gil to let python run its signal handlers
+static Cancel interrupt() {
+    if (PyThread_get_thread_ident() != main_thread)
+        return [] {};
+    auto last = std::chrono::steady_clock::now();
+    return [last]() mutable {
+        auto now = std::chrono::steady_clock::now();
+        if (now - last < std::chrono::milliseconds(100))
+            return;
+        last = now;
+        nb::gil_scoped_acquire g;
+        if (PyErr_CheckSignals())
+            throw nb::python_error();
+    };
+}
 
 static std::string str(nb::bytes b) {
     return std::string(b.c_str(), b.size());
@@ -61,13 +81,22 @@ static nb::bytes take(Stream &s, int64_t n) {
     std::string rest;
     {
         char *p = PyBytes_AS_STRING(out.ptr());
+        Cancel cancel = interrupt();
         nb::gil_scoped_release g;
         std::lock_guard<std::mutex> hold(s.lock);
-        got = d.read(p, room / fw);
-        left -= got / fw;
         size_t step = std::max<size_t>(1, ((size_t)16 << 20) / fw);
+        while (got < room) {
+            cancel();
+            size_t m = std::min(step, (room - got) / fw);
+            size_t r = d.read(p + got, m);
+            got += r;
+            left -= r / fw;
+            if (r < m * fw)
+                break;
+        }
         bool full = got == room;
         while (full && left) {
+            cancel();
             size_t k = rest.size(), m = std::min<uint64_t>(left, step);
             rest.resize(k + m * fw);
             size_t r = d.read(&rest[k], m);
@@ -89,6 +118,8 @@ static nb::bytes take(Stream &s, int64_t n) {
 }
 
 NB_MODULE(_pydub2, m) {
+    main_thread = nb::cast<unsigned long>(nb::module_::import_("threading").attr("main_thread")().attr("ident"));
+
     nb::class_<Stream>(m, "Decoder")
         .def("__init__", [](Stream *s, nb::bytes data) {
             std::unique_ptr<Decoder> d;
@@ -137,7 +168,7 @@ NB_MODULE(_pydub2, m) {
         std::string out;
         {
             nb::gil_scoped_release g;
-            out = encode(a, format, bitrate);
+            out = encode(a, format, bitrate, interrupt());
         }
         return bytes(out);
     }, nb::arg("data"), nb::arg("rate"), nb::arg("channels"), nb::arg("width"), nb::arg("format"), nb::arg("bitrate") = 0);
@@ -238,7 +269,7 @@ NB_MODULE(_pydub2, m) {
         Ranges r;
         {
             nb::gil_scoped_release g;
-            r = detect_silence(a, min_silence_len, silence_thresh, seek_step);
+            r = detect_silence(a, min_silence_len, silence_thresh, seek_step, interrupt());
         }
         return ranges(r);
     });
@@ -249,7 +280,7 @@ NB_MODULE(_pydub2, m) {
             throw std::invalid_argument("bad rate");
         {
             nb::gil_scoped_release g;
-            a = resample(a, new_rate);
+            a = resample(a, new_rate, interrupt());
         }
         return bytes(a.data);
     });
@@ -257,7 +288,7 @@ NB_MODULE(_pydub2, m) {
     m.def("loudness", [](nb::bytes data, int rate, int channels, int width) {
         Audio a = audio(data, rate, channels, width);
         nb::gil_scoped_release g;
-        return loudness(a);
+        return loudness(a, interrupt());
     });
 
     m.def("detect_speech", [](nb::bytes data, int rate, int channels, int width, double threshold,
@@ -266,7 +297,7 @@ NB_MODULE(_pydub2, m) {
         Ranges r;
         {
             nb::gil_scoped_release g;
-            r = detect_speech(a, threshold, min_speech_ms, min_silence_ms);
+            r = detect_speech(a, threshold, min_speech_ms, min_silence_ms, interrupt());
         }
         return ranges(r);
     });
