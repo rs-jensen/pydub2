@@ -245,9 +245,13 @@ NB_MODULE(_pydub2, m) {
                          double release_frames, long long look) {
         std::string_view s = str(data);
         nb::object out;
-        {
+        try {
             nb::gil_scoped_release g;
             compress(s, width, channels, thresh, ratio, attack_frames, release_frames, look, into(out));
+        } catch (std::domain_error &e) {
+            // pydub divides by a threshold of 0 in python
+            PyErr_SetString(PyExc_ZeroDivisionError, e.what());
+            throw nb::python_error();
         }
         return out;
     });

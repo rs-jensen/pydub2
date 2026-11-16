@@ -260,6 +260,7 @@ void compress(std::string_view data, int width, int channels, double thresh, dou
         if (atten == 0.0 && now <= thresh) continue;
         double db = 0.0;
         if (now != 0) {
+            if (thresh == 0) throw std::domain_error("float division by zero");
             db = 20 * (std::log(now / thresh) / std::log(10.0));
             if (0 > db) db = 0;
         }
