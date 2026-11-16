@@ -199,20 +199,23 @@ NB_MODULE(_pydub2, m) {
     });
 
     m.def("rms", [](nb::bytes data, int width) {
+        std::string_view s = str(data);
         nb::gil_scoped_release g;
-        return rms(str(data), width);
+        return rms(s, width);
     });
 
     m.def("max", [](nb::bytes data, int width) {
+        std::string_view s = str(data);
         nb::gil_scoped_release g;
-        return pydub2::max(str(data), width);
+        return pydub2::max(s, width);
     });
 
     m.def("mul", [](nb::bytes data, int width, double factor) {
+        std::string_view s = str(data);
         nb::object out;
         {
             nb::gil_scoped_release g;
-            mul(str(data), width, factor, into(out));
+            mul(s, width, factor, into(out));
         }
         return out;
     });
@@ -246,69 +249,77 @@ NB_MODULE(_pydub2, m) {
     });
 
     m.def("add", [](nb::bytes a, nb::bytes b, int width) {
+        std::string_view x = str(a), y = str(b);
         nb::object out;
         {
             nb::gil_scoped_release g;
-            add(str(a), str(b), width, into(out));
+            add(x, y, width, into(out));
         }
         return out;
     });
 
     m.def("lin2lin", [](nb::bytes data, int width, int new_width) {
+        std::string_view s = str(data);
         nb::object out;
         {
             nb::gil_scoped_release g;
-            lin2lin(str(data), width, new_width, into(out));
+            lin2lin(s, width, new_width, into(out));
         }
         return out;
     });
 
     m.def("tomono", [](nb::bytes data, int width, double lfac, double rfac) {
+        std::string_view s = str(data);
         nb::object out;
         {
             nb::gil_scoped_release g;
-            tomono(str(data), width, lfac, rfac, into(out));
+            tomono(s, width, lfac, rfac, into(out));
         }
         return out;
     });
 
     m.def("tostereo", [](nb::bytes data, int width, double lfac, double rfac) {
+        std::string_view s = str(data);
         nb::object out;
         {
             nb::gil_scoped_release g;
-            tostereo(str(data), width, lfac, rfac, into(out));
+            tostereo(s, width, lfac, rfac, into(out));
         }
         return out;
     });
 
     m.def("reverse", [](nb::bytes data, int width) {
+        std::string_view s = str(data);
         nb::object out;
         {
             nb::gil_scoped_release g;
-            reverse(str(data), width, into(out));
+            reverse(s, width, into(out));
         }
         return out;
     });
 
     m.def("avg", [](nb::bytes data, int width) {
+        std::string_view s = str(data);
         nb::gil_scoped_release g;
-        return avg(str(data), width);
+        return avg(s, width);
     });
 
     m.def("bias", [](nb::bytes data, int width, int bias_) {
+        std::string_view s = str(data);
         nb::object out;
         {
             nb::gil_scoped_release g;
-            bias(str(data), width, bias_, into(out));
+            bias(s, width, bias_, into(out));
         }
         return out;
     });
 
     m.def("ratecv", [](nb::bytes data, int width, int channels, int inrate, int outrate) {
+        std::string_view s = str(data);
         nb::object out;
         {
             nb::gil_scoped_release g;
-            ratecv(str(data), width, channels, inrate, outrate, into(out));
+            ratecv(s, width, channels, inrate, outrate, into(out));
         }
         return out;
     });
