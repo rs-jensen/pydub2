@@ -48,7 +48,7 @@ for name, key in names:
     out.append("static const float %s[%d] = {" % (name, len(t)))
     line = ""
     for x in t:
-        line += short(x) + ","
+        line += short(x) + "f,"
         if len(line) > 110:
             out.append(line)
             line = ""

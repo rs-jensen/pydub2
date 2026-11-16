@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -9,10 +10,10 @@
 namespace pydub2 {
 
 // the weights flipped so the output index is last and the loops over outputs run on neighbours in memory
-static std::vector<float> flip(const float *w, int rows, int cols) {
+static std::vector<float> flip(const float *w, size_t rows, size_t cols) {
     std::vector<float> t(rows * cols);
-    for (int r = 0; r < rows; r++) {
-        for (int c = 0; c < cols; c++) {
+    for (size_t r = 0; r < rows; r++) {
+        for (size_t c = 0; c < cols; c++) {
             t[c * rows + r] = w[r * cols + c];
         }
     }
@@ -30,8 +31,8 @@ static Net load() {
     // silero's stft weights are just a periodic hann times cos and sin, so build them instead of shipping them
     double pi = std::acos(-1.0);
     n.basis.resize(256 * 258);
-    for (int k = 0; k < 129; k++) {
-        for (int i = 0; i < 256; i++) {
+    for (unsigned k = 0; k < 129; k++) {
+        for (unsigned i = 0; i < 256; i++) {
             double win = 0.5 - 0.5 * std::cos(2 * pi * i / 256);
             double a = 2 * pi * ((k * i) % 256) / 256;
             n.basis[i * 258 + k] = (float)(win * std::cos(a));
@@ -58,14 +59,14 @@ static int conv(const float *in, int cin, int t, const std::vector<float> &w, co
                 float *out) {
     int tout = (t - 1) / stride + 1;
     for (int j = 0; j < tout; j++) {
-        memcpy(out + j * cout, b, cout * sizeof(float));
+        std::copy(b, b + cout, out + j * cout);
     }
     for (int i = 0; i < cin; i++) {
         for (int k = 0; k < 3; k++) {
             for (int j = 0; j < tout; j++) {
                 int p = j * stride + k - 1;
                 if (p >= 0 && p < t) {
-                    madd(out + j * cout, &w[(i * 3 + k) * cout], in[p * cin + i], cout);
+                    madd(out + j * cout, w.data() + (i * 3 + k) * cout, in[p * cin + i], cout);
                 }
             }
         }
@@ -98,7 +99,7 @@ static std::vector<float> speech_probs(const std::vector<float> &x, const Cancel
         cancel();
         // 64 samples of context from the last window, then reflect pad 64 on the right
         std::memmove(buf, buf + 512, 64 * sizeof(float));
-        for (int i = 0; i < 512; i++) {
+        for (size_t i = 0; i < 512; i++) {
             buf[64 + i] = start + i < x.size() ? x[start + i] : 0;
         }
         for (int i = 0; i < 64; i++) {
@@ -108,7 +109,7 @@ static std::vector<float> speech_probs(const std::vector<float> &x, const Cancel
         memset(acc, 0, sizeof(acc));
         for (int n = 0; n < 256; n++) {
             for (int t = 0; t < 4; t++) {
-                madd(acc + t * 258, &net.basis[n * 258], buf[t * 128 + n], 258);
+                madd(acc + t * 258, net.basis.data() + n * 258, buf[t * 128 + n], 258);
             }
         }
         for (int t = 0; t < 4; t++) {
@@ -128,7 +129,7 @@ static std::vector<float> speech_probs(const std::vector<float> &x, const Cancel
             g[r] = ih_b[r] + hh_b[r];
         }
         for (int i = 0; i < 128; i++) {
-            gates(g, &net.ih[i * 512], e3[i], &net.hh[i * 512], h[i]);
+            gates(g, net.ih.data() + i * 512, e3[i], net.hh.data() + i * 512, h[i]);
         }
         float out = out_b[0];
         for (int i = 0; i < 128; i++) {
@@ -158,18 +159,18 @@ Ranges detect_speech(const Audio &in, double threshold, int min_speech_ms, int m
     size_t n = a.data.size() / a.width / a.channels;
     std::vector<float> x(n);
     const uint8_t *p = (const uint8_t *)a.data.data();
-    float scale = 1.0f / ((double)(1u << (8 * a.width - 1)) * a.channels);
+    float scale = (float)(1.0 / ((double)(1u << (8 * a.width - 1)) * (double)a.channels));
     for (size_t i = 0; i < n; i++) {
         float sum = 0;
-        for (int ch = 0; ch < a.channels; ch++, p += a.width) {
+        for (size_t ch = 0; ch < a.channels; ch++, p += a.width) {
             if (a.width == 1) {
                 sum += (int8_t)p[0];
             } else if (a.width == 2) {
                 sum += (int16_t)(p[0] | p[1] << 8);
             } else if (a.width == 3) {
-                sum += (int32_t)((uint32_t)p[0] << 8 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 24) / 256;
+                sum += (float)((int32_t)((uint32_t)p[0] << 8 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 24) / 256);
             } else {
-                sum += (int32_t)((uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24);
+                sum += (float)(int32_t)((uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24);
             }
         }
         x[i] = sum * scale;
@@ -184,7 +185,7 @@ Ranges detect_speech(const Audio &in, double threshold, int min_speech_ms, int m
     bool on = false;
     long long start = 0, temp_end = 0;
     for (size_t i = 0; i < probs.size(); i++) {
-        long long pos = 512LL * i;
+        long long pos = 512LL * (long long)i;
         if (probs[i] >= threshold) {
             temp_end = 0;
         }
