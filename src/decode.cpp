@@ -335,7 +335,10 @@ static uint64_t mp3_tag(Input &in, uint64_t full, size_t &skip, size_t &cut, uin
 }
 
 // minimp3 drops a frame with a missing bit reservoir, ffmpeg zeroes the granules in the missing part. so do that here, false if nothing is missing
-static bool mp3_fix(uint8_t *o, int have) {
+static bool mp3_fix(uint8_t *o, int n, int have) {
+    if (n < 4) {
+        return false;
+    }
     auto get = [&](size_t p, int n) {
         int v = 0;
         for (; n--; p++) {
@@ -351,11 +354,14 @@ static bool mp3_fix(uint8_t *o, int have) {
     bool v1 = o[1] & 8;
     int nch = (o[3] >> 6) == 3 ? 1 : 2, ng = v1 ? 2 : 1, step = v1 ? 59 : 63;
     size_t p = (4 + (o[1] & 1 ? 0 : 2)) * 8;
+    size_t gr = p + (v1 ? 9 + (nch == 1 ? 5 : 3) + 4 * nch : 8 + nch);
+    if (gr + (ng * nch - 1) * step + 29 + (v1 ? 4 : 9) > (size_t)n * 8) {
+        return false;
+    }
     int mdb = get(p, v1 ? 9 : 8), acc = have * 8, z = 0;
     if (mdb <= have) {
         return false;
     }
-    size_t gr = p + (v1 ? 9 + (nch == 1 ? 5 : 3) + 4 * nch : 8 + nch);
     for (; z < ng && acc >> 3 < mdb; z++) {
         for (int c = 0; c < nch; c++) {
             acc += get(gr + (z * nch + c) * step, 12);
@@ -409,8 +415,8 @@ static void mp3_end(Input &in) {
         if (start && fi.layer == 3) {
             // only from the start, after junk ffmpeg still has the old reservoir and minimp3 has none
             int n = drmp3_hdr_frame_bytes(dec.header, dec.free_format_bytes) + drmp3_hdr_padding(dec.header);
-            uint8_t *fr = buf.data() + at + fi.frame_bytes - n;
-            start = !k && n <= fi.frame_bytes && (in.fix.empty() || fi.frame_bytes == n) && mp3_fix(fr, in.fix.empty() ? 0 : keep.reserv);
+            uint8_t *fr = buf.data() + at + fi.frame_bytes - std::min(n, fi.frame_bytes);
+            start = !k && n <= fi.frame_bytes && (in.fix.empty() || fi.frame_bytes == n) && mp3_fix(fr, n, in.fix.empty() ? 0 : keep.reserv);
             if (start) {
                 if (in.fix.empty()) {
                     in.fix_at = off + at + fi.frame_bytes - n;
@@ -447,7 +453,7 @@ static void mp3_end(Input &in) {
             return v;
         };
         int64_t cut = ((int64_t)have - (int64_t)side) * 8, zero = 0;
-        int64_t at = -8 * get(v1 ? 9 : 8);
+        int64_t at = have >= side ? -8 * get(v1 ? 9 : 8) : 0;
         p += v1 ? (nch == 1 ? 5 : 3) + 4 * nch : nch;
         for (int g = 0; have >= side && g < (v1 ? 2 : 1) * nch; g++) {
             int len = get(12);

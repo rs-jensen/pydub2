@@ -487,3 +487,15 @@ def test_fade_past_the_end_at_a_low_rate_raises_like_pydub():
         theirs.fade_in(2000)
     with pytest.raises(pydub2.exceptions.TooManyMissingFrames):
         ours.fade_in(2000)
+
+
+def test_mp3_frame_at_the_end_of_the_scan_buffer(tmp_path):
+    hd = bytes.fromhex("fffb0000")
+    data = b"ID3\x03" + bytes(65523 - 4) + hd * 3 + b"\0" + hd * 8
+    data += bytes(65632 - len(data))
+    (tmp_path / "x.mp3").write_bytes(data)
+    for src in (str(tmp_path / "x.mp3"), io.BytesIO(data)):
+        try:
+            AudioSegment.from_file(src, format="mp3")
+        except CouldntDecodeError:
+            pass
