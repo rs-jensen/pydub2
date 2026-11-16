@@ -235,8 +235,8 @@ def test_flac_streaminfo_like_ffmpeg():
     data = music(44100, 2)
     mine = _pydub2.encode(data, 44100, 2, 2, "flac")
     theirs = pydub_export(data, 44100, 2, 2, "flac")
-    # block sizes, total samples and the md5 are the same
-    assert mine[8:10] == theirs[8:10] and mine[10:12] == theirs[10:12]
+    # 4608 is what ffmpeg 6 and 7 pick at 44100, ffmpeg 8 picks 4096
+    assert mine[8:12] == bytes.fromhex("12001200")
     assert mine[20:26] == theirs[20:26]
     assert mine[26:42] == theirs[26:42] != bytes(16)
 

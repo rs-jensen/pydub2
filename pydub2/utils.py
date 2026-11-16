@@ -11,7 +11,7 @@ from math import log, ceil
 from io import BytesIO
 from tempfile import TemporaryFile
 from warnings import warn
-from functools import wraps
+from functools import lru_cache, wraps
 
 import _pydub2
 import pydub2
@@ -171,6 +171,16 @@ def check_duration(frames, rate):
         raise CouldntDecodeError("this file is longer than max_duration")
 
 
+def read_capped(d, n):
+    # a header can lie about the length, so read one frame past max_duration and look
+    if pydub2.max_duration is not None:
+        cap = int(pydub2.max_duration * d.rate) + 1
+        n = cap if n < 0 else min(n, cap)
+    pcm = d.read(n)
+    check_duration(len(pcm) // (d.channels * d.width), d.rate)
+    return pcm
+
+
 def run(command, data=None, **kwargs):
     try:
         return subprocess.run(command, input=data, capture_output=True, creationflags=NOWINDOW,
@@ -179,23 +189,38 @@ def run(command, data=None, **kwargs):
         raise TimeoutError("ffmpeg took longer than ffmpeg_timeout")
 
 
-def source(filepath, read_ahead_limit=-1):
-    """the input arguments for ffmpeg or ffprobe and the bytes for its stdin, if any"""
+# demuxers that open other files or hosts named inside the file
+PLAYLISTS = {"hls", "applehttp", "dash", "concat", "imf", "sdp", "rtsp", "rtp", "lavfi"}
+
+
+@lru_cache(None)
+def allowed_demuxers(exe):
+    try:
+        out = run([exe, "-hide_banner", "-demuxers"]).stdout.decode("utf-8", "ignore")
+    except (OSError, TimeoutError):
+        return ""
+    rows = [x.split() for x in out.partition("\n --")[2].splitlines()]
+    return ",".join(x[1] for x in rows if len(x) > 1 and PLAYLISTS.isdisjoint(x[1].split(",")))
+
+
+def source(filepath, read_ahead_limit=-1, exe=None):
+    # sniffing the start of a file is not enough, so ffmpeg is also told which demuxers it may use
+    names = allowed_demuxers(exe) if exe else ""
+    allow = ["-format_whitelist", names] if names else []
     try:
         path = fsdecode(filepath)
     except TypeError:
         filepath.seek(0)
-        return ["-protocol_whitelist", "cache,pipe", "-read_ahead_limit", str(read_ahead_limit),
+        return ["-protocol_whitelist", "cache,pipe"] + allow + ["-read_ahead_limit", str(read_ahead_limit),
                 "-i", "cache:pipe:0"], filepath.read()
     try:
         with open(path, "rb") as f:
             head = f.read(64)
     except OSError:
         head = b""
-    # these name other files and a protocol whitelist cant stop that
     if head.lstrip(b"\xef\xbb\xbf \t\r\n").startswith((b"ffconcat", b"#EXTM3U", b"<MPD", b"<?xml")):
         raise CouldntDecodeError("cant decode this file")
-    return ["-protocol_whitelist", "file", "-i", "file:" + path], None
+    return ["-protocol_whitelist", "file"] + allow + ["-i", "file:" + path], None
 
 
 def _first(*names):
@@ -292,7 +317,7 @@ def get_extra_info(stderr):
 def _run_prober(filepath, read_ahead_limit):
     prober = get_prober_name()
     command_args = ["-v", "info", "-show_format", "-show_streams"]
-    args, data = source(filepath, read_ahead_limit)
+    args, data = source(filepath, read_ahead_limit, prober)
     if data is not None and not os.path.basename(prober).startswith("ffprobe"):
         args = ["-"]
     command = [prober, '-of', 'json'] + command_args + args
@@ -302,18 +327,23 @@ def _run_prober(filepath, read_ahead_limit):
 
     return json.loads(output), stderr
 
+
 def _native_info(data):
     try:
         d = _pydub2.Decoder(data)
-        frames = d.frames or len(d.read()) // (d.channels * d.width)
+        frames = d.frames or len(read_capped(d, -1)) // (d.channels * d.width)
     except RuntimeError:
         return None
     rate, channels = d.rate, d.channels
+    # the audio after an id3 tag
+    head = data[10 + sum((data[6 + i] & 127) << 7 * (3 - i) for i in range(4)):] if data[:3] == b"ID3" else data
     raw = "N/A"
     bits = "0"
     tag = 0
     if data[:4] in (b"RIFF", b"RF64"):
-        i = data.find(b"fmt ")
+        i = 12
+        while data[i:i + 4] != b"fmt ":
+            i += 8 + struct.unpack_from("<I", data, i + 4)[0] + data[i + 4] % 2
         tag, _, _, _, _, bits = struct.unpack_from("<HHIIHH", data, i + 8)
         if tag == 0xFFFE:
             tag = struct.unpack_from("<H", data, i + 32)[0]
@@ -327,11 +357,11 @@ def _native_info(data):
         if tag == 1 and bits in (24, 32):
             raw = str(bits)
         bits = str(bits)
-    elif data[:4] == b"fLaC":
-        raw = str((((data[20] & 1) << 4) | (data[21] >> 4)) + 1)
+    elif head[:4] == b"fLaC":
+        raw = str((((head[20] & 1) << 4) | (head[21] >> 4)) + 1)
         name, fmt, format_name = "flac", "s16" if int(raw) <= 16 else "s32", "flac"
-    elif data[:4] == b"OggS":
-        name = "opus" if b"OpusHead" in data[:200] else "vorbis"
+    elif head[:4] == b"OggS":
+        name = "opus" if b"OpusHead" in head[:200] else "vorbis"
         fmt, format_name = "fltp", "ogg"
     else:
         name, fmt, format_name = "mp3", "fltp", "mp3"
@@ -381,7 +411,7 @@ def mediainfo_json(filepath, read_ahead_limit=-1):
             info = {"streams": [{k: v for k, v in stream.items() if v != "N/A"}], "format": dict(fmt, nb_streams=1)}
             extra_info = {0: [stream["sample_fmt"] + (" (%s bit)" % raw if raw != "N/A" else "")]}
         else:
-            args = source(BytesIO(data))[0]
+            args = source(BytesIO(data), exe=get_encoder_name())[0]
             extra_info = get_extra_info(run([get_encoder_name()] + args, data).stderr.decode("utf-8", "ignore"))
             info = {"streams": [
                 {"index": i, "codec_type": "audio", "codec_name": t[t.index("Audio") + 1].split()[0],
@@ -430,7 +460,7 @@ def mediainfo(filepath):
             return {**native[0], **native[1]}
 
     prober = get_prober_name()
-    source_args, data = source(filepath)
+    source_args, data = source(filepath, exe=prober)
     command_args = ["-v", "quiet", "-show_format", "-show_streams"] + source_args
 
     command = [prober, '-of', 'old'] + command_args
@@ -520,6 +550,7 @@ def get_supported_decoders():
 def get_supported_encoders():
     return get_supported_codecs()[1]
 
+
 def stereo_to_ms(audio_segment):
     '''
     Left-Right -> Mid-Side
@@ -528,6 +559,7 @@ def stereo_to_ms(audio_segment):
     channel = audio_segment.split_to_mono()
     channel = [channel[0].overlay(channel[1]), channel[0].overlay(channel[1].invert_phase())]
     return AudioSegment.from_mono_audiosegments(channel[0], channel[1])
+
 
 def ms_to_stereo(audio_segment):
     '''

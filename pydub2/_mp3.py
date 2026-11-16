@@ -1,5 +1,6 @@
 import ctypes
 import functools
+import threading
 
 import _pydub2
 
@@ -13,6 +14,10 @@ FRAMES = {"album": "TALB", "composer": "TCOM", "genre": "TCON", "copyright": "TC
           "encoded_by": "TENC", "title": "TIT2", "language": "TLAN", "artist": "TPE1",
           "album_artist": "TPE2", "performer": "TPE3", "disc": "TPOS", "publisher": "TPUB",
           "track": "TRCK", "encoder": "TSSE", "date": "TYER"}
+
+
+# lame fills static tables the first time it is set up
+setup = threading.Lock()
 
 
 @functools.lru_cache(None)
@@ -38,7 +43,6 @@ def rate_of(text):
 
 def encode(data, rate, channels, width, bitrate=None, tags=None, id3v2_version="4", parameters=None,
            converter="ffmpeg"):
-    """returns None when only ffmpeg can do it"""
     out_rate, out_channels, quality = rate, channels, None
     params = list(parameters or [])
     if len(params) % 2 or channels > 2:
@@ -55,6 +59,8 @@ def encode(data, rate, channels, width, bitrate=None, tags=None, id3v2_version="
                 out_channels = int(v)
             else:
                 return None
+        if bitrate:
+            rate_of(bitrate)
     except (ValueError, IndexError):
         return None
     if quality is not None and not 0 <= quality <= 9.999:
@@ -76,7 +82,8 @@ def encode(data, rate, channels, width, bitrate=None, tags=None, id3v2_version="
         rate = out_rate
 
     lame = lib()
-    gfp = ctypes.c_void_p(lame.lame_init())
+    with setup:
+        gfp = ctypes.c_void_p(lame.lame_init())
     if not gfp:
         raise MemoryError("cant start lame")
     try:
@@ -101,7 +108,9 @@ def encode(data, rate, channels, width, bitrate=None, tags=None, id3v2_version="
                     lame.id3tag_set_textinfo_latin1(gfp, frame.encode(), text.encode())
                 else:
                     lame.id3tag_set_textinfo_utf16(gfp, frame.encode(), ("\ufeff" + text + "\0").encode("utf-16-le"))
-        if lame.lame_init_params(gfp) < 0:
+        with setup:
+            failed = lame.lame_init_params(gfp) < 0
+        if failed:
             raise CouldntEncodeError("lame cant encode with these settings")
 
         n = lame.lame_get_id3v2_tag(gfp, None, ctypes.c_size_t(0))
@@ -133,7 +142,7 @@ def encode(data, rate, channels, width, bitrate=None, tags=None, id3v2_version="
         # the first frame is a placeholder for the lame tag, it only knows the gapless info at the end
         n = lame.lame_get_lametag_frame(gfp, buf, ctypes.c_size_t(len(buf)))
         if n == 0 and _ffmpeg.find(converter):
-            # low cbr bitrates have no room for the lame tag so the gapless info is lost, ffmpeg writes a bigger first frame
+            # no room for the lame tag at low cbr, ffmpeg writes a bigger first frame
             return None
         return id3.raw + buf.raw[:n] + mp3[n:]
     finally:

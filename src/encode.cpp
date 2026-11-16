@@ -128,8 +128,6 @@ static std::string flac(const Audio &a, const Cancel &cancel) {
             block = b;
     std::vector<FLAC__int32> buf(block * a.channels);
     FLAC__StreamEncoder *enc = FLAC__stream_encoder_new();
-    if (!enc)
-        throw std::bad_alloc();
     FLAC__stream_encoder_set_channels(enc, a.channels);
     FLAC__stream_encoder_set_bits_per_sample(enc, bits);
     FLAC__stream_encoder_set_blocksize(enc, block);

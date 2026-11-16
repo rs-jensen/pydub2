@@ -20,7 +20,7 @@ struct Audio {
     std::string_view data; // not owned
     int rate = 0;
     int channels = 0;
-    int width = 0; // bytes per sample, 1 to 4
+    int width = 0; // bytes per sample, 1 to 4 and 8 for a 64 bit wav
 };
 
 typedef std::vector<std::pair<int, int>> Ranges; // [start, end) in ms
@@ -37,6 +37,7 @@ struct Decoder {
     int rate = 0;
     int channels = 0;
     int width = 0;
+    bool chained = false; // opus with more than one link, libopus starts each link fresh where ffmpeg decodes across
     uint64_t frames = 0; // what a read from the start gives, from the header for flac and opus so it can lie
     bool exact = false; // frames is counted from the file, a reader can size a buffer from it
     virtual ~Decoder() {}

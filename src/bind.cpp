@@ -164,6 +164,7 @@ NB_MODULE(_pydub2, m) {
         .def_prop_ro("channels", [](Stream &s) { return s.d->channels; })
         .def_prop_ro("width", [](Stream &s) { return s.d->width; })
         .def_prop_ro("frames", [](Stream &s) { return s.d->frames; })
+        .def_prop_ro("chained", [](Stream &s) { return s.d->chained; })
         .def("seek", [](Stream &s, uint64_t frame) {
             nb::gil_scoped_release g;
             std::lock_guard<std::mutex> hold(s.lock);
