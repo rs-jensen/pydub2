@@ -139,6 +139,7 @@ def test_chained_opus_falls_back_to_ffmpeg(tmp_path):
 def test_chained_opus_without_ffmpeg(tmp_path, monkeypatch):
     path = chained_opus(tmp_path)
     monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr(pydub2.AudioSegment, "converter", "ffmpeg")
     with pytest.raises(pydub2.exceptions.CouldntDecodeError):
         pydub2.AudioSegment.from_file(path)
     with pytest.raises(pydub2.exceptions.CouldntDecodeError):
@@ -148,6 +149,7 @@ def test_chained_opus_without_ffmpeg(tmp_path, monkeypatch):
 @pytest.mark.filterwarnings("ignore::RuntimeWarning")
 def test_corrupt_mp3_without_ffmpeg(monkeypatch):
     monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr(pydub2.AudioSegment, "converter", "ffmpeg")
     with pytest.raises(pydub2.exceptions.CouldntDecodeError):
         pydub2.AudioSegment.from_file(io.BytesIO(b"not an mp3" * 100), "mp3")
     with pytest.raises(FileNotFoundError):

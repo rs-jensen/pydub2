@@ -3,6 +3,7 @@ import faulthandler
 import importlib
 import io
 import itertools
+import math
 import json
 import os
 import random
@@ -447,9 +448,16 @@ FIXED = {("s.low_pass_filter", "IndexError"), ("s.high_pass_filter", "IndexError
          ("s.fade", "ZeroDivisionError"), ("s.append", "ZeroDivisionError"), ("s.speedup", "ZeroDivisionError")}
 
 
+def nonfinite(step):
+    return any(isinstance(x, float) and not math.isfinite(x) for x in list(step[1]) + list(step[2].values()))
+
+
 def diff(ra, rb, steps=()):
     for i, (a, b) in enumerate(zip(ra, rb)):
         ea, eb = a.get("exc"), b.get("exc")
+        # a nan gain is undefined in audioop (c cast), pydub2 refuses it
+        if i and not ea and eb == "ValueError" and nonfinite(steps[i - 1]):
+            return None
         if i and (steps[i - 1][0], ea) in FIXED and not eb:
             return None
         if bool(ea) != bool(eb):
