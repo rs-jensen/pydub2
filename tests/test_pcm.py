@@ -106,3 +106,12 @@ def test_errors():
         core.ratecv(b"\0" * 4, 2, 1, 0, 2)
     with pytest.raises(ValueError):
         core.lin2lin(b"\0" * 4, 2, 5)
+
+
+@pytest.mark.parametrize("channels", [0])
+@pytest.mark.parametrize("data", [b"", b"\0" * 8])
+def test_no_channels(channels, data):
+    for call in (lambda: core.lowpass(data, 2, channels, 0.5), lambda: core.highpass(data, 2, channels, 0.5),
+                 lambda: core.compress(data, 2, channels, 1000.0, 2.0, 10.0, 10.0, 100)):
+        with pytest.raises(ValueError):
+            call()

@@ -270,3 +270,44 @@ def test_vorbis_last_granule_is_the_input_length(frames):
 def test_opus_refuses_tiny_rates():
     with pytest.raises(RuntimeError):
         _pydub2.encode(b"\0" * 400, 50, 1, 2, "opus")
+
+
+def flac_blocks(out):
+    assert out[:4] == b"fLaC"
+    i, found = 4, []
+    while True:
+        last, kind, size = out[i] >> 7, out[i] & 127, int.from_bytes(out[i + 1:i + 4], "big")
+        found.append((kind, size, last))
+        i += 4 + size
+        if last:
+            return found, i
+
+
+@pytest.mark.parametrize("tags", [[], [(b"title", b"x")], [(b"a", b"b" * 70000), (b"c", b"")]])
+@pytest.mark.parametrize("width", [1, 2, 3])
+@pytest.mark.parametrize("channels", [1, 2, 6])
+def test_flac_metadata_is_well_formed(width, channels, tags):
+    data = pcm24(width, channels) if width == 3 else sine(44100, channels, width, 0.3)
+    out = _pydub2.encode(data, 44100, channels, width, "flac", 0, tags)
+    found, end = flac_blocks(out)
+    assert found[0][:2] == (0, 34)
+    assert [k for k, _, _ in found].count(0) == 1 and [k for k, _, _ in found].count(4) == 1
+    assert [last for _, _, last in found] == [0] * (len(found) - 1) + [1]
+    assert out[end:end + 2] == b"\xff\xf8"
+
+
+@pytest.mark.parametrize("tags", [[], [(b"title", b"x"), (b"artist", b"y")]])
+@pytest.mark.parametrize("width", [1, 2, 3])
+@pytest.mark.parametrize("channels", [1, 2, 6])
+def test_flac_passes_strict_readers(tmp_path, width, channels, tags):
+    data = pcm24(width, channels) if width == 3 else sine(44100, channels, width, 0.3)
+    path = tmp_path / "a.flac"
+    path.write_bytes(_pydub2.encode(data, 44100, channels, width, "flac", 0, tags))
+    ran = 0
+    for cmd in (["flac", "-t", "-s"], ["metaflac", "--list"], ["ffprobe", "-v", "error"]):
+        if shutil.which(cmd[0]):
+            p = subprocess.run(cmd + [str(path)], capture_output=True)
+            assert p.returncode == 0 and not p.stderr, p.stderr
+            ran += 1
+    if not ran:
+        pytest.skip("no flac or ffprobe")

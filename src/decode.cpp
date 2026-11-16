@@ -72,13 +72,22 @@ static size_t in_read(void *u, void *out, size_t n) {
     return n;
 }
 
+static uint32_t le32(const uint8_t *p) {
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
 static bool in_seek(Input *in, int64_t off, int origin) {
     int64_t at = off + (origin == SEEK_SET ? 0 : origin == SEEK_CUR ? (int64_t)in->pos : (int64_t)in->len);
     if (at < 0 || at > (int64_t)in->len || (in->f && fseeko(in->f, at, SEEK_SET))) {
         return false;
     }
-    in->pos = at;
+    in->pos = (uint64_t)at;
     return true;
+}
+
+// a position that is too big turns negative and in_seek says no
+static bool seek_to(Input *in, uint64_t at) {
+    return in_seek(in, (int64_t)at, SEEK_SET);
 }
 
 static_assert(DRWAV_SEEK_CUR == SEEK_CUR && DRWAV_SEEK_END == SEEK_END && DRFLAC_SEEK_CUR == SEEK_CUR &&
@@ -91,7 +100,7 @@ template <class O> static uint32_t dr_seek(void *u, int off, O origin) {
 
 static uint32_t dr_tell(void *u, long long *at) {
     Input *in = (Input *)u;
-    *at = in->pos;
+    *at = (long long)in->pos;
     return 1;
 }
 
@@ -108,7 +117,7 @@ struct Dec : Decoder {
 struct Wav : Dec {
     drwav w;
     bool ok = false;
-    int bits = 0;
+    size_t bits = 0;
     size_t frame = 0;
 
     ~Wav() {
@@ -122,13 +131,13 @@ struct Wav : Dec {
             fail();
         }
         ok = true;
-        rate = w.sampleRate;
+        rate = (int)w.sampleRate;
         channels = w.channels;
         bits = w.bitsPerSample;
         frame = w.fmt.blockAlign;
-        if (w.translatedFormatTag == DR_WAVE_FORMAT_PCM && (bits == 8 || bits == 16 || bits == 24 || bits == 32) && frame == (size_t)channels * bits / 8) {
+        if (w.translatedFormatTag == DR_WAVE_FORMAT_PCM && (bits == 8 || bits == 16 || bits == 24 || bits == 32) && frame == channels * bits / 8) {
             width = bits == 24 ? 4 : bits / 8;
-        } else if (w.translatedFormatTag == DR_WAVE_FORMAT_IEEE_FLOAT && bits == 64 && frame == (size_t)channels * 8) {
+        } else if (w.translatedFormatTag == DR_WAVE_FORMAT_IEEE_FLOAT && bits == 64 && frame == channels * 8) {
             // pydub has ffmpeg turn this into 64 bit ints
             width = 8;
         } else if (w.translatedFormatTag == DR_WAVE_FORMAT_IEEE_FLOAT && frame) {
@@ -140,10 +149,10 @@ struct Wav : Dec {
         // like ffmpeg: a data size of 0 or 0xffffffff (a pipe) runs to the end of the file, and a later data chunk wins
         uint8_t h[8];
         for (uint64_t at = w.dataChunkDataPos; w.container == drwav_container_riff && at >= 4;) {
-            if (!in_seek(&in, at - 4, SEEK_SET) || in_read(&in, h, 4) < 4) {
+            if (!seek_to(&in, at - 4) || in_read(&in, h, 4) < 4) {
                 break;
             }
-            uint64_t size = h[0] | h[1] << 8 | h[2] << 16 | (uint64_t)h[3] << 24;
+            uint64_t size = le32(h);
             size = size && size != 0xffffffff ? std::min(size, in.len - at) : in.len - at;
             w.dataChunkDataPos = at;
             w.dataChunkDataSize = w.bytesRemaining = size;
@@ -151,15 +160,15 @@ struct Wav : Dec {
             at = 0;
             // a thousand chunks at most, past that it is junk
             uint64_t next = w.dataChunkDataPos + size + (size & 1);
-            for (int i = 0; i < 1000 && next + 8 <= in.len && in_seek(&in, next, SEEK_SET) && in_read(&in, h, 8) == 8; i++) {
+            for (int i = 0; i < 1000 && next + 8 <= in.len && seek_to(&in, next) && in_read(&in, h, 8) == 8; i++) {
                 if (!memcmp(h, "data", 4)) {
                     at = next + 8;
                     break;
                 }
-                next += 8 + (h[4] | h[5] << 8 | h[6] << 16 | (uint64_t)h[7] << 24) + (h[4] & 1);
+                next += 8 + le32(h + 4) + (h[4] & 1u);
             }
         }
-        in_seek(&in, w.dataChunkDataPos, SEEK_SET);
+        seek_to(&in, w.dataChunkDataPos);
         // the header can claim any size, the file cant hold more
         frames = std::min<uint64_t>(w.totalPCMFrameCount, (in.len - std::min<uint64_t>(in.len, w.dataChunkDataPos)) / frame);
         exact = true;
@@ -188,7 +197,7 @@ struct Wav : Dec {
             }
             if (bits == 8) {
                 for (size_t i = 0; i < k; i++) {
-                    out[i] ^= 0x80;
+                    out[i] = (char)(out[i] ^ 0x80);
                 }
             }
             return k;
@@ -226,7 +235,7 @@ struct Flac : Dec {
         if (!f) {
             fail();
         }
-        rate = f->sampleRate;
+        rate = (int)f->sampleRate;
         channels = f->channels;
         width = f->bitsPerSample <= 16 ? 2 : 4;
         frames = f->totalPCMFrameCount;
@@ -246,7 +255,7 @@ struct Flac : Dec {
 };
 
 static uint32_t be32(const uint8_t *h) {
-    return (uint32_t)h[0] << 24 | h[1] << 16 | h[2] << 8 | h[3];
+    return (uint32_t)h[0] << 24 | (uint32_t)h[1] << 16 | (uint32_t)h[2] << 8 | h[3];
 }
 
 // ffmpegs header check. its parser takes no free format frames
@@ -256,8 +265,8 @@ static bool mp3_head(const uint8_t *h) {
            (v >> 10 & 3) != 3;
 }
 
-static int mp3_size(const uint8_t *h) {
-    return drmp3_hdr_frame_bytes(h, 0) + drmp3_hdr_padding(h);
+static size_t mp3_size(const uint8_t *h) {
+    return (size_t)(drmp3_hdr_frame_bytes(h, 0) + drmp3_hdr_padding(h));
 }
 
 // dr_mp3 gives up on a short Info frame, so find it here. ffmpeg drops the frame and the lame delay and padding
@@ -265,11 +274,11 @@ static int mp3_size(const uint8_t *h) {
 static uint64_t mp3_tag(Input &in, size_t &skip, size_t &cut, uint64_t &count) {
     uint8_t h[10];
     uint64_t at = 0;
-    while (in_seek(&in, at, SEEK_SET) && in_read(&in, h, 10) == 10 && !memcmp(h, "ID3", 3)) {
-        at += 10 + ((h[6] & 127) << 21 | (h[7] & 127) << 14 | (h[8] & 127) << 7 | (h[9] & 127)) + (h[5] & 16 ? 10 : 0);
+    while (seek_to(&in, at) && in_read(&in, h, 10) == 10 && !memcmp(h, "ID3", 3)) {
+        at += 10 + ((h[6] & 127u) << 21 | (h[7] & 127u) << 14 | (h[8] & 127u) << 7 | (h[9] & 127u)) + (h[5] & 16 ? 10u : 0u);
     }
     std::vector<uint8_t> buf(16384);
-    if (!in_seek(&in, at, SEEK_SET)) {
+    if (!seek_to(&in, at)) {
         return at;
     }
     size_t len = in_read(&in, buf.data(), buf.size());
@@ -285,18 +294,18 @@ static uint64_t mp3_tag(Input &in, size_t &skip, size_t &cut, uint64_t &count) {
     if ((f[1] & 6) != 2) {
         fail();
     }
-    int n = (int)std::min<size_t>(mp3_size(f), len - junk);
+    size_t n = std::min(mp3_size(f), len - junk);
     bool mono = DRMP3_HDR_IS_MONO(f);
-    int side = (f[1] & 8) ? (mono ? 17 : 32) : (mono ? 9 : 17);
-    int o = 4 + (f[1] & 1 ? 0 : 2) + side;
+    size_t side = (f[1] & 8) ? (mono ? 17 : 32) : (mono ? 9 : 17);
+    size_t o = 4 + (f[1] & 1 ? 0 : 2) + side;
     if (o + 8 > n || (memcmp(f + o, "Xing", 4) && memcmp(f + o, "Info", 4))) {
         return at;
     }
     int flags = f[o + 7];
     o += 8;
-    auto word = [&](int q) { return q + 4 <= n ? be32(f + q) : 0; };
+    auto word = [&](size_t q) { return q + 4 <= n ? be32(f + q) : 0u; };
     uint64_t size = 0;
-    const int sizes[] = {4, 4, 100, 4};
+    const size_t sizes[] = {4, 4, 100, 4};
     for (int i = 0; i < 4; i++) {
         if (flags >> i & 1) {
             if (i == 0) {
@@ -313,8 +322,8 @@ static uint64_t mp3_tag(Input &in, size_t &skip, size_t &cut, uint64_t &count) {
         count = 0;
     }
     if (!junk && o + 24 <= n && (!memcmp(f + o, "LAME", 4) || !memcmp(f + o, "Lavf", 4) || !memcmp(f + o, "Lavc", 4))) {
-        skip = (f[o + 21] << 4 | f[o + 22] >> 4) + 528 + 1;
-        int pad = (f[o + 22] & 15) << 8 | f[o + 23];
+        skip = (size_t)((f[o + 21] << 4 | f[o + 22] >> 4) + 529);
+        unsigned pad = (f[o + 22] & 15u) << 8 | f[o + 23];
         cut = pad > 529 ? pad - 529 : 0;
     }
     return at + junk + mp3_size(f);
@@ -328,26 +337,26 @@ static int bits(const uint8_t *o, size_t p, int n) {
     return v;
 }
 
-// where the layer 3 side info of the n byte frame o starts, false if it does not fit
-static bool mp3_side(const uint8_t *o, int n, size_t &p, size_t &gr, int &ng, int &nch) {
+// where the layer 3 side info of the n byte frame o starts and the bits for each granule, false if it does not fit
+static bool mp3_side(const uint8_t *o, size_t n, size_t &p, size_t &gr, size_t &ng, size_t &nch, size_t &step) {
     bool v1 = o[1] & 8;
     nch = (o[3] >> 6) == 3 ? 1 : 2;
     ng = v1 ? 2 : 1;
-    p = (4 + (o[1] & 1 ? 0 : 2)) * 8;
+    step = v1 ? 59 : 63;
+    p = (4 + (o[1] & 1 ? 0u : 2u)) * 8;
     gr = p + (v1 ? 9 + (nch == 1 ? 5 : 3) + 4 * nch : 8 + nch);
-    return gr + ng * nch * (v1 ? 59 : 63) <= (size_t)n * 8;
+    return gr + ng * nch * step <= n * 8;
 }
 
 // ffmpeg drops a frame with big_values over 288 or a window switch to block type 0
-static bool mp3_bad(const uint8_t *o, int n) {
-    size_t p, gr;
-    int ng, nch;
-    if (!mp3_side(o, n, p, gr, ng, nch)) {
+static bool mp3_bad(const uint8_t *o, size_t n) {
+    size_t p, gr, ng, nch, step;
+    if (!mp3_side(o, n, p, gr, ng, nch, step)) {
         return false;
     }
-    int sc = ng == 2 ? 4 : 9;
-    for (int i = 0; i < ng * nch; i++) {
-        size_t q = gr + i * (ng == 2 ? 59 : 63);
+    size_t sc = ng == 2 ? 4 : 9;
+    for (size_t i = 0; i < ng * nch; i++) {
+        size_t q = gr + i * step;
         if (bits(o, q + 12, 9) > 288 || (bits(o, q + 29 + sc, 1) && !bits(o, q + 30 + sc, 2))) {
             return true;
         }
@@ -357,47 +366,46 @@ static bool mp3_bad(const uint8_t *o, int n) {
 
 // minimp3 drops a frame with a missing bit reservoir, ffmpeg zeroes the granules in the missing part. so do that
 // here, returns how many
-static int mp3_fix(uint8_t *o, int n, int have) {
-    size_t p, gr;
-    int ng, nch;
-    if (!mp3_side(o, n, p, gr, ng, nch)) {
+static int mp3_fix(uint8_t *o, size_t n, int have) {
+    size_t p, gr, ng, nch, step;
+    if (!mp3_side(o, n, p, gr, ng, nch, step)) {
         return 0;
     }
-    auto set = [&](size_t p, int n, int v) {
-        for (; n--; p++) {
-            o[p / 8] = (o[p / 8] & ~(128 >> p % 8)) | (v >> n & 1) << (7 - p % 8);
+    auto set = [&](size_t at, int w, int v) {
+        for (; w--; at++) {
+            o[at / 8] = (uint8_t)((o[at / 8] & ~(128 >> at % 8)) | (v >> w & 1) << (7 - at % 8));
         }
     };
     bool v1 = ng == 2;
-    int step = v1 ? 59 : 63;
-    int mdb = bits(o, p, v1 ? 9 : 8), acc = have * 8, z = 0;
+    int mdb = bits(o, p, v1 ? 9 : 8), acc = have * 8;
+    size_t z = 0;
     if (mdb <= have) {
         return 0;
     }
     for (; z < ng && acc >> 3 < mdb; z++) {
-        for (int c = 0; c < nch; c++) {
+        for (size_t c = 0; c < nch; c++) {
             acc += bits(o, gr + (z * nch + c) * step, 12);
         }
     }
     int rem = (mdb - have) * 8;
-    for (int i = 0; i < z * nch; i++) {
+    for (size_t i = 0; i < z * nch; i++) {
         size_t q = gr + i * step;
-        int n = bits(o, q, 12), d = std::min(n, rem);
+        int m = bits(o, q, 12), d = std::min(m, rem);
         rem -= d;
-        set(q, 12, n - d);
+        set(q, 12, m - d);
         set(q + 12, 9, 0);
         set(q + 21, 8, 0);
         set(q + 29, v1 ? 4 : 9, 0);
     }
     set(p, v1 ? 9 : 8, have);
-    return z;
+    return (int)z;
 }
 
 struct Mp3 : Dec {
     // a frame that gets to ffmpegs decoder. it drops a bad one, but the end of that goes in the bit reservoir
     struct Frame {
         uint64_t at;
-        int n;
+        size_t n;
         bool bad;
     };
     std::vector<Frame> fr;
@@ -418,7 +426,7 @@ struct Mp3 : Dec {
         auto load = [&](uint64_t p) {
             if (p < off || std::min(len, p + 4096) > off + b.size()) {
                 b.resize(65536);
-                if (!in_seek(&in, p, SEEK_SET)) {
+                if (!seek_to(&in, p)) {
                     fail();
                 }
                 b.resize(in_read(&in, b.data(), b.size()));
@@ -462,7 +470,7 @@ struct Mp3 : Dec {
                 break;
             }
             uint8_t f[4096] = {};
-            int n = mp3_size(load(h));
+            size_t n = mp3_size(load(h));
             memcpy(f, load(h), (size_t)std::min<uint64_t>(n, len - h));
             bool bad = (f[1] & 6) == 2 && mp3_bad(f, n), keep = zero && !bad;
             if (keep && none) {
@@ -488,7 +496,7 @@ struct Mp3 : Dec {
         if (none || (head[1] & 6) != 2) {
             fail();
         }
-        rate = drmp3_hdr_sample_rate_hz(head);
+        rate = (int)drmp3_hdr_sample_rate_hz(head);
         channels = DRMP3_HDR_IS_MONO(head) ? 1 : 2;
         width = 2;
         spf = drmp3_hdr_frame_samples(head);
@@ -508,7 +516,7 @@ struct Mp3 : Dec {
     size_t step(float *out) {
         Frame f = fr[k++];
         uint8_t b[4096];
-        if (in.pos != f.at && !in_seek(&in, f.at, SEEK_SET)) {
+        if (in.pos != f.at && !seek_to(&in, f.at)) {
             fail();
         }
         size_t got = in_read(&in, b, f.n);
@@ -516,8 +524,9 @@ struct Mp3 : Dec {
         memset(b + got, 0, f.n - got);
         dec.missing = (int)(f.n - got);
         if (f.bad) {
-            dec.reserv = std::min(511, f.n - 4);
-            memcpy(dec.reserv_buf, b + f.n - dec.reserv, dec.reserv);
+            size_t r = std::min<size_t>(511, f.n - 4);
+            memcpy(dec.reserv_buf, b + f.n - r, r);
+            dec.reserv = (int)r;
             return 0;
         }
         dec.zeroed = mp3_fix(b, f.n, dec.reserv);
@@ -525,11 +534,11 @@ struct Mp3 : Dec {
         memcpy(dec.header, b, 4);
         drmp3dec_frame_info fi;
         float pcm[1152 * 2];
-        if (!drmp3dec_decode_frame(&dec, b, f.n, pcm, &fi)) {
+        if (!drmp3dec_decode_frame(&dec, b, (int)f.n, pcm, &fi)) {
             memset(pcm, 0, sizeof(pcm));
         }
         // ffmpeg keeps the channels of the first frame and mixes the others like swresample
-        int c = DRMP3_HDR_IS_MONO(b) ? 1 : 2;
+        size_t c = DRMP3_HDR_IS_MONO(b) ? 1 : 2;
         for (size_t i = 0; i < spf; i++) {
             if (c == channels) {
                 memcpy(out + i * c, pcm + i * c, c * sizeof(float));
@@ -543,7 +552,7 @@ struct Mp3 : Dec {
     }
 
     // j and to are dr_mp3 frames. end is where the padding starts, if known
-    void convert(char *out, uint64_t j, uint64_t to, uint64_t end) {
+    void convert(char *out, uint64_t j, uint64_t to, [[maybe_unused]] uint64_t end) {
         size_t c = channels;
         while (j < to) {
             uint64_t f = j / spf * spf;
@@ -556,7 +565,7 @@ struct Mp3 : Dec {
                 for (size_t i = 0; i < c; i++) {
                     double q = std::trunc(buf[(j - start) * c + i] * 2147483648.0);
                     int32_t v = q >= 2147483647.0 ? INT32_MAX : q <= -2147483648.0 ? INT32_MIN : (int32_t)q;
-                    int16_t s = c > 1 ? v >> 16 : (int16_t)std::min<int64_t>(((int64_t)v + 32768) >> 16, 32767);
+                    int16_t s = c > 1 ? (int16_t)(v >> 16) : (int16_t)std::min<int64_t>(((int64_t)v + 32768) >> 16, 32767);
                     memcpy(out, &s, 2);
                     out += 2;
                 }
@@ -576,17 +585,17 @@ struct Mp3 : Dec {
             // a frame can only be converted once we know if the padding starts in it
             uint64_t lim = eof ? end : end / spf * spf;
             if (pos < lim) {
-                size_t k = (size_t)std::min<uint64_t>(n - done, lim - pos);
-                convert(out + done * c * 2, pos, pos + k, eof ? end : UINT64_MAX);
-                pos += k;
-                done += k;
+                size_t m = (size_t)std::min<uint64_t>(n - done, lim - pos);
+                convert(out + done * c * 2, pos, pos + m, eof ? end : UINT64_MAX);
+                pos += m;
+                done += m;
                 continue;
             }
             if (eof) {
                 break;
             }
             size_t drop = (size_t)std::min<uint64_t>(pos - start, buf.size() / c);
-            buf.erase(buf.begin(), buf.begin() + drop * c);
+            buf.erase(buf.begin(), buf.begin() + (ptrdiff_t)(drop * c));
             start += drop;
             size_t old = buf.size(), got = 0;
             buf.resize(old + 1152 * 2);
@@ -608,8 +617,8 @@ struct Mp3 : Dec {
         // start early enough that the bit reservoir and the overlap are the same as from the start. a frame has
         // at least n - 38 bytes of main data and the reservoir is at most 511 of them
         k = at ? at - 1 : 0;
-        for (int b = 0; k > 0 && b < 511;) {
-            b += fr[--k].n - 38;
+        for (size_t b = 0, i = 0; k > 0 && b < 511 + 38 * i; i++) {
+            b += fr[--k].n;
         }
         memset(&dec, 0, sizeof(dec));
         float tmp[1152 * 2];
@@ -851,7 +860,7 @@ struct Vorbis : Dec {
             stb_vorbis_close(v);
             v = NULL;
         }
-        in_seek(&in, 0, SEEK_SET);
+        seek_to(&in, 0);
         win.clear();
         at = woff = 0;
         eof = false;
@@ -871,7 +880,7 @@ struct Vorbis : Dec {
             stb_vorbis_alloc mem = {arena.get(), 32 << 20};
             v = stb_vorbis_open_pushdata((const uint8_t *)win.data(), (int)win.size(), &used, &err, &mem);
             if (v) {
-                at = used;
+                at = (size_t)used;
             } else if (err != VORBIS_need_more_data) {
                 fail();
             }
@@ -885,10 +894,10 @@ struct Vorbis : Dec {
         }
         restart();
         stb_vorbis_info info = stb_vorbis_get_info(v);
-        rate = info.sample_rate;
-        channels = info.channels;
+        rate = (int)info.sample_rate;
+        channels = (size_t)info.channels;
         width = 4;
-        frames = want > 0 ? want : 0;
+        frames = want > 0 ? (uint64_t)want : 0;
         if (!want) {
             fail();
         }
@@ -900,27 +909,28 @@ struct Vorbis : Dec {
             int k = 0;
             float **o;
             int used = stb_vorbis_decode_frame_pushdata(v, (const uint8_t *)win.data() + at, (int)(win.size() - at), NULL, &o, &k);
-            at += used;
+            at += (size_t)used;
             if (!used && !k && !more()) {
                 return false;
             }
             if (k <= 0 || (sync && woff + at < sync)) {
                 continue;
             }
+            size_t nk = (size_t)k;
             if (sync) {
-                pos = stb_vorbis_get_sample_offset64(v) - k;
+                pos = (uint64_t)stb_vorbis_get_sample_offset64(v) - nk;
                 sync = 0;
             }
             size_t c = channels;
-            left.resize(k * c);
-            for (int i = 0; i < k; i++) {
+            left.resize(nk * c);
+            for (size_t i = 0; i < nk; i++) {
                 for (size_t j = 0; j < c; j++) {
                     left[i * c + j] = o[c <= 8 ? order[c - 1][j] : j][i];
                 }
             }
-            lpos = pos < target ? (size_t)std::min<uint64_t>(k, target - pos) : 0;
+            lpos = pos < target ? (size_t)std::min<uint64_t>(nk, target - pos) : 0;
             pos += lpos;
-            if (lpos < (size_t)k) {
+            if (lpos < nk) {
                 return true;
             }
         }
@@ -938,7 +948,7 @@ struct Vorbis : Dec {
             }
             size_t k = std::min(n - done, have);
             if (want >= 0) {
-                k = (size_t)std::min<uint64_t>(k, want - pos);
+                k = (size_t)std::min<uint64_t>(k, (uint64_t)want - pos);
             }
             put(out + done * c * 4, &left[lpos * c], k * c, 4);
             done += k;
@@ -960,7 +970,7 @@ struct Vorbis : Dec {
             restart();
         } else {
             stb_vorbis_flush_pushdata(v);
-            in_seek(&in, pages[q].at, SEEK_SET);
+            seek_to(&in, pages[q].at);
             win.clear();
             at = 0;
             woff = pages[q].at;
@@ -975,7 +985,7 @@ struct Vorbis : Dec {
 };
 
 static int op_read(void *u, unsigned char *out, int n) {
-    return (int)in_read(u, out, n);
+    return (int)in_read(u, out, (size_t)n);
 }
 
 static int op_seek(void *u, opus_int64 off, int whence) {
@@ -983,7 +993,7 @@ static int op_seek(void *u, opus_int64 off, int whence) {
 }
 
 static opus_int64 op_tell(void *u) {
-    return ((Input *)u)->pos;
+    return (opus_int64)((Input *)u)->pos;
 }
 
 struct Opus : Dec {
@@ -1004,35 +1014,36 @@ struct Opus : Dec {
         }
         chained = op_link_count(of) > 1;
         rate = 48000;
-        channels = op_channel_count(of, -1);
+        channels = (size_t)op_channel_count(of, -1);
         width = 4;
         ogg_int64_t n = op_pcm_total(of, -1);
         if (!n) {
             fail();
         }
-        frames = n > 0 ? n : 0;
+        frames = n > 0 ? (uint64_t)n : 0;
     }
 
     size_t read(char *out, size_t n) {
         float tmp[5760 * 2];
         size_t c = channels, done = 0;
         int k, link;
-        while (!end && done < n && (k = op_read_float(of, tmp, (int)std::min<size_t>(n - done, 5760 * 2 / c) * c, &link)) != 0) {
+        while (!end && done < n && (k = op_read_float(of, tmp, (int)(std::min<size_t>(n - done, 5760 * 2 / c) * c), &link)) != 0) {
             // a chained file can change channel count, k is sized for the new one
-            if (k < 0 || op_channel_count(of, link) != channels) {
+            if (k < 0 || (size_t)op_channel_count(of, link) != channels) {
                 fail();
             }
+            size_t got = (size_t)k;
             if (c > 2 && op_head(of, link)->mapping_family == 1) {
                 float f[8];
-                for (int i = 0; i < k; i++) {
+                for (size_t i = 0; i < got; i++) {
                     for (size_t j = 0; j < c; j++) {
                         f[j] = tmp[i * c + order[c - 1][j]];
                     }
                     memcpy(&tmp[i * c], f, c * sizeof(float));
                 }
             }
-            put(out + done * c * 4, tmp, k * c, 4);
-            done += k;
+            put(out + done * c * 4, tmp, got * c, 4);
+            done += got;
         }
         return done * c * 4;
     }
@@ -1040,7 +1051,7 @@ struct Opus : Dec {
     void seek(uint64_t to) {
         // libopus needs about half a second to decode the same bits as a read from the start, give it two
         uint64_t back = std::min<uint64_t>(to, 96000);
-        end = op_pcm_seek(of, to - back) != 0;
+        end = op_pcm_seek(of, (ogg_int64_t)(to - back)) != 0;
         std::vector<char> tmp(4096 * channels * 4);
         while (back && !end) {
             size_t k = read(tmp.data(), (size_t)std::min<uint64_t>(back, 4096));
@@ -1058,7 +1069,7 @@ static bool ogg_has(const uint8_t *buf, size_t len, const char *magic, size_t n)
 static std::unique_ptr<Decoder> detect(Input in) {
     uint8_t h[512];
     size_t len = in_read(&in, h, sizeof(h));
-    in_seek(&in, 0, SEEK_SET);
+    seek_to(&in, 0);
     std::unique_ptr<Dec> d;
     if (len >= 12 && (!memcmp(h, "RIFF", 4) || !memcmp(h, "RF64", 4)) && !memcmp(h + 8, "WAVE", 4)) {
         d.reset(new Wav);
@@ -1078,7 +1089,7 @@ static std::unique_ptr<Decoder> detect(Input in) {
     }
     d->in = in;
     d->init();
-    if (d->channels < 1 || d->rate < 1) {
+    if (d->channels < 1 || d->channels > 65535 || d->rate < 1) {
         fail();
     }
     return d;
@@ -1107,7 +1118,7 @@ std::unique_ptr<Decoder> open(const std::filesystem::path &path) {
         fclose(in.f);
         throw std::runtime_error("cant open this file");
     }
-    in.len = len;
+    in.len = (uint64_t)len;
     return detect(in);
 }
 
