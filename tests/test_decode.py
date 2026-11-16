@@ -331,6 +331,16 @@ def test_mp3_channels_change(tmp_path):
         _pydub2.decode(st + low)
 
 
+# ffmpeg wants two frames in a row to start, a single frame after the Info frame is not an mp3 to it
+def test_mp3_one_frame(tmp_path):
+    m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k"), "rb").read()
+    path = save(tmp_path, "one.mp3", m[:mp3_frames(m)[2]])
+    with pytest.raises(Exception):
+        AudioSegment.from_file(path)
+    with pytest.raises(pydub2.exceptions.CouldntDecodeError):
+        pydub2.AudioSegment.from_file(path)
+
+
 def test_mp3_starts_inside_the_bit_reservoir(tmp_path):
     m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k", "-write_xing", "0"), "rb").read()
     starts = mp3_frames(m)
