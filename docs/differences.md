@@ -44,7 +44,7 @@
 - Files go to ffmpeg with a `file:` prefix and `-protocol_whitelist`, so a name like `concat:a.wav` is a file name and not a protocol. A URL passed as the file name (`from_file("http://...")`) is not fetched, pydub hands it to ffmpeg and pydub2 looks for a file with that name. A file that starts like an ffconcat script, an HLS playlist or a DASH manifest raises `CouldntDecodeError`. ffmpeg and ffprobe are also given the list of demuxers they may use (`-format_whitelist`), taken from `ffmpeg -demuxers` without hls, dash, concat, imf, sdp, rtsp, rtp and lavfi, so a playlist that is hidden behind a comment or blank lines cannot make them open other files. Asking for one of those with `format=` fails too.
 - `pydub2.max_duration` and `pydub2.ffmpeg_timeout` are new, both off by default.
 - `mul` (`apply_gain`, fades) with a nan factor, or an infinite factor on a zero sample, raises `ValueError`. The result is undefined in audioop. `fade` with a duration far past the end of the audio and `overlay(loop=True)` give the same bytes as pydub, only faster. Sample widths other than 8, 16, 24 and 32 bit that ffprobe reports for a file are read as 16 bit.
-- opusfile 0.12 is patched at build time for CVE-2022-47021 (a null pointer when an allocation fails), the fix is the upstream commit 0a4cd796 and no release has it yet.
+- opusfile 0.12 is patched at build time for CVE-2022-47021 (a null pointer when an allocation fails), the fix is the upstream commit 0a4cd796 and no release has it yet. It also has the fix from opusfile master for a leak on a failed open.
 
 ## Files pydub reads wrongly
 
