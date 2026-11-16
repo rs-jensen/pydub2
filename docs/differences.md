@@ -20,7 +20,7 @@ This page lists where pydub2 does something other than pydub 0.25.1. The short v
 - Chained opus (several opus streams one after the other) decodes without ffmpeg. libopus starts each link fresh where ffmpeg's decoder carries its state across, so a few samples after each join can differ.
 - A chain whose links have another channel count needs ffmpeg.
 - With ffmpeg installed, `from_file` still sends a chained file to ffmpeg. `stream` does not.
-- `rms` of 32 bit audio is summed without fused multiply-add, like audioop on x86. audioop on arm64 (macOS, Linux aarch64) fuses the squares. There a few `rms` values are 1 higher or lower, `dBFS` changes by about 1e-8 dB, and `compress_dynamic_range` can differ by 1 in one 32 bit sample.
+- `rms` of 32 bit audio is summed in a double, and on arm64 some audioop builds fuse the multiply and add of that sum, which moves a few `rms` values by 1 and `dBFS` by about 1e-8 dB. pydub2 does what the audioop of the same platform does, which was measured: fused on macOS arm64 (the stdlib module and the audioop-lts wheel) and in the audioop-lts wheel on Linux aarch64, not fused in the stdlib module on Linux aarch64 (Python 3.12 and older) and not on x86_64. The module picks by Python version when it is imported, so Linux aarch64 follows audioop-lts on Python 3.13 and up and the stdlib below. `detect_silence`, `compress_dynamic_range`, `normalize` and `dBFS` use the same sum. Windows was not measured and is treated as not fused. A python.org or Homebrew Python 3.12 or older on macOS arm64 was not measured either and is treated as fused, like Apple's Python 3.9.
 
 ### Damaged files
 

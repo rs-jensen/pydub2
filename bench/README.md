@@ -24,6 +24,8 @@ Every number is the median of 5 runs, each in a new Python process. If the runs 
 
 Each cell is `wall seconds / cpu seconds, peak MiB`. Peak is the highest resident size of the process and its children, so it includes the interpreter and numpy, about 20 to 40 MiB. The last column is the median 1 minute load average at the start of that row's runs. The machine was not idle: a browser was open, and the load average over all runs was 2.3 at the lowest, 3.4 in the median and 4.3 at the highest. Every run has its own load value in the raw output. 33 of the 313 cells carry a `*`, nearly all of them under 0.2 seconds (import, exporting wav, small copies). Differences of a few milliseconds in those rows mean nothing. The first import after installing a package was slow (up to 8 seconds for PyAV, macOS checking new binaries) and is in the repeats, which the median ignores.
 
+The pydub2 cells of `dsp overlay` and `dsp normalize`, of the 10 minute `load` rows for flac, ogg and opus, of `gradio_in` and `gradio_in_fast` for 10 minute flac and of `export opus` were measured again on 2026-11-17 with the same method, after the changes that made them faster or smaller. The load average was 6 to 8 then, higher than for the rest of the table, so those times are if anything too slow.
+
 When two libraries ran the same case, the harness compared sample counts, sample rate and mean level of the result. They agree within 3 percent everywhere, so the cases do the same work.
 
 The timed part of each case is only the call named in the row. Reading the input and building the `AudioSegment` is not counted for the effects and the silence functions. `gradio_in` is `from_file`, then numpy samples (`np.array(seg.get_array_of_samples())` for the pydubs, shown in a second row `gradio_in_fast` with `to_numpy()` for pydub2). `gradio_out` is numpy bytes to an `AudioSegment` and `export`. The mp3 export of pydub and pydub2 goes through ffmpeg, as it does for every user without `pydub2-mp3`. `n/a` means the library cannot do it. `fail` is a crash: soundfile segfaults on every try to write 10 minutes of stereo to ogg here.
@@ -84,13 +86,13 @@ Rows are named `case input`. `load` reads the whole file, `load10` reads 10 seco
 | case | pydub | pydublts | pydub2 | pydub2mp3 | sf | av | mini | load |
 |---|---|---|---|---|---|---|---|---|
 | import | 0.00493/0.00494s 19M* | 0.005/0.005s 20M | 0.00751/0.00751s 20M | 0.00739/0.0074s 20M* | 0.0361/0.0361s 30M* | 0.0805/0.0805s 36M* | 0.0492/0.0492s 35M* | 3 |
-| dsp overlay speech_60s_s44.wav | 0.00636/0.00634s 80M | 0.00649/0.0065s 80M | 0.0141/0.0141s 81M |  |  |  |  | 3 |
-| dsp normalize speech_60s_s44.wav | 0.0104/0.0104s 40M | 0.00961/0.00961s 39M* | 0.0168/0.0168s 40M |  |  |  |  | 3 |
+| dsp overlay speech_60s_s44.wav | 0.00636/0.00634s 80M | 0.00649/0.0065s 80M | 0.00738/0.00728s 83M |  |  |  |  | 3 |
+| dsp normalize speech_60s_s44.wav | 0.0104/0.0104s 40M | 0.00961/0.00961s 39M* | 0.00878/0.00867s 43M |  |  |  |  | 3 |
 | dsp compress speech_60s_s44.wav | 6.91/6.91s 391M | 6.95/6.95s 392M | 0.0574/0.0574s 41M |  |  |  |  | 3 |
 | dsp lowpass speech_60s_s44.wav | 0.71/0.71s 60M | 0.731/0.729s 60M | 0.017/0.017s 40M |  |  |  |  | 3 |
 | dsp append speech_60s_s44.wav | 1.05/1.05s 1175M | 1.06/1.05s 1164M | 0.00469/0.00469s 30M |  |  |  |  | 3 |
-| dsp overlay speech_10m_s44.wav | 0.0562/0.0562s 423M* | 0.0545/0.0545s 423M | 0.134/0.134s 424M |  |  |  |  | 3 |
-| dsp normalize speech_10m_s44.wav | 0.0994/0.0988s 221M | 0.101/0.101s 221M | 0.155/0.155s 222M |  |  |  |  | 3 |
+| dsp overlay speech_10m_s44.wav | 0.0562/0.0562s 423M* | 0.0545/0.0545s 423M | 0.0539/0.0529s 426M |  |  |  |  | 3 |
+| dsp normalize speech_10m_s44.wav | 0.0994/0.0988s 221M | 0.101/0.101s 221M | 0.0903/0.0895s 224M |  |  |  |  | 3 |
 | dsp compress speech_10m_s44.wav | 69.3/69.3s 3667M* | 69.5/69.4s 3679M* | 0.557/0.555s 223M |  |  |  |  | 3 |
 | dsp lowpass speech_10m_s44.wav | 7.28/7.27s 423M | 7.25/7.25s 423M | 0.165/0.165s 222M |  |  |  |  | 3 |
 | silence detect speech_10m_s44.wav | 70.1/69.9s 126M* | 69.7/69.6s 126M* | 0.139/0.139s 121M |  |  |  |  | 3 |
@@ -101,13 +103,13 @@ Rows are named `case input`. `load` reads the whole file, `load10` reads 10 seco
 | gradio_in speech_60s_s44.flac | 0.116/0.2s 98M | 0.115/0.198s 98M | 0.0299/0.0299s 61M |  |  |  |  | 3 |
 | gradio_in speech_10m_s44.wav | 0.0453/0.0453s 333M* | 0.0436/0.0436s 333M | 0.0357/0.0357s 333M* |  |  |  |  | 3 |
 | gradio_in speech_10m_s44.mp3 | 0.742/1.48s 415M | 0.737/1.49s 422M | 0.373/0.373s 334M |  |  |  |  | 3 |
-| gradio_in speech_10m_s44.flac | 0.305/1.15s 493M | 0.308/1.14s 494M | 0.31/0.31s 445M |  |  |  |  | 3 |
+| gradio_in speech_10m_s44.flac | 0.305/1.15s 493M | 0.308/1.14s 494M | 0.309/0.307s 335M |  |  |  |  | 3 |
 | gradio_in_fast speech_60s_s44.wav |  |  | 0.0313/0.0313s 50M |  |  |  |  | 4 |
 | gradio_in_fast speech_60s_s44.mp3 |  |  | 0.0654/0.0654s 51M |  |  |  |  | 4 |
 | gradio_in_fast speech_60s_s44.flac |  |  | 0.0619/0.0619s 51M |  |  |  |  | 4 |
 | gradio_in_fast speech_10m_s44.wav |  |  | 0.0522/0.0522s 232M |  |  |  |  | 4 |
 | gradio_in_fast speech_10m_s44.mp3 |  |  | 0.396/0.396s 234M |  |  |  |  | 4 |
-| gradio_in_fast speech_10m_s44.flac |  |  | 0.333/0.326s 345M |  |  |  |  | 4 |
+| gradio_in_fast speech_10m_s44.flac |  |  | 0.291/0.288s 235M |  |  |  |  | 4 |
 | gradio_out wav speech_60s_s44.wav | 0.00254/0.00224s 51M* | 0.00243/0.00232s 51M* | 0.00239/0.00223s 51M |  |  |  |  | 2 |
 | gradio_out mp3 speech_60s_s44.wav | 0.709/0.736s 76M | 0.711/0.746s 76M | 0.718/0.801s 86M | 0.578/0.577s 79M* |  |  |  | 2 |
 | gradio_out wav speech_10m_s44.wav | 0.0245/0.0238s 232M | 0.0251/0.0237s 232M | 0.026/0.0247s 233M |  |  |  |  | 3 |
@@ -118,12 +120,12 @@ Rows are named `case input`. `load` reads the whole file, `load10` reads 10 seco
 | export flac speech_60s_s44.wav | 0.185/0.2s 76M | 0.186/0.2s 75M | 0.0679/0.0676s 57M |  | 0.0752/0.0743s 41M | 0.161/0.16s 64M | n/a | 3 |
 | export mp3 speech_60s_s44.wav | 0.717/0.747s 66M | 0.719/0.749s 66M | 0.709/0.785s 76M | 0.576/0.576s 68M | 0.526/0.526s 41M | 0.636/0.635s 59M | n/a | 3 |
 | export ogg speech_60s_s44.wav | 0.66/0.748s 65M | 0.644/0.722s 66M | 0.473/0.473s 64M |  | 1.18/1.17s 72M | n/a | n/a | 3 |
-| export opus speech_60s_s44.wav | 0.562/0.631s 66M | 0.562/0.631s 66M | 0.941/0.941s 64M |  | n/a | 2.12/2.11s 61M | n/a | 3 |
+| export opus speech_60s_s44.wav | 0.562/0.631s 66M | 0.562/0.631s 66M | 0.614/0.611s 66M |  | n/a | 2.12/2.11s 61M | n/a | 3 |
 | export wav speech_10m_s44.wav | 0.0135/0.0131s 132M | 0.0139/0.0131s 131M | 0.0136/0.0134s 132M |  | 0.0149/0.0134s 132M | 0.114/0.107s 148M | 0.0248/0.0242s 339M | 3 |
 | export flac speech_10m_s44.wav | 1.08/1.23s 208M | 1.08/1.24s 208M | 0.674/0.672s 277M |  | 0.753/0.75s 132M | 0.871/0.87s 156M | n/a | 3 |
 | export mp3 speech_10m_s44.wav | 6.46/6.77s 165M | 6.46/6.8s 165M | 6.46/7.26s 267M | 5.79/5.79s 374M | 5.24/5.22s 132M | 5.63/5.62s 150M | n/a | 3 |
 | export ogg speech_10m_s44.wav | 5.82/6.59s 164M | 5.78/6.59s 164M | 4.72/4.71s 356M |  | fail | n/a | n/a | 4 |
-| export opus speech_10m_s44.wav | 4.85/5.5s 164M | 4.8/5.48s 164M | 9.37/9.37s 361M |  | n/a | 20.4/20.4s 153M | n/a | 3 |
+| export opus speech_10m_s44.wav | 4.85/5.5s 164M | 4.8/5.48s 164M | 6.17/6.15s 363M |  | n/a | 20.4/20.4s 153M | n/a | 3 |
 | load10 speech_60s_s44.wav | 0.0387/0.0387s 52M | 0.0394/0.0394s 52M | 0.0375/0.0373s 32M |  | 0.0372/0.0369s 32M | 0.137/0.134s 50M | 0.0495/0.049s 39M | 3 |
 | load10 speech_60s_s44.flac | 0.146/0.187s 59M* | 0.138/0.156s 59M | 0.0413/0.0412s 32M |  | 0.0448/0.0448s 33M | 0.119/0.119s 49M | 0.0555/0.0555s 39M | 3 |
 | load10 speech_60s_s44.mp3 | 0.17/0.192s 58M | 0.15/0.163s 58M | 0.042/0.042s 32M |  | 0.0454/0.0454s 32M | 0.123/0.123s 50M | 0.0639/0.0639s 39M | 3 |
@@ -140,18 +142,18 @@ Rows are named `case input`. `load` reads the whole file, `load10` reads 10 seco
 | load speech_60s_s44.ogg | 0.205/0.341s 115M | 0.208/0.345s 115M | 0.0851/0.0851s 51M |  | 0.111/0.111s 40M* | 0.182/0.182s 68M | 0.1/0.0994s 64M | 4 |
 | load speech_60s_s44.opus | 0.254/0.347s 120M | 0.263/0.351s 121M | 0.131/0.131s 54M |  | 0.364/0.364s 42M | 0.222/0.221s 70M | n/a | 4 |
 | load speech_10m_s44.wav | 0.0605/0.0605s 231M | 0.0617/0.0617s 232M | 0.051/0.051s 132M |  | 0.054/0.0531s 132M | 0.216/0.216s 251M | 0.0808/0.0808s 302M | 4 |
-| load speech_10m_s44.flac | 0.322/1.16s 393M | 0.318/1.16s 392M | 0.329/0.329s 243M |  | 0.523/0.523s 131M | 0.65/0.65s 250M | 0.388/0.388s 301M | 4 |
+| load speech_10m_s44.flac | 0.322/1.16s 393M | 0.318/1.16s 392M | 0.319/0.318s 133M |  | 0.523/0.523s 131M | 0.65/0.65s 250M | 0.388/0.388s 301M | 4 |
 | load speech_10m_s44.mp3 | 0.761/1.48s 369M | 0.744/1.5s 369M | 0.397/0.397s 133M |  | 0.526/0.525s 132M | 0.709/0.709s 256M | 0.311/0.311s 301M | 3 |
-| load speech_10m_s44.ogg | 0.858/2.28s 677M | 0.864/2.28s 677M | 0.549/0.549s 443M |  | 0.792/0.791s 131M | 0.844/0.844s 262M | 0.524/0.524s 301M | 4 |
-| load speech_10m_s44.opus | 1.37/2.29s 731M | 1.38/2.31s 731M | 0.965/0.964s 475M |  | 3.33/3.33s 140M | 1.23/1.22s 283M | n/a | 4 |
+| load speech_10m_s44.ogg | 0.858/2.28s 677M | 0.864/2.28s 677M | 0.536/0.534s 237M |  | 0.792/0.791s 131M | 0.844/0.844s 262M | 0.524/0.524s 301M | 4 |
+| load speech_10m_s44.opus | 1.37/2.29s 731M | 1.38/2.31s 731M | 0.958/0.955s 253M |  | 3.33/3.33s 140M | 1.23/1.22s 283M | n/a | 4 |
 | load music_60s_s44.wav | 0.0394/0.0394s 50M | 0.0392/0.0392s 51M* | 0.0403/0.0403s 41M |  | 0.0376/0.0376s 40M | 0.142/0.142s 67M | 0.0545/0.0531s 64M | 4 |
 | load music_60s_s44.flac | 0.157/0.245s 88M | 0.158/0.25s 88M | 0.0669/0.0669s 40M |  | 0.0868/0.0868s 41M | 0.165/0.165s 66M | 0.0862/0.0861s 64M | 4 |
 | load music_60s_s44.mp3 | 0.193/0.275s 84M | 0.196/0.278s 84M | 0.0748/0.0745s 41M |  | 0.0806/0.0805s 41M | 0.168/0.168s 68M | 0.0763/0.0763s 63M | 4 |
 | load music_60s_s44.ogg | 0.207/0.35s 115M | 0.207/0.348s 115M | 0.085/0.0849s 52M |  | 0.103/0.103s 41M | 0.187/0.187s 70M | 0.0973/0.0973s 64M | 4 |
 | load music_60s_s44.opus | 0.264/0.357s 120M | 0.262/0.355s 120M | 0.144/0.144s 53M |  | 0.404/0.404s 42M* | 0.229/0.229s 70M | n/a | 4 |
 | load music_10m_s44.wav | 0.0616/0.0616s 232M | 0.0616/0.0615s 232M | 0.0522/0.0522s 132M |  | 0.0502/0.0502s 131M | 0.211/0.211s 250M | 0.08/0.0797s 301M | 4 |
-| load music_10m_s44.flac | 0.319/1.17s 393M | 0.322/1.17s 393M | 0.343/0.343s 244M |  | 0.554/0.554s 131M | 0.661/0.661s 250M | 0.411/0.41s 302M | 4 |
+| load music_10m_s44.flac | 0.319/1.17s 393M | 0.322/1.17s 393M | 0.336/0.336s 133M |  | 0.554/0.554s 131M | 0.661/0.661s 250M | 0.411/0.41s 302M | 4 |
 | load music_10m_s44.mp3 | 0.726/1.46s 369M | 0.724/1.52s 369M | 0.376/0.376s 132M |  | 0.471/0.471s 131M | 0.692/0.692s 256M | 0.3/0.3s 269M | 4 |
-| load music_10m_s44.ogg | 0.854/2.28s 676M | 0.86/2.29s 677M | 0.532/0.532s 444M |  | 0.719/0.719s 131M | 0.868/0.867s 274M | 0.516/0.516s 302M | 4 |
-| load music_10m_s44.opus | 1.42/2.33s 731M | 1.42/2.32s 731M | 1.1/1.1s 475M |  | 3.66/3.65s 141M | 1.31/1.3s 283M | n/a | 4 |
+| load music_10m_s44.ogg | 0.854/2.28s 676M | 0.86/2.29s 677M | 0.53/0.53s 236M |  | 0.719/0.719s 131M | 0.868/0.867s 274M | 0.516/0.516s 302M | 4 |
+| load music_10m_s44.opus | 1.42/2.33s 731M | 1.42/2.32s 731M | 1.1/1.1s 252M |  | 3.66/3.65s 141M | 1.31/1.3s 283M | n/a | 4 |
 

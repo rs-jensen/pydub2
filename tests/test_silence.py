@@ -137,3 +137,8 @@ def test_matches_naive_walk():
         db = 20 * math.log10(r / 2 ** (8 * width - 1)) + rnd.choice([0, 0, 1e-9, -1e-9, 0.01, -0.01, 3])
         want = naive(data, rate, channels, width, min_len, db, step)
         assert ours(data, rate, channels, width, min_len, db, step) == want
+
+
+def test_32_bit_sum_rounds_like_audioop():
+    data = (-1520301996).to_bytes(4, "little", signed=True) * 25518
+    assert ours(data, 85061, 2, 4, 90, -3, 1) == theirs(data, 85061, 2, 4, 90, -3, 1) == [[0, 150]]

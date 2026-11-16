@@ -41,7 +41,7 @@ struct Decoder {
     size_t width = 0;
     bool chained = false; // opus with more than one link, libopus starts each link fresh where ffmpeg decodes across
     uint64_t frames = 0; // what a read from the start gives, from the header for flac and opus so it can lie
-    bool exact = false; // frames is counted from the file, a reader can size a buffer from it
+    bool exact = false; // frames is counted or fits the file size, a reader can size a buffer from it
     virtual ~Decoder() {}
     // up to n frames into out, returns bytes. less only at the end
     virtual size_t read(char *out, size_t n) = 0;
@@ -62,7 +62,9 @@ void encode(const Audio &a, const std::string &format, int bitrate, const Tags &
 
 // pcm.cpp
 // these do the same math as the old audioop module so the numbers match pydub
-long long rms(std::string_view data, size_t width);
+// fused is audioops fused multiply add in the sum of squares, only the arm64 builds have it
+double sumsq(std::string_view data, size_t width, bool fused);
+long long rms(std::string_view data, size_t width, bool fused);
 long long max(std::string_view data, size_t width);
 void mul(std::string_view data, size_t width, double factor, const Alloc &alloc);
 void add(std::string_view a, std::string_view b, size_t width, const Alloc &alloc);
@@ -79,16 +81,19 @@ void bias(std::string_view data, size_t width, int bias, const Alloc &alloc);
 void lowpass(std::string_view data, size_t width, size_t channels, double alpha, const Alloc &alloc);
 void highpass(std::string_view data, size_t width, size_t channels, double alpha, const Alloc &alloc);
 void compress(std::string_view data, size_t width, size_t channels, double thresh, double ratio, double attack_frames,
-              double release_frames, long long look, const Cancel &cancel, const Alloc &alloc);
+              double release_frames, long long look, bool fused, const Cancel &cancel, const Alloc &alloc);
 // state is always None in pydub so there is none here
 void ratecv(std::string_view data, size_t width, size_t channels, int inrate, int outrate, const Alloc &alloc);
 
 // silence.cpp
 // same walk as pydub.silence.detect_silence, thresh is in dBFS
-Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh, int seek_step, const Cancel &cancel);
+Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh, int seek_step, bool fused, const Cancel &cancel);
 
 // resample.cpp
 void resample(const Audio &a, int new_rate, const Cancel &cancel, const Alloc &alloc);
+// the same result, handed over in pieces that are only good until the call returns
+typedef std::function<void(std::string_view)> Piece;
+void resample_each(const Audio &a, int new_rate, const Cancel &cancel, const Piece &emit);
 
 // loudness.cpp
 // integrated loudness in LUFS (EBU R128)

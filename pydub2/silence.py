@@ -53,7 +53,7 @@ def detect_silence(audio_segment, min_silence_len=1000, silence_thresh=-16, seek
     if seek_step == 0:
         raise ValueError("seek_step cant be 0")
     rate = audio_segment.frame_rate
-    if seek_step < 0 or min_silence_len < 0 or not float(rate).is_integer():
+    if seek_step < 0 or min_silence_len < 0 or rate < 0 or not float(rate).is_integer():
         return _detect_silence_slow(audio_segment, min_silence_len, silence_thresh, seek_step)
     return _pydub2.detect_silence(audio_segment.raw_data, int(rate),
                                   audio_segment.channels, audio_segment.sample_width,

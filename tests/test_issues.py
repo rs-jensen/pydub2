@@ -275,12 +275,10 @@ def test_speedup_chunk_size_1_raises_like_pydub(args):
     assert raises(lambda: new.speedup(chunk_size=1)) == "ZeroDivisionError" == raises(lambda: old.speedup(chunk_size=1))
 
 
-def test_rms_of_32_bit_does_not_fuse_the_squares():
+def test_rms_of_32_bit_sums_like_the_audioop_of_the_platform():
+    audioop = pytest.importorskip("audioop")
     data = (2122901605).to_bytes(4, "little") * 7
-    total = 0.0
-    for _ in range(7):
-        total += 2122901605.0 * 2122901605.0
-    assert pydub2.AudioSegment(data, sample_width=4, frame_rate=16000, channels=1).rms == int((total / 7) ** 0.5)
+    assert pydub2.AudioSegment(data, sample_width=4, frame_rate=16000, channels=1).rms == audioop.rms(data, 4)
 
 
 @pytest.mark.parametrize("call", [lambda s: s.set_sample_width(-1), lambda s: s.set_sample_width(-5), lambda s: s.set_sample_width(5),

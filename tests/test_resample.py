@@ -91,3 +91,13 @@ def test_24_bit_same_as_32():
     got = np.array([int.from_bytes(bytes(r), "little", signed=True) for r in out], float) * 256
     assert len(got) == len(ref)
     assert np.abs(got - ref).max() < 512
+
+
+@pytest.mark.parametrize("rate,new_rate", [(44100, 16000), (8000, 16000), (16000, 48000)])
+def test_long_input_has_no_seam(rate, new_rate):
+    # more than a million frames, so it goes through libsamplerate in more than one piece
+    data = sine(rate, 300, 2500000 / rate, 2, 2)
+    out = to_array(resample(data, rate, 2, 2, new_rate), 2, 2)
+    assert len(out) == round(2500000 * new_rate / rate)
+    step = np.abs(np.diff(out[:, 0]))
+    assert step.max() < 1.2 * 2 * math.pi * 300 / new_rate * 0.5 * 32767

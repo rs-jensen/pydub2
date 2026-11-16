@@ -15,6 +15,7 @@ using namespace pydub2;
 
 // signals only reach the main thread, the others get a check that does nothing
 static unsigned long main_thread;
+static bool fused_rms = false;
 
 // every 100 ms the long loops take the gil to let python run its signal handlers
 static Cancel interrupt() {
@@ -90,12 +91,12 @@ struct Stream {
 };
 
 // n frames or all that is left, decoded straight into the bytes python gets
-// the header can lie about frames, so only 64 MB is sized from it and the rest grows, unless d.exact
+// the header can lie about frames, so unless d.exact it is only used for n frames and the whole file comes in pieces
 static nb::bytes take(Stream &s, int64_t n) {
     Decoder &d = *s.d;
     size_t fw = d.channels * d.width;
     uint64_t left = n >= 0 ? (uint64_t)n : UINT64_MAX;
-    size_t room = std::min<uint64_t>(n >= 0 ? left : d.frames, n < 0 && d.exact ? UINT64_MAX : ((size_t)64 << 20) / fw) * fw, got = 0;
+    size_t room = (n < 0 ? (d.exact ? d.frames : 0) : std::min<uint64_t>(left, d.exact ? d.frames : ((size_t)64 << 20) / fw)) * fw, got = 0;
     nb::object out = blank(room);
     std::vector<std::string> rest; // pieces, one string that grows would copy itself and hold twice the memory
     size_t more = 0;
@@ -146,6 +147,12 @@ static nb::bytes take(Stream &s, int64_t n) {
 
 NB_MODULE(_pydub2, m) {
     main_thread = nb::cast<unsigned long>(nb::module_::import_("threading").attr("main_thread")().attr("ident"));
+    // the audioop of the user: fused on arm64 macOS, on arm64 linux only in the audioop-lts wheel of python 3.13 and up
+#if defined(__aarch64__) && defined(__APPLE__)
+    fused_rms = true;
+#elif defined(__aarch64__)
+    fused_rms = nb::cast<int>(nb::module_::import_("sys").attr("version_info")[1]) >= 13;
+#endif
 
     nb::class_<Stream>(m, "Decoder")
         .def("__init__", [](Stream *s, nb::bytes data) {
@@ -214,7 +221,7 @@ NB_MODULE(_pydub2, m) {
     m.def("rms", [](nb::bytes data, long long width) {
         std::string_view s = str(data);
         nb::gil_scoped_release g;
-        return rms(s, width);
+        return rms(s, width, fused_rms);
     });
 
     m.def("max", [](nb::bytes data, long long width) {
@@ -260,7 +267,7 @@ NB_MODULE(_pydub2, m) {
         Cancel cancel = interrupt();
         try {
             nb::gil_scoped_release g;
-            compress(s, width, channels, thresh, ratio, attack_frames, release_frames, look, cancel, into(out));
+            compress(s, width, channels, thresh, ratio, attack_frames, release_frames, look, fused_rms, cancel, into(out));
         } catch (std::domain_error &e) {
             // pydub divides by a threshold of 0 in python
             PyErr_SetString(PyExc_ZeroDivisionError, e.what());
@@ -361,7 +368,7 @@ NB_MODULE(_pydub2, m) {
         Ranges r;
         {
             nb::gil_scoped_release g;
-            r = detect_silence(a, min_silence_len, silence_thresh, seek_step, interrupt());
+            r = detect_silence(a, min_silence_len, silence_thresh, seek_step, fused_rms, interrupt());
         }
         return ranges(r);
     });
