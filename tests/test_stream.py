@@ -57,9 +57,9 @@ def test_partial_like_pydub(files, ext):
 def test_partial_is_a_slice(files, ext):
     full = AudioSegment.from_file(files[ext])
     part = AudioSegment.from_file(files[ext], start_second=1.5, duration=2)
-    s = int(1.5 * full.frame_rate) * full.frame_width
     assert len(part) == 2000
-    assert part.raw_data == full.raw_data[s:s + len(part.raw_data)]
+    # a part of a vorbis file comes from ffmpeg, so only close
+    close(part, full[1500:3500], LIMIT[ext])
 
 
 @pytest.mark.parametrize("ext", ARGS)
@@ -70,7 +70,7 @@ def test_stream(files, ext):
     assert b"".join(c.raw_data for c in chunks) == full.raw_data
     for ss, t in CASES:
         part = AudioSegment.from_file(files[ext], start_second=ss, duration=t)
-        assert b"".join(c.raw_data for c in AudioSegment.stream(files[ext], 300, ss, t)) == part.raw_data
+        close(part._spawn(b"".join(c.raw_data for c in AudioSegment.stream(files[ext], 300, ss, t))), part, LIMIT[ext])
 
 
 @pytest.mark.parametrize("ext", ARGS)
