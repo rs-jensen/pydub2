@@ -36,7 +36,10 @@ jobs:
         with:
           python-version: "3.13"
       - if: runner.os == 'Windows'
-        run: choco install ffmpeg -y --no-progress
+        shell: bash
+        run: |
+          for i in 1 2 3; do command -v ffmpeg && break; choco install ffmpeg -y --no-progress; done
+          ffmpeg -version | head -n 1
       - if: runner.os == 'macOS'
         run: brew install ffmpeg
       - run: pip install . pytest pydub audioop-lts numpy

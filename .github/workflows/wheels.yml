@@ -33,7 +33,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - if: runner.os == 'Windows'
-        run: choco install ffmpeg -y --no-progress
+        shell: bash
+        run: |
+          for i in 1 2 3; do command -v ffmpeg && break; choco install ffmpeg -y --no-progress; done
+          ffmpeg -version | head -n 1
       - if: runner.os == 'macOS'
         run: brew install ffmpeg
       - if: runner.os != 'Linux'
