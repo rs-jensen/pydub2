@@ -36,6 +36,21 @@ that tag is MIT, Copyright (c) 2020-present Silero Team.
 
 Two vendored files have a small change so that opening files from several threads does not write shared tables at the same time: `src/third_party/stb_vorbis.c` (`crc32_init` is called once from `src/decode.cpp`) and `src/third_party/ebur128.c` (the static constants are written only by the first `ebur128_init`, which `src/loudness.cpp` makes once before any other).
 
+opusfile 0.12 is patched at build time by `cmake/opusfile_patch.cmake`: the fix for CVE-2022-47021 (xiph/opusfile 0a4cd796) and the fix from xiph/opusfile master for the tags a failed open leaked.
+
+`src/third_party/dr_mp3.h` has small changes so that it decodes like ffmpeg. Each one is marked with a `pydub2:` comment:
+
+- a short granule ignores its own scfsi bits but no longer clears the ones of the next granule
+- the private bits in front of the scfsi bits are skipped, minimp3 read them as scfsi of granule 0
+- MPEG 2 intensity stereo: the highest scalefactor value is a position like any other, only 16 and up are illegal
+- a frame whose granules claim more bits than it has is decoded, not dropped. The huffman decoder stops at the end of
+  the data before each pair and each quad, reads zeros after it, and drops a last quad that ran past its granule
+- after such a frame the bit reservoir is the end of its data
+- scfsi copies the scalefactors of the last granule 0 that was decoded, which `src/decode.cpp` can mark as zeroed
+  (the new fields `zeroed` and `scf0` in `drmp3dec`)
+- a frame cut short at the end of the file is decoded up to the cut (the new fields `missing` and `have`), a granule
+  that starts in the bit reservoir reads zeros past it like ffmpeg
+
 The mp3 encoder is not part of this package. It is in the separate package pydub2-mp3 (LAME 3.100,
 LGPL-2.0-or-later) and is loaded at runtime. It is its own shared library, built from the unmodified
 release tarball, and its LICENSE has the full LGPL text, the source and how to replace it.

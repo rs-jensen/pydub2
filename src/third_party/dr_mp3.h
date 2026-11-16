@@ -300,6 +300,8 @@ typedef struct
     int reserv, free_format_bytes;
     drmp3_uint8 header[4], reserv_buf[511];
     drmp3dec_scratch scratch;
+    int zeroed, missing, have; /* pydub2: zeroed granules, zero filled bytes of a cut frame, reservoir bytes used */
+    drmp3_uint8 scf0[2][39]; /* pydub2: scalefactors of the last granule 0 */
 } drmp3dec;
 
 /* Initializes a low level decoder. */
@@ -1101,7 +1103,7 @@ static int drmp3_L3_read_side_info(drmp3_bs *bs, drmp3_L3_gr_info *gr, const drm
     };
 
     unsigned tables, scfsi = 0;
-    int main_data_begin, part_23_sum = 0;
+    int main_data_begin;
     int gr_count = DRMP3_HDR_IS_MONO(hdr) ? 1 : 2;
     int sr_idx = DRMP3_HDR_GET_MY_SAMPLE_RATE(hdr); sr_idx -= (sr_idx != 0);
 
@@ -1109,7 +1111,7 @@ static int drmp3_L3_read_side_info(drmp3_bs *bs, drmp3_L3_gr_info *gr, const drm
     {
         gr_count *= 2;
         main_data_begin = drmp3_bs_get_bits(bs, 9);
-        scfsi = drmp3_bs_get_bits(bs, 7 + gr_count);
+        scfsi = drmp3_bs_get_bits(bs, 7 + gr_count) & (gr_count == 2 ? 15 : 255); /* pydub2: ffmpeg skips the private bits */
     } else
     {
         main_data_begin = drmp3_bs_get_bits(bs, 8 + gr_count) >> gr_count;
@@ -1122,7 +1124,6 @@ static int drmp3_L3_read_side_info(drmp3_bs *bs, drmp3_L3_gr_info *gr, const drm
             scfsi <<= 4;
         }
         gr->part_23_length = (drmp3_uint16)drmp3_bs_get_bits(bs, 12);
-        part_23_sum += gr->part_23_length;
         gr->big_values = (drmp3_uint16)drmp3_bs_get_bits(bs,  9);
         if (gr->big_values > 288)
         {
@@ -1145,7 +1146,7 @@ static int drmp3_L3_read_side_info(drmp3_bs *bs, drmp3_L3_gr_info *gr, const drm
             gr->region_count[1] = 255;
             if (gr->block_type == DRMP3_SHORT_BLOCK_TYPE)
             {
-                scfsi &= 0x0F0F;
+                scfsi &= 0x0FFF; /* pydub2: was 0x0F0F, like ffmpeg only this granule ignores scfsi */
                 if (!gr->mixed_block_flag)
                 {
                     gr->region_count[0] = 8;
@@ -1184,11 +1185,7 @@ static int drmp3_L3_read_side_info(drmp3_bs *bs, drmp3_L3_gr_info *gr, const drm
         gr++;
     } while(--gr_count);
 
-    if (part_23_sum + bs->pos > bs->limit + main_data_begin*8)
-    {
-        return -1;
-    }
-
+    /* pydub2: no check that the granules fit in the data, ffmpeg decodes those and the huffman decoder stops at the end */
     return main_data_begin;
 }
 
@@ -1210,7 +1207,7 @@ static void drmp3_L3_read_scalefactors(drmp3_uint8 *scf, drmp3_uint8 *ist_pos, c
                 DRMP3_ZERO_MEMORY(ist_pos, cnt);
             } else
             {
-                int max_scf = (scfsi < 0) ? (1 << bits) - 1 : -1;
+                int max_scf = -1; /* pydub2: was (1 << bits) - 1 for mpeg 2, ffmpeg keeps those as positions */
                 for (k = 0; k < cnt; k++)
                 {
                     int s = drmp3_bs_get_bits(bitbuf, bits);
@@ -1336,7 +1333,7 @@ static float drmp3_L3_pow_43(int x)
     return g_drmp3_pow43[16 + ((x + sign) >> 6)]*(1.f + frac*((4.f/3) + frac*(2.f/9)))*mult;
 }
 
-static void drmp3_L3_huffman(float *dst, drmp3_bs *bs, const drmp3_L3_gr_info *gr_info, const float *scf, int layer3gr_limit)
+static void drmp3_L3_huffman(float *dst, drmp3_bs *bs, const drmp3_L3_gr_info *gr_info, const float *scf, int layer3gr_limit, int end, int data) /* pydub2: end, data */
 {
     static const drmp3_int16 tabs[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         785,785,785,785,784,784,784,784,513,513,513,513,513,513,513,513,256,256,256,256,256,256,256,256,256,256,256,256,256,256,256,256,
@@ -1361,14 +1358,15 @@ static void drmp3_L3_huffman(float *dst, drmp3_bs *bs, const drmp3_L3_gr_info *g
 
 #define DRMP3_PEEK_BITS(n)    (bs_cache >> (32 - (n)))
 #define DRMP3_FLUSH_BITS(n)   { bs_cache <<= (n); bs_sh += (n); }
-#define DRMP3_CHECK_BITS      while (bs_sh >= 0) { bs_cache |= (drmp3_uint32)*bs_next_ptr++ << bs_sh; bs_sh -= 8; }
+#define DRMP3_BYTE(p)         ((p) < bs->buf + data/8 ? *(p) : 0) /* pydub2: zeros past the data like ffmpeg */
+#define DRMP3_CHECK_BITS      while (bs_sh >= 0) { bs_cache |= (drmp3_uint32)DRMP3_BYTE(bs_next_ptr) << bs_sh; bs_next_ptr++; bs_sh -= 8; } /* pydub2: DRMP3_BYTE */
 #define DRMP3_BSPOS           ((bs_next_ptr - bs->buf)*8 - 24 + bs_sh)
 
-    float one = 0.0f;
+    float one = 0.0f, *count1; /* pydub2: count1 */
     int ireg = 0, big_val_cnt = gr_info->big_values;
     const drmp3_uint8 *sfb = gr_info->sfbtab;
     const drmp3_uint8 *bs_next_ptr = bs->buf + bs->pos/8;
-    drmp3_uint32 bs_cache = (((bs_next_ptr[0]*256u + bs_next_ptr[1])*256u + bs_next_ptr[2])*256u + bs_next_ptr[3]) << (bs->pos & 7);
+    drmp3_uint32 bs_cache = (((DRMP3_BYTE(bs_next_ptr)*256u + DRMP3_BYTE(bs_next_ptr + 1))*256u + DRMP3_BYTE(bs_next_ptr + 2))*256u + DRMP3_BYTE(bs_next_ptr + 3)) << (bs->pos & 7);
     int pairs_to_decode, np, bs_sh = (bs->pos & 7) - 8;
     bs_next_ptr += 4;
 
@@ -1389,6 +1387,7 @@ static void drmp3_L3_huffman(float *dst, drmp3_bs *bs, const drmp3_L3_gr_info *g
                 {
                     int j, w = 5;
                     int leaf = codebook[DRMP3_PEEK_BITS(w)];
+                    if (DRMP3_BSPOS >= end) goto done; /* pydub2: like ffmpeg stop at the end of the data */
                     while (leaf < 0)
                     {
                         DRMP3_FLUSH_BITS(w);
@@ -1426,6 +1425,7 @@ static void drmp3_L3_huffman(float *dst, drmp3_bs *bs, const drmp3_L3_gr_info *g
                 {
                     int j, w = 5;
                     int leaf = codebook[DRMP3_PEEK_BITS(w)];
+                    if (DRMP3_BSPOS >= end) goto done; /* pydub2: like ffmpeg stop at the end of the data */
                     while (leaf < 0)
                     {
                         DRMP3_FLUSH_BITS(w);
@@ -1446,19 +1446,24 @@ static void drmp3_L3_huffman(float *dst, drmp3_bs *bs, const drmp3_L3_gr_info *g
         }
     }
 
-    for (np = 1 - big_val_cnt;; dst += 4)
+    for (np = 1 - big_val_cnt, count1 = dst;; dst += 4)
     {
         const drmp3_uint8 *codebook_count1 = (gr_info->count1_table) ? tab33 : tab32;
         int leaf = codebook_count1[DRMP3_PEEK_BITS(4)];
+        /* pydub2: like ffmpeg stop at the end of the data, and drop the last quad if it ran past the granule */
+        if (DRMP3_BSPOS >= end)
+        {
+            if (DRMP3_BSPOS > layer3gr_limit && dst > count1)
+            {
+                dst[-4] = dst[-3] = dst[-2] = dst[-1] = 0;
+            }
+            break;
+        }
         if (!(leaf & 8))
         {
             leaf = codebook_count1[(leaf >> 3) + (bs_cache << 4 >> (32 - (leaf & 3)))];
         }
         DRMP3_FLUSH_BITS(leaf & 7);
-        if (DRMP3_BSPOS > layer3gr_limit)
-        {
-            break;
-        }
 #define DRMP3_RELOAD_SCALEFACTOR  if (!--np) { np = *sfb++/2; if (!np) break; one = *scf++; }
 #define DRMP3_DEQ_COUNT1(s) if (leaf & (128 >> s)) { dst[s] = ((drmp3_int32)bs_cache < 0) ? -one : one; DRMP3_FLUSH_BITS(1) }
         DRMP3_RELOAD_SCALEFACTOR;
@@ -1470,6 +1475,7 @@ static void drmp3_L3_huffman(float *dst, drmp3_bs *bs, const drmp3_L3_gr_info *g
         DRMP3_CHECK_BITS;
     }
 
+done: /* pydub2: the end checks jump here */
     bs->pos = layer3gr_limit;
 }
 
@@ -1538,7 +1544,7 @@ static void drmp3_L3_stereo_top_band(const float *right, const drmp3_uint8 *sfb,
 static void drmp3_L3_stereo_process(float *left, const drmp3_uint8 *ist_pos, const drmp3_uint8 *sfb, const drmp3_uint8 *hdr, int max_band[3], int mpeg2_sh)
 {
     static const float g_pan[7*2] = { 0,1,0.21132487f,0.78867513f,0.36602540f,0.63397460f,0.5f,0.5f,0.63397460f,0.36602540f,0.78867513f,0.21132487f,1,0 };
-    unsigned i, max_pos = DRMP3_HDR_TEST_MPEG1(hdr) ? 7 : 64;
+    unsigned i, max_pos = DRMP3_HDR_TEST_MPEG1(hdr) ? 7 : 16; /* pydub2: was 64, ffmpeg calls 16 and up illegal */
 
     for (i = 0; sfb[i]; i++)
     {
@@ -1809,7 +1815,9 @@ static void drmp3_L3_imdct_gr(float *grbuf, float *overlap, unsigned block_type,
 static void drmp3_L3_save_reservoir(drmp3dec *h, drmp3dec_scratch *s)
 {
     int pos = (s->bs.pos + 7)/8u;
-    int remains = s->bs.limit/8u - pos;
+    int remains;
+    if (pos > s->bs.limit/8) pos = 0; /* pydub2: the granules ran past the data, ffmpeg then keeps the end */
+    remains = s->bs.limit/8u - pos;
     if (remains > DRMP3_MAX_BITRESERVOIR_BYTES)
     {
         pos += remains - DRMP3_MAX_BITRESERVOIR_BYTES;
@@ -1828,6 +1836,7 @@ static int drmp3_L3_restore_reservoir(drmp3dec *h, drmp3_bs *bs, drmp3dec_scratc
     int bytes_have = DRMP3_MIN(h->reserv, main_data_begin);
     DRMP3_COPY_MEMORY(s->maindata, h->reserv_buf + DRMP3_MAX(0, h->reserv - main_data_begin), DRMP3_MIN(h->reserv, main_data_begin));
     DRMP3_COPY_MEMORY(s->maindata + bytes_have, bs->buf + bs->pos/8, frame_bytes);
+    h->have = bytes_have; /* pydub2: for the end of the data in huffman */
     drmp3_bs_init(&s->bs, s->maindata, bytes_have + frame_bytes);
     return h->reserv >= main_data_begin;
 }
@@ -1839,8 +1848,11 @@ static void drmp3_L3_decode(drmp3dec *h, drmp3dec_scratch *s, drmp3_L3_gr_info *
     for (ch = 0; ch < nch; ch++)
     {
         int layer3gr_limit = s->bs.pos + gr_info[ch].part_23_length;
+        /* pydub2: a granule that starts in the reservoir reads zeros past the data, like ffmpeg's clamped reader */
+        int data = DRMP3_MAX(0, s->bs.limit - h->missing*8);
+        int end = s->bs.pos >= h->have*8 ? DRMP3_MIN(layer3gr_limit, data) : layer3gr_limit > data + 8 ? INT_MAX : layer3gr_limit;
         drmp3_L3_decode_scalefactors(h->header, s->ist_pos[ch], &s->bs, gr_info + ch, s->scf, ch);
-        drmp3_L3_huffman(s->grbuf[ch], &s->bs, gr_info + ch, s->scf, layer3gr_limit);
+        drmp3_L3_huffman(s->grbuf[ch], &s->bs, gr_info + ch, s->scf, layer3gr_limit, end, data);
     }
 
     if (DRMP3_HDR_TEST_I_STEREO(h->header))
@@ -2370,7 +2382,16 @@ DRMP3_API int drmp3dec_decode_frame(drmp3dec *dec, const drmp3_uint8 *mp3, int m
             for (igr = 0; igr < (DRMP3_HDR_TEST_MPEG1(hdr) ? 2 : 1); igr++, pcm = DRMP3_OFFSET_PTR(pcm, sizeof(drmp3d_sample_t)*576*info->channels))
             {
                 DRMP3_ZERO_MEMORY(dec->scratch.grbuf[0], 576*2*sizeof(float));
+                /* pydub2: like ffmpeg scfsi copies from the last granule 0 that was decoded */
+                if (igr == 1)
+                {
+                    DRMP3_COPY_MEMORY(dec->scratch.ist_pos, dec->scf0, sizeof(dec->scf0));
+                }
                 drmp3_L3_decode(dec, &dec->scratch, dec->scratch.gr_info + igr*info->channels, info->channels);
+                if (igr == 0 && !dec->zeroed)
+                {
+                    DRMP3_COPY_MEMORY(dec->scf0, dec->scratch.ist_pos, sizeof(dec->scf0));
+                }
                 drmp3d_synth_granule(dec->qmf_state, dec->scratch.grbuf[0], 18, info->channels, (drmp3d_sample_t*)pcm, dec->scratch.syn[0]);
             }
         }
