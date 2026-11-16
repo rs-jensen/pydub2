@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cstdint>
+#include <mutex>
 #include <stdexcept>
 #include <vector>
 
@@ -12,6 +13,12 @@ namespace pydub2 {
 double loudness(const Audio &a, const Cancel &cancel) {
     if (a.width < 1 || a.width > 4)
         throw std::invalid_argument("bad sample width");
+    // the library writes its constants at every init, so the first one runs alone
+    static std::once_flag once;
+    std::call_once(once, [] {
+        ebur128_state *s = ebur128_init(1, 48000, EBUR128_MODE_I | EBUR128_MODE_HISTOGRAM);
+        ebur128_destroy(&s);
+    });
     ebur128_state *st = ebur128_init(a.channels, a.rate, EBUR128_MODE_I);
     if (!st) throw std::runtime_error("cant measure loudness");
     size_t frames =a.data.size() / (a.width * a.channels);
