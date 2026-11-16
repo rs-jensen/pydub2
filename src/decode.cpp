@@ -335,7 +335,7 @@ static uint64_t mp3_tag(Input &in, uint64_t full, size_t &skip, size_t &cut, uin
     return at + junk + fi.frame_bytes;
 }
 
-// minimp3 drops a frame with a missing bit reservoir, ffmpeg zeroes the granules in the missing part. so do that here, false if nothing is missing
+// minimp3 drops a frame with a missing bit reservoir, ffmpeg zeroes the missing granules. false if none missing
 static bool mp3_fix(uint8_t *o, int n, int have) {
     if (n < 4) {
         return false;
@@ -382,7 +382,7 @@ static bool mp3_fix(uint8_t *o, int n, int have) {
     return true;
 }
 
-// minimp3 drops the last frame when a tag follows it or it is cut short, ffmpeg decodes it. so end the input after that frame
+// minimp3 drops the last frame if a tag follows or it is cut short, ffmpeg decodes it. end the input after it
 static void mp3_end(Input &in) {
     std::vector<uint8_t> buf(1 << 16);
     drmp3dec dec;
@@ -439,7 +439,7 @@ static void mp3_end(Input &in) {
     }
     uint64_t end = last + drmp3_hdr_frame_bytes(h, free) + drmp3_hdr_padding(h);
     if (end > in.len) {
-        // ffmpeg reads zeros past the cut and stops the huffman data there, all ones decodes to zeros in nearly every table
+        // ffmpeg reads zeros past the cut, all ones decodes to zeros in nearly every huffman table
         std::vector<uint8_t> fr(end - last);
         size_t have = in_read(&in, fr.data() + 4, in.len - last - 4) + 4;
         memcpy(fr.data(), h, 4);
@@ -476,7 +476,7 @@ struct Mp3 : Dec {
     bool ok = false, eof = false, table = false;
     size_t skip = 0, cut = 0, spf = 0;
     uint64_t count = 0;
-    // decoded floats from frame start on, pos is the next frame to hand out. frames count from the first after the Info frame
+    // decoded floats from frame start on, pos is the next frame to hand out
     std::vector<float> buf;
     uint64_t start = 0, pos = 0;
     std::vector<drmp3_seek_point> points;
