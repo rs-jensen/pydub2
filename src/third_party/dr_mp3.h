@@ -1852,7 +1852,7 @@ static void drmp3_L3_decode(drmp3dec *h, drmp3dec_scratch *s, drmp3_L3_gr_info *
         int layer3gr_limit = s->bs.pos + gr_info[ch].part_23_length;
         /* pydub2: like ffmpeg stop at the end of the data, but a granule that starts in the reservoir reads on in zeros
            to its end, and with no end at all once that is 8 bits past the data */
-        int data = s->bs.limit - h->missing*8;
+        int data = DRMP3_MAX(0, s->bs.limit - h->missing*8);
         int end = s->bs.pos >= h->have*8 ? DRMP3_MIN(layer3gr_limit, data) : layer3gr_limit > data + 8 ? INT_MAX : layer3gr_limit;
         drmp3_L3_decode_scalefactors(h->header, s->ist_pos[ch], &s->bs, gr_info + ch, s->scf, ch);
         drmp3_L3_huffman(s->grbuf[ch], &s->bs, gr_info + ch, s->scf, layer3gr_limit, end, data);
