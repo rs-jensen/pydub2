@@ -279,14 +279,25 @@ def test_chained_vorbis_goes_to_ffmpeg(tmp_path):
         _pydub2.decode(one + one)
 
 
-def test_chained_opus_goes_to_ffmpeg(tmp_path):
+def test_chained_opus_decodes_natively(tmp_path):
     with open(make(tmp_path, "a.opus", 2), "rb") as f:
         one = f.read()
     with open(make(tmp_path, "b.opus", 2), "rb") as f:
         two = f.read()
     assert one[14:18] != two[14:18]
+    d = _pydub2.Decoder(one + two)
+    assert d.chained
+    assert not _pydub2.Decoder(one).chained
+    assert len(d.read()) == len(_pydub2.decode(one)[0]) + len(_pydub2.decode(two)[0])
+
+
+def test_chained_opus_with_another_channel_count_fails(tmp_path):
+    with open(make(tmp_path, "a.opus", 2), "rb") as f:
+        one = f.read()
+    with open(make(tmp_path, "b.opus", 1), "rb") as f:
+        two = f.read()
     with pytest.raises(RuntimeError):
-        _pydub2.decode(one + two)
+        _pydub2.Decoder(one + two).read()
 
 
 def test_vorbis_part_goes_to_ffmpeg(tmp_path):

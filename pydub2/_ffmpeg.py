@@ -1,5 +1,4 @@
 import os
-import os
 import struct
 import sys
 import tempfile
@@ -39,7 +38,7 @@ def to_wav(converter, path=None, data=None, format=None, codec=None, parameters=
 def _to_wav(converter, path, data, format, codec, parameters, start_second, duration):
     format = {"m4a": "mp4", "wave": "wav", "wma": "asf"}.get(format, format)
     opts = (["-f", format] if format else []) + (["-acodec", codec] if codec else [])
-    inp = source(path if path is not None else BytesIO(data))[0]
+    inp = source(path if path is not None else BytesIO(data), exe=find(converter))[0]
     out = ["-vn", "-f", "wav"]
     if not codec:
         info = mediainfo_json(path if path is not None else BytesIO(data))
