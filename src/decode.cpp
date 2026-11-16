@@ -143,12 +143,27 @@ struct Wav : Dec {
         } else {
             fail();
         }
-        // a pipe writes 0xffffffff as the data size, over 4 GB dr_wav counts that from the end of the file and gets 0
-        uint8_t size[4];
-        if (w.container == drwav_container_riff && w.dataChunkDataPos >= 4 && in_seek(&in, w.dataChunkDataPos - 4, SEEK_SET) &&
-            in_read(&in, size, 4) == 4 && !memcmp(size, "\xff\xff\xff\xff", 4)) {
-            w.dataChunkDataSize = w.bytesRemaining = (in.len - w.dataChunkDataPos) / frame * frame;
-            w.totalPCMFrameCount = w.dataChunkDataSize / frame;
+        // like ffmpeg: a data size of 0 or 0xffffffff (a pipe) runs to the end of the file, and a later data chunk wins
+        uint8_t h[8];
+        for (uint64_t at = w.dataChunkDataPos; w.container == drwav_container_riff && at >= 4;) {
+            if (!in_seek(&in, at - 4, SEEK_SET) || in_read(&in, h, 4) < 4) {
+                break;
+            }
+            uint64_t size = h[0] | h[1] << 8 | h[2] << 16 | (uint64_t)h[3] << 24;
+            size = size && size != 0xffffffff ? std::min(size, in.len - at) : in.len - at;
+            w.dataChunkDataPos = at;
+            w.dataChunkDataSize = w.bytesRemaining = size;
+            w.totalPCMFrameCount = size / frame;
+            at = 0;
+            // a thousand chunks at most, past that it is junk
+            uint64_t next = w.dataChunkDataPos + size + (size & 1);
+            for (int i = 0; i < 1000 && next + 8 <= in.len && in_seek(&in, next, SEEK_SET) && in_read(&in, h, 8) == 8; i++) {
+                if (!memcmp(h, "data", 4)) {
+                    at = next + 8;
+                    break;
+                }
+                next += 8 + (h[4] | h[5] << 8 | h[6] << 16 | (uint64_t)h[7] << 24) + (h[4] & 1);
+            }
         }
         in_seek(&in, w.dataChunkDataPos, SEEK_SET);
         // the header can claim any size, the file cant hold more
