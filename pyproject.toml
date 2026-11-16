@@ -59,7 +59,3 @@ test-command = "pytest -rs {project}/tests"
 
 [tool.cibuildwheel.macos]
 environment = { MACOSX_DEPLOYMENT_TARGET = "10.15" }
-
-[[tool.cibuildwheel.overrides]]
-select = "*-macosx_x86_64"
-test-command = "pytest -rs -k 'not test_speedup_chunk_size_1_raises_like_pydub' {project}/tests"
