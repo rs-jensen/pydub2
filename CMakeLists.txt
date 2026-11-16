@@ -13,6 +13,9 @@ endif()
 if(NOT MSVC)
     set(CMAKE_C_FLAGS_RELEASE "-O2 -DNDEBUG -fstack-protector-strong -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2")
     set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG -fstack-protector-strong -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2")
+else()
+    add_compile_options(/guard:cf)
+    add_link_options(/GUARD:CF)
 endif()
 
 # vorbis 1.3.7 still asks for cmake 2.8

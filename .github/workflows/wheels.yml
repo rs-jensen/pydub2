@@ -12,6 +12,9 @@ on:
   push:
     tags: ["v*"]
 
+permissions:
+  contents: read
+
 jobs:
   wheels:
     name: wheels ${{ matrix.os }}
@@ -21,7 +24,7 @@ jobs:
       matrix:
         os: ${{ fromJSON(inputs.os || '["ubuntu-latest", "ubuntu-24.04-arm", "macos-15", "macos-15-intel", "windows-latest", "windows-11-arm"]') }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - if: runner.os == 'Windows'
         run: choco install ffmpeg -y --no-progress
       - if: runner.os == 'macOS'
@@ -34,8 +37,8 @@ jobs:
         run: echo "CIBW_BUILD=$ONLY" >> "$GITHUB_ENV"
         env:
           ONLY: ${{ inputs.only }}
-      - uses: pypa/cibuildwheel@v4.3
-      - uses: actions/upload-artifact@v4
+      - uses: pypa/cibuildwheel@f9b966cfadf4109556cadc5bb39ddb72d0ce664e # v4.3.5
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wheels-${{ matrix.os }}
           path: wheelhouse/*.whl
@@ -43,9 +46,9 @@ jobs:
   sdist:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: pipx run build --sdist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sdist
           path: dist/*.tar.gz
