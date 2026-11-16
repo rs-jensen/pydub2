@@ -157,7 +157,8 @@ def test_wav_odd_headers_like_pydub(tmp_path):
     pcm = struct.pack("<%dh" % len(SAMPLES), *(int(x * 30000) for x in SAMPLES))
     f16 = struct.pack("<HHIIHH", 1, 2, RATE, RATE * 4, 4, 16)
     files = [wav_file(f16, data_chunk(pcm, 0)), wav_file(f16, data_chunk(pcm[:4000]), data_chunk(pcm[4000:8000])),
-             wav_file(f16, data_chunk(pcm))[:-3], wav_file(f16, data_chunk(pcm + b"\1", len(pcm) + 1))]
+             wav_file(f16, data_chunk(pcm))[:-3], wav_file(f16, data_chunk(pcm + b"\1", len(pcm) + 1)),
+             wav_file(struct.pack("<HHIIHH", 3, 1, RATE, RATE * 8, 8, 64), data_chunk(struct.pack("<%dd" % len(SAMPLES), *SAMPLES)))]
     for i, raw in enumerate(files):
         path = str(tmp_path / ("%d.wav" % i))
         with open(path, "wb") as f:

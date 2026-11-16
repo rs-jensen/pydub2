@@ -137,6 +137,9 @@ struct Wav : Dec {
         frame = w.fmt.blockAlign;
         if (w.translatedFormatTag == DR_WAVE_FORMAT_PCM && (bits == 8 || bits == 16 || bits == 24 || bits == 32) && frame == (size_t)channels * bits / 8) {
             width = bits == 24 ? 4 : bits / 8;
+        } else if (w.translatedFormatTag == DR_WAVE_FORMAT_IEEE_FLOAT && bits == 64 && frame == (size_t)channels * 8) {
+            // pydub has ffmpeg turn this into 64 bit ints
+            width = 8;
         } else if (w.translatedFormatTag == DR_WAVE_FORMAT_IEEE_FLOAT && frame) {
             width = 4;
             bits = 0;
@@ -183,6 +186,14 @@ struct Wav : Dec {
         if (bits != 24) {
             k = drwav_read_raw(&w, n * frame, out);
             k -= k % frame; // a data size that is not a whole number of frames leaves stray bytes
+            for (size_t i = 0; bits == 64 && i < k; i += 8) {
+                // ffmpegs double to s64, it saturates and nan is whatever the cpu does
+                double x;
+                memcpy(&x, out + i, 8);
+                x *= 9223372036854775808.0;
+                int64_t v = x >= 9223372036854775808.0 ? INT64_MAX : x <= -9223372036854775808.0 ? INT64_MIN : llrint(x);
+                memcpy(out + i, &v, 8);
+            }
             if (bits == 8) {
                 for (size_t i = 0; i < k; i++) {
                     out[i] ^= 0x80;
