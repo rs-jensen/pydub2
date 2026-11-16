@@ -195,9 +195,6 @@ def compress_dynamic_range(seg, threshold=-20.0, ratio=4.0, attack=5.0, release=
     if n:
         # pydub raises on a zero in these
         (1.0 / ratio, 0 / attack_frames, 0 / release_frames)
-        # shortcut: raises for any sound, pydub only when a window has a rms above 0
-        if thresh_rms == 0 and seg.max:
-            raise ZeroDivisionError("float division by zero")
     data = _pydub2.compress(seg._data, seg.sample_width, seg.channels, thresh_rms, ratio, attack_frames,
                             release_frames, max(-1, min(look_frames, n)))
     return seg._spawn(data=data)
