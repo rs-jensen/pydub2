@@ -122,8 +122,8 @@ def test_wav_tags_with_codec():
     assert d == old.export(io.BytesIO(), format="wav", codec="pcm_s16le", tags={"title": "abc"}).getvalue()
 
 
-def chained_opus(tmp_path):
-    for name, ch in (("a", 2), ("b", 1)):
+def chained_opus(tmp_path, second=1):
+    for name, ch in (("a", 2), ("b", second)):
         pydub2.AudioSegment.silent(500).set_channels(ch).export(tmp_path / (name + ".opus"), format="opus")
     path = tmp_path / "chain.opus"
     path.write_bytes((tmp_path / "a.opus").read_bytes() + (tmp_path / "b.opus").read_bytes())
@@ -136,7 +136,7 @@ def test_chained_opus_falls_back_to_ffmpeg(tmp_path):
     assert pydub2.AudioSegment.from_file(path).raw_data == pydub.AudioSegment.from_file(path).raw_data
 
 
-def test_chained_opus_without_ffmpeg(tmp_path, monkeypatch):
+def test_chained_opus_with_other_channels_needs_ffmpeg(tmp_path, monkeypatch):
     path = chained_opus(tmp_path)
     monkeypatch.setenv("PATH", "")
     monkeypatch.setattr(pydub2.AudioSegment, "converter", "ffmpeg")
@@ -144,6 +144,24 @@ def test_chained_opus_without_ffmpeg(tmp_path, monkeypatch):
         pydub2.AudioSegment.from_file(path)
     with pytest.raises(pydub2.exceptions.CouldntDecodeError):
         list(pydub2.AudioSegment.stream(path))
+
+
+def test_chained_opus_without_ffmpeg(tmp_path, monkeypatch):
+    path = chained_opus(tmp_path, 2)
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr(pydub2.AudioSegment, "converter", "ffmpeg")
+    assert len(pydub2.AudioSegment.from_file(path)) == 1000
+    assert len(sum(pydub2.AudioSegment.stream(path))) == 1000
+
+
+@needs_ff
+def test_chained_opus_goes_to_ffmpeg_when_there(tmp_path, monkeypatch):
+    path = chained_opus(tmp_path, 2)
+    seen = []
+    to_wav = pydub2._ffmpeg.to_wav
+    monkeypatch.setattr(pydub2._ffmpeg, "to_wav", lambda *a: seen.append(1) or to_wav(*a))
+    assert len(pydub2.AudioSegment.from_file(path)) == 1000
+    assert seen
 
 
 @pytest.mark.filterwarnings("ignore::RuntimeWarning")

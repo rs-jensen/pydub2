@@ -21,7 +21,7 @@ double loudness(const Audio &a, const Cancel &cancel) {
     });
     ebur128_state *st = ebur128_init(a.channels, a.rate, EBUR128_MODE_I);
     if (!st) throw std::runtime_error("cant measure loudness");
-    size_t frames =a.data.size() / (a.width * a.channels);
+    size_t frames = a.data.size() / (a.width * a.channels);
     int err = 0;
     try {
         size_t step = 1 << 15;
