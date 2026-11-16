@@ -7,6 +7,9 @@ import pytest
 from pydub2.exceptions import CouldntDecodeError
 
 
+HAVE_FFMPEG = shutil.which("ffmpeg") is not None
+
+
 @functools.lru_cache(None)
 def encoders(ffmpeg):
     out = subprocess.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True).stdout
@@ -16,10 +19,10 @@ def encoders(ffmpeg):
 def why(e):
     msg = str(e.value)
     cmd = getattr(e.value, "cmd", None)
-    if e.errisinstance(FileNotFoundError) and ("ffmpeg" in msg or "ffprobe" in msg):
+    if not HAVE_FFMPEG and e.errisinstance(FileNotFoundError) and ("ffmpeg" in msg or "ffprobe" in msg):
         return "no ffmpeg"
     # pydub2 raises this when it cant decode natively and has no ffmpeg to fall back on
-    if e.errisinstance(CouldntDecodeError) and "cant read this file" in msg and shutil.which("ffmpeg") is None:
+    if e.errisinstance(CouldntDecodeError) and "cant read this file" in msg and not HAVE_FFMPEG:
         return "no ffmpeg"
     if "Encoder not found" in msg or "Unknown encoder" in msg:
         return "ffmpeg lacks an encoder"

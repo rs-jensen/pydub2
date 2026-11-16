@@ -25,6 +25,8 @@ ARGS = {"wav": [], "flac": [], "mp3": ["-c:a", "libmp3lame"], "ogg": ["-c:a", "l
 LIMIT = {"wav": 0, "flac": 0, "mp3": 1, "ogg": 1024, "opus": 1024}
 if re.search(r"version n?8\.0", subprocess.run([ff, "-version"], capture_output=True, text=True).stdout):
     LIMIT["opus"] = 1 << 19  # ffmpeg 8.0 opus tail differs
+# a part of a vorbis file comes from ffmpeg, the others are cut from the same decoder
+SAME = {"wav": 0, "flac": 0, "mp3": 0, "ogg": 1024, "opus": 0}
 CASES = [(1, 2), (0.5, None), (None, 1.5), (2.00001, 1.99999), (4.435, 1.865535), (6.9, None), (7.2, 5), (8, 1),
          (1 / 3, 1 / 7), (0.140370232, None), (3.81, 3.446263)]
 
@@ -61,8 +63,7 @@ def test_partial_is_a_slice(files, ext):
     full = AudioSegment.from_file(files[ext])
     part = AudioSegment.from_file(files[ext], start_second=1.5, duration=2)
     assert len(part) == 2000
-    # a part of a vorbis file comes from ffmpeg, so only close
-    close(part, full[1500:3500], LIMIT[ext])
+    close(part, full[1500:3500], SAME[ext])
 
 
 @pytest.mark.parametrize("ext", ARGS)
@@ -73,7 +74,7 @@ def test_stream(files, ext):
     assert b"".join(c.raw_data for c in chunks) == full.raw_data
     for ss, t in CASES:
         part = AudioSegment.from_file(files[ext], start_second=ss, duration=t)
-        close(part._spawn(b"".join(c.raw_data for c in AudioSegment.stream(files[ext], 300, ss, t))), part, LIMIT[ext])
+        close(part._spawn(b"".join(c.raw_data for c in AudioSegment.stream(files[ext], 300, ss, t))), part, SAME[ext])
 
 
 @pytest.mark.parametrize("ext", ARGS)

@@ -1,8 +1,10 @@
+import ctypes
 import gc
 import io
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import tracemalloc
@@ -15,14 +17,40 @@ from pydub2 import AudioSegment, silence
 from test_threads import EXTS, SEG, SOAK, build
 
 # PYDUB2_SOAK=1 for the long run
-N = 20000 if SOAK else 2
-PASSES = 4 if SOAK else 1
-# ps rss wanders a lot over a few loops, only the long run can tell a small leak
-SLACK = (4 if N >= 2000 else 16) << 20
+N = 20000 if SOAK else 200
+PASSES = 4
+# bytes malloc has handed out, a leak climbs with every call and the caches that rss counts do not
+# macos has no exact count, it keeps the old rule that only a leak climbs at every step, with more room
+SLACK = 4 << 20 if SOAK else (8 << 20 if sys.platform == "darwin" else 128 << 10)
 FF = shutil.which("ffmpeg") and SOAK
 
 
+class MallocStats(ctypes.Structure):
+    _fields_ = [("blocks", ctypes.c_uint), ("in_use", ctypes.c_size_t), ("max", ctypes.c_size_t), ("allocated", ctypes.c_size_t)]
+
+
+def malloc_in_use():
+    libc = ctypes.CDLL(None)
+    if sys.platform == "darwin":
+        s = MallocStats()
+        libc.malloc_zone_statistics(None, ctypes.byref(s))
+        return s.in_use
+    names = ("arena", "ordblks", "smblks", "hblks", "hblkhd", "usmblks", "fsmblks", "uordblks", "fordblks", "keepcost")
+    for fn, size in (("mallinfo2", ctypes.c_size_t), ("mallinfo", ctypes.c_int)):
+        if hasattr(libc, fn):
+            getattr(libc, fn).restype = type("MallInfo", (ctypes.Structure,), {"_fields_": [(n, size) for n in names]})
+            m = getattr(libc, fn)()
+            return m.uordblks + m.hblkhd
+    return None
+
+
+PRECISE = sys.platform != "darwin" and malloc_in_use() is not None
+
+
 def rss():
+    used = malloc_in_use()
+    if used is not None:
+        return used
     if not SOAK:
         return 0
     try:
@@ -146,7 +174,7 @@ def test_ops_leak_nothing(ctx, tmp_path, monkeypatch):
         up = sizes[-1] - sizes[0]
         print(name, n, "rss", [x >> 10 for x in sizes], "py %+d b" % py, "%.1fs" % (time.time() - t0), flush=True)
         # only a leak climbs at every step, malloc caches and compressed pages wander
-        creeping = all(b > a for a, b in zip(sizes, sizes[1:])) and up > SLACK
+        creeping = (PRECISE or all(b > a for a, b in zip(sizes, sizes[1:]))) and up > SLACK
         if fds() != fd0 or len(os.listdir(tmp_path)) != files0 or py > 1 << 18 or creeping:
             bad.append((name, "fds %d" % (fds() - fd0), "tmp %d" % (len(os.listdir(tmp_path)) - files0),
                         "py %d" % py, "rss %d" % up))

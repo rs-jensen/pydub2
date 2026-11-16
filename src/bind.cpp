@@ -16,17 +16,20 @@ static unsigned long main_thread;
 
 // every 100 ms the long loops take the gil to let python run its signal handlers
 static Cancel interrupt() {
-    if (PyThread_get_thread_ident() != main_thread)
+    if (PyThread_get_thread_ident() != main_thread) {
         return [] {};
+    }
     auto last = std::chrono::steady_clock::now();
     return [last]() mutable {
         auto now = std::chrono::steady_clock::now();
-        if (now - last < std::chrono::milliseconds(100))
+        if (now - last < std::chrono::milliseconds(100)) {
             return;
+        }
         last = now;
         nb::gil_scoped_acquire g;
-        if (PyErr_CheckSignals())
+        if (PyErr_CheckSignals()) {
             throw nb::python_error();
+        }
     };
 }
 
@@ -40,19 +43,22 @@ static Alloc into(nb::object &out) {
     return [&out](size_t n) {
         nb::gil_scoped_acquire g;
         out = nb::steal(PyBytes_FromStringAndSize(NULL, n));
-        if (!out.is_valid())
+        if (!out.is_valid()) {
             throw nb::python_error();
+        }
         return PyBytes_AS_STRING(out.ptr());
     };
 }
 
 static Audio audio(nb::bytes data, int rate, int channels, int width) {
-    if (rate < 1 || channels < 1 || channels > 65535 || width < 1 || width > 4)
+    if (rate < 1 || channels < 1 || channels > 65535 || width < 1 || width > 4) {
         throw std::invalid_argument("bad rate, channels or sample width");
+    }
     Audio a;
     a.data = str(data);
-    if (a.data.size() % ((size_t)channels * width))
+    if (a.data.size() % ((size_t)channels * width)) {
         throw std::invalid_argument("data is not a whole number of frames");
+    }
     a.rate = rate;
     a.channels = channels;
     a.width = width;
@@ -102,8 +108,9 @@ static nb::bytes take(Stream &s, int64_t n) {
             size_t r = d.read(p + got, m);
             got += r;
             left -= r / fw;
-            if (r < m * fw)
+            if (r < m * fw) {
                 break;
+            }
         }
         bool full = got == room;
         while (full && left) {
@@ -345,8 +352,9 @@ NB_MODULE(_pydub2, m) {
 
     m.def("resample", [](nb::bytes data, int rate, int channels, int width, int new_rate) {
         Audio a = audio(data, rate, channels, width);
-        if (new_rate < 1)
+        if (new_rate < 1) {
             throw std::invalid_argument("bad rate");
+        }
         nb::object out;
         {
             nb::gil_scoped_release g;
