@@ -48,7 +48,7 @@ static void put16(std::string &s, uint16_t v) {
 }
 
 // same bytes as the wave module writes for pydub
-static void wav(const Audio &a, const Alloc &alloc) {
+std::string wav_head(const Audio &a) {
     if (a.data.size() > UINT32_MAX - 36)
         throw std::runtime_error("too long for wav");
     uint32_t n = a.data.size();
@@ -67,6 +67,12 @@ static void wav(const Audio &a, const Alloc &alloc) {
     put16(out, a.width * 8);
     out += "data";
     put32(out, n);
+    return out;
+}
+
+static void wav(const Audio &a, const Alloc &alloc) {
+    uint32_t n = a.data.size();
+    std::string out = wav_head(a);
     size_t start = out.size();
     char *p = alloc(start + n + (n & 1));
     memcpy(p, out.data(), start);

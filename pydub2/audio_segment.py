@@ -923,7 +923,15 @@ class AudioSegment(object):
             if format == "flac" and width == 4:
                 # ffmpeg writes 32 bit audio as 24 bit flac
                 data, width = _pydub2.lin2lin(data, 4, 3), 3
-            out_f.write(_encode(data, self.frame_rate, self.channels, width, format, rate))
+            if format == "wav" and width in (2, 4):
+                # 8 bit is unsigned in a wav, 16 and 32 bit go out as they are
+                try:
+                    out_f.write(_pydub2.wav_head(data, round(self.frame_rate), self.channels, width))
+                except RuntimeError as e:
+                    raise CouldntEncodeError(str(e))
+                out_f.write(data)
+            else:
+                out_f.write(_encode(data, self.frame_rate, self.channels, width, format, rate))
             out_f.seek(0)
             return out_f
 

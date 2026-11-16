@@ -1,5 +1,6 @@
 #include <chrono>
 #include <mutex>
+#include <vector>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/filesystem.h>
@@ -77,16 +78,18 @@ struct Stream {
 
 // n frames or all that is left, decoded straight into the bytes python gets
 // frames comes from the header and can lie, so only the first 64 MB are sized from it, the rest grows with what is decoded
+// unless the decoder counted them itself
 static nb::bytes take(Stream &s, int64_t n) {
     Decoder &d = *s.d;
     size_t fw = (size_t)d.channels * d.width;
     uint64_t left = n >= 0 ? (uint64_t)n : UINT64_MAX;
-    size_t room = std::min<uint64_t>(n >= 0 ? left : d.frames, ((size_t)64 << 20) / fw) * fw, got = 0;
+    size_t room = std::min<uint64_t>(n >= 0 ? left : d.frames, n < 0 && d.exact ? UINT64_MAX : ((size_t)64 << 20) / fw) * fw, got = 0;
     nb::object out = nb::steal(PyBytes_FromStringAndSize(NULL, room));
     if (!out.is_valid()) {
         throw nb::python_error();
     }
-    std::string rest;
+    std::vector<std::string> rest; // pieces, one string that grows would copy itself and hold twice the memory
+    size_t more = 0;
     {
         char *p = PyBytes_AS_STRING(out.ptr());
         Cancel cancel = interrupt();
@@ -106,22 +109,30 @@ static nb::bytes take(Stream &s, int64_t n) {
         while (full && left) {
             cancel();
             // grow with what came, a full step of zeros for a few frames is 16 MB of rss
-            size_t k = rest.size(), m = std::min<uint64_t>(left, std::min(step, std::max<size_t>(k / fw, 4096)));
-            rest.resize(k + m * fw);
-            size_t r = d.read(&rest[k], m);
-            rest.resize(k + r);
+            size_t m = std::min<uint64_t>(left, std::min(step, std::max<size_t>(more / fw, 4096)));
+            std::string piece(m * fw, 0);
+            size_t r = d.read(&piece[0], m);
+            piece.resize(r);
+            more += r;
+            rest.push_back(std::move(piece));
             left -= r / fw;
             full = r == m * fw;
         }
     }
-    if (got < room || rest.size()) {
-        nb::object all = nb::steal(PyBytes_FromStringAndSize(NULL, got + rest.size()));
+    if (got < room || more) {
+        nb::object all = nb::steal(PyBytes_FromStringAndSize(NULL, got + more));
         if (!all.is_valid()) {
             throw nb::python_error();
         }
         memcpy(PyBytes_AS_STRING(all.ptr()), PyBytes_AS_STRING(out.ptr()), got);
-        memcpy(PyBytes_AS_STRING(all.ptr()) + got, rest.data(), rest.size());
         out = all;
+        // let go of each piece as it is copied to keep the peak down
+        char *q = PyBytes_AS_STRING(out.ptr()) + got;
+        for (auto &piece : rest) {
+            memcpy(q, piece.data(), piece.size());
+            q += piece.size();
+            std::string().swap(piece);
+        }
     }
     return nb::borrow<nb::bytes>(out);
 }
@@ -181,6 +192,11 @@ NB_MODULE(_pydub2, m) {
         }
         return out;
     }, nb::arg("data"), nb::arg("rate"), nb::arg("channels"), nb::arg("width"), nb::arg("format"), nb::arg("bitrate") = 0);
+
+    m.def("wav_head", [](nb::bytes data, int rate, int channels, int width) {
+        std::string s = wav_head(audio(data, rate, channels, width));
+        return nb::bytes(s.data(), s.size());
+    });
 
     m.def("rms", [](nb::bytes data, int width) {
         nb::gil_scoped_release g;

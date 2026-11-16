@@ -38,6 +38,7 @@ struct Decoder {
     int channels = 0;
     int width = 0;
     uint64_t frames = 0; // what a read from the start gives, from the header for flac and opus so it can lie
+    bool exact = false; // frames is counted from the file, a reader can size a buffer from it
     virtual ~Decoder() {}
     // up to n frames into out, returns bytes. less only at the end
     virtual size_t read(char *out, size_t n) = 0;
@@ -50,6 +51,8 @@ std::unique_ptr<Decoder> open(const std::filesystem::path &path);
 // encode.cpp
 // format is wav, flac, ogg or opus. bitrate in bits per second, 0 picks a default
 // throws std::invalid_argument for a format we dont have
+// the 44 bytes in front of the samples, so a writer can send the samples as they are
+std::string wav_head(const Audio &a);
 void encode(const Audio &a, const std::string &format, int bitrate, const Cancel &cancel, const Alloc &alloc);
 
 // pcm.cpp
