@@ -99,6 +99,10 @@ nanobind_add_module(_pydub2 NB_STATIC FREE_THREADED
     src/resample.cpp src/loudness.cpp src/vad.cpp src/third_party/stb_vorbis.c)
 target_link_libraries(_pydub2 PRIVATE FLAC::FLAC vorbisenc vorbis opusfile opusenc
     SampleRate::samplerate ebur128)
+# the vad loops only vectorise well at -O3
+if(NOT MSVC)
+    set_source_files_properties(src/vad.cpp PROPERTIES COMPILE_OPTIONS -O3)
+endif()
 # audioop does not fuse the two products in tomono, so neither do we
 if(MSVC)
     set_source_files_properties(src/pcm.cpp PROPERTIES COMPILE_OPTIONS /fp:strict)
