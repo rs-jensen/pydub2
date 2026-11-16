@@ -36,6 +36,10 @@ that tag is MIT, Copyright (c) 2020-present Silero Team.
 
 Two vendored files have a small change so that opening files from several threads does not write shared tables at the same time: `src/third_party/stb_vorbis.c` (`crc32_init` is called once from `src/decode.cpp`) and `src/third_party/ebur128.c` (the static constants are written only by the first `ebur128_init`, which `src/loudness.cpp` makes once before any other).
 
+`src/third_party/dr_mp3.h` has small changes so that it decodes like ffmpeg. Each one is marked with a `pydub2:` comment:
+
+- a short granule ignores its own scfsi bits but no longer clears the ones of the next granule
+
 The mp3 encoder is not part of this package. It is in the separate package pydub2-mp3 (LAME 3.100,
 LGPL-2.0-or-later) and is loaded at runtime. It is its own shared library, built from the unmodified
 release tarball, and its LICENSE has the full LGPL text, the source and how to replace it.

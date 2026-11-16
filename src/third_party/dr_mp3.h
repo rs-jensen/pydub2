@@ -1145,7 +1145,7 @@ static int drmp3_L3_read_side_info(drmp3_bs *bs, drmp3_L3_gr_info *gr, const drm
             gr->region_count[1] = 255;
             if (gr->block_type == DRMP3_SHORT_BLOCK_TYPE)
             {
-                scfsi &= 0x0F0F;
+                scfsi &= 0x0FFF; /* pydub2: was 0x0F0F, like ffmpeg only this granule ignores scfsi */
                 if (!gr->mixed_block_flag)
                 {
                     gr->region_count[0] = 8;

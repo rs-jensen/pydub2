@@ -28,7 +28,7 @@ EXPECTED = {
     "s24_192000_6ch_1s.flac": ({"params:frames"}, WRONG_IN_PYDUB), "s24_192000_8ch_1s.flac": ({"params:frames"}, WRONG_IN_PYDUB),
     "b6k_48000_2ch.opus": ({"decoder"}, DECODER), "b16k_48000_2ch.opus": ({"decoder"}, DECODER),
     "b32k_48000_2ch.opus": ({"decoder"}, DECODER),
-    "Ed_Rush_-_Sabotage.mp3": ({"decoder"}, DECODER), "scooter-wicked-02-imraving.mp3": ({"decoder"}, DECODER),
+    "scooter-wicked-02-imraving.mp3": ({"decoder"}, DECODER),
     "he_mode.mp3": ({"decoder"}, DECODER), "mp3_with_embedded_albumart.mp3": ({"decoder"}, DECODER),
     "Boot_to_the_Head.MP3": ({"params:frames"}, "24 mp3 frames fewer than ffmpeg gives"),
 }

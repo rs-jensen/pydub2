@@ -32,8 +32,12 @@ random.seed(1)
 SAMPLES = [0.5 * math.sin(i * 0.06) + 0.1 * random.uniform(-1, 1) for i in range(RATE // 2)]
 
 
-def make(tmp_path, name, channels, *args):
-    raw = b"".join(struct.pack("<f", x * (1 if c == 0 else 0.7)) for x in SAMPLES for c in range(2))
+CLICKS = [0.4 * math.sin(i * 0.05) * (i % 4410 > 200) + (random.uniform(-0.6, 0.6) if i % 4410 < 30 else 0)
+          for i in range(RATE * 2)]
+
+
+def make(tmp_path, name, channels, *args, samples=SAMPLES):
+    raw = b"".join(struct.pack("<f", x * (1 if c == 0 else 0.7)) for x in samples for c in range(2))
     path = str(tmp_path / name)
     cmd = [ff, "-y", "-loglevel", "error", "-f", "f32le", "-ar", str(RATE), "-ac", "2", "-i", "-",
            "-ac", str(channels), *args, path]
@@ -221,8 +225,15 @@ def mp3_frames(m):
     out = []
     while i + 4 <= len(m) and m[i] == 0xff:
         out.append(i)
-        i += 144000 * 128 // 44100 + (m[i + 2] >> 1 & 1)
+        i += 144000 * [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320][m[i + 2] >> 4] // 44100 + (m[i + 2] >> 1 & 1)
     return out
+
+
+def bits(m, p, n):
+    v = 0
+    for k in range(p, p + n):
+        v = v << 1 | m[k // 8] >> (7 - k % 8) & 1
+    return v
 
 
 def same_as_ffmpeg(tmp_path, name, data, limit=1):
@@ -257,6 +268,21 @@ def test_mp3_end(tmp_path):
             same_as_ffmpeg(tmp_path, "tag.mp3", m[:starts[k]] + tail)
         for cut in (4, 40, 200):
             same_as_ffmpeg(tmp_path, "cut.mp3", m[:starts[k] + cut], 328)
+
+
+# some encoders set scfsi on a long granule after a short one, ffmpeg copies the scalefactors then
+def test_mp3_scfsi_after_a_short_granule(tmp_path):
+    m = bytearray(open(make(tmp_path, "a.mp3", 1, "-c:a", "libmp3lame", "-b:a", "64k", samples=CLICKS), "rb").read())
+    hit = 0
+    for at in mp3_frames(m):
+        # mono side info: 9 bits main_data_begin, 5 private, 4 scfsi, then 59 per granule
+        q = (at + 4) * 8 + 18
+        if bits(m, q + 33, 3) == 6 and bits(m, q + 59 + 33, 3) != 6 and bits(m, q + 59 + 29, 4) == 0:
+            m[at + 5] |= 3
+            m[at + 6] |= 0xc0
+            hit += 1
+    assert hit
+    same_as_ffmpeg(tmp_path, "scfsi.mp3", bytes(m))
 
 
 def test_mp3_starts_inside_the_bit_reservoir(tmp_path):
