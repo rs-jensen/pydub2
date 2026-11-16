@@ -122,7 +122,7 @@ def test_mediainfo_without_ffprobe(tmp_path, monkeypatch):
 
 
 def test_mediainfo_chunks_and_tags_without_ffprobe(tmp_path, monkeypatch):
-    no_ffprobe(monkeypatch, tmp_path)
+    no_ffprobe(monkeypatch)
     wav = AudioSegment.silent(100, 8000).export(io.BytesIO(), format="wav").getvalue()
     list_chunk = b"LIST" + struct.pack("<I", 12) + b"INFOfmt abcd"
     got = utils2.mediainfo_json(io.BytesIO(wav[:12] + list_chunk + wav[12:]))["streams"][0]
