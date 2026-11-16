@@ -55,7 +55,9 @@ def encode(data, rate, channels, width, bitrate=None, tags=None, id3v2_version="
                 out_channels = int(v)
             else:
                 return None
-    except ValueError:
+    except (ValueError, IndexError):
+        return None
+    if quality is not None and not 0 <= quality <= 9.999:
         return None
     # lame writes id3v2.3, ffmpeg does the default 2.4
     if tags and id3v2_version == "4" and _ffmpeg.find(converter):

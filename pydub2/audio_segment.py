@@ -1161,35 +1161,18 @@ class AudioSegment(object):
         # drop down to the raw data
         seg1 = seg1[position:]._data
         seg2 = seg2._data
-        pos = 0
-        seg1_len = len(seg1)
-        seg2_len = len(seg2)
-        while times:
-            remaining = max(0, seg1_len - pos)
-            if seg2_len >= remaining:
-                seg2 = seg2[:remaining]
-                seg2_len = remaining
-                # we've hit the end, we're done looping (if we were) and this
-                # is our last go-around
-                times = 1
-
-            if gain_during_overlay:
-                seg1_overlaid = seg1[pos:pos + seg2_len]
-                seg1_adjusted_gain = _pydub2.mul(seg1_overlaid, self.sample_width,
-                                                 db_to_float(float(gain_during_overlay)))
-                output.write(_pydub2.add(seg1_adjusted_gain, seg2, sample_width))
-            else:
-                output.write(_pydub2.add(seg1[pos:pos + seg2_len], seg2,
-                                         sample_width))
-            pos += seg2_len
-
-            # dec times to break our while loop (eventually)
-            times -= 1
-
-            # looping an empty segment never ends
-            if not seg2_len:
-                break
-
+        remaining = len(seg1)
+        n = -(-remaining // len(seg2)) if seg2 else 0
+        # a times that never counts down to 0 loops to the end, like negative
+        if times > 0 and times % 1 == 0:
+            n = min(n, int(times))
+        seg2 = (seg2 * n)[:remaining]
+        pos = len(seg2)
+        if gain_during_overlay:
+            seg1_overlaid = _pydub2.mul(seg1[:pos], self.sample_width, db_to_float(float(gain_during_overlay)))
+        else:
+            seg1_overlaid = seg1[:pos]
+        output.write(_pydub2.add(seg1_overlaid, seg2, sample_width))
         output.write(seg1[pos:])
 
         return spawn(data=output)
@@ -1294,7 +1277,9 @@ class AudioSegment(object):
         if duration > 100:
             scale_step = gain_delta / duration
 
-            for i in range(duration):
+            # chunks past the end are empty, below 500 hz they raise at the first one
+            last = duration if self.frame_rate < 500 else max(0, int(len(self) - start) + 2)
+            for i in range(duration)[:last]:
                 volume_change = from_power + (scale_step * i)
                 chunk = self[start + i]
                 chunk = _pydub2.mul(chunk._data,

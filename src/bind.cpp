@@ -18,7 +18,7 @@ static nb::bytes bytes(const std::string &s) {
 }
 
 static Audio audio(nb::bytes data, int rate, int channels, int width) {
-    if (rate < 1 || channels < 1 || width < 1 || width > 4)
+    if (rate < 1 || channels < 1 || channels > 65535 || width < 1 || width > 4)
         throw std::invalid_argument("bad rate, channels or sample width");
     Audio a;
     a.data = str(data);

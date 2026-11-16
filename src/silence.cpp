@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -32,9 +33,11 @@ Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh
     if (min_silence_len < 0) throw std::invalid_argument("min_silence_len must not be negative");
 
     // python round, same as nearbyint
-    int fw = a.channels * a.width;
+    size_t fw = (size_t)a.channels * a.width;
     double frames = (double)(a.data.size() / fw);
-    int seg_len = (int)std::nearbyint(1000.0 * (frames / a.rate));
+    double ms = std::nearbyint(1000.0 * (frames / a.rate));
+    if (ms > INT_MAX) throw std::invalid_argument("too long for detect_silence");
+    int seg_len = (int)ms;
     if (seg_len < min_silence_len) return {};
 
     double thresh = std::pow(10.0, silence_thresh / 20) * (double)(1LL << (a.width * 8 - 1));
@@ -46,56 +49,55 @@ Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh
     lim *= lim;
 
     // slice bounds truncate like _parse_position, and short slices count zeros at the end
-    // every bound sits on a whole ms, so one pass makes the 128 bit sum of squares up to each ms
+    // the slices only move forward, so the 128 bit sum of squares is kept for the window and not for every ms
     double per_ms = a.rate / 1000.0;
     size_t total = a.data.size() / a.width;
     const char *p = a.data.data();
     int w = a.width;
-    std::vector<uint64_t> hi(seg_len + 1), lo(seg_len + 1);
     uint64_t h = 0, l = 0;
-    size_t x = 0;
-    for (int j = 0; j <= seg_len; j++) {
-        size_t e = std::min((size_t)((double)j * per_ms) * a.channels, total);
-        for (; x < e; x++) {
-            int64_t v = sample(p + x * w, w);
+    size_t front = 0, back = 0;
+
+    Ranges out;
+    int cur = 0, prev = 0;
+    bool any = false;
+    auto check = [&](int i) {
+        int j = i + min_silence_len;
+        size_t s = (size_t)((double)i * per_ms), e = (size_t)((double)j * per_ms);
+        size_t n = (e - s) * a.channels;
+        for (size_t end = std::min(e * a.channels, total); front < end; front++) {
+            int64_t v = sample(p + front * w, w);
             uint64_t q = (uint64_t)(v * v);
             l += q;
             h += l < q;
         }
-        hi[j] = h;
-        lo[j] = l;
-    }
-
-    std::vector<int> silent;
-    auto check = [&](int i) {
-        int j = i + min_silence_len;
-        size_t n = ((size_t)((double)j * per_ms) - (size_t)((double)i * per_ms)) * a.channels;
-        uint64_t h = hi[j] - hi[i] - (lo[j] < lo[i]);
-        if (n == 0 ? thresh >= 0 : all || mul_less(h, lo[j] - lo[i], lim, n)) silent.push_back(i);
+        for (size_t start = std::min(s * a.channels, total); back < start; back++) {
+            int64_t v = sample(p + back * w, w);
+            uint64_t q = (uint64_t)(v * v);
+            h -= l < q;
+            l -= q;
+        }
+        if (!(n == 0 ? thresh >= 0 : all || mul_less(h, l, lim, n))) return;
+        if (any) {
+            // two blips can make one slice loud while the silence runs on
+            bool continuous = i == (long long)prev + seek_step;
+            bool gap = i > prev + min_silence_len;
+            if (!continuous && gap) {
+                out.push_back({cur, prev + min_silence_len});
+                cur = i;
+            }
+        } else {
+            cur = i;
+            any = true;
+        }
+        prev = i;
     };
 
     int last = seg_len - min_silence_len;
-    for (int i = 0; i <= last; i += seek_step) check(i);
+    for (long long i = 0; i <= last; i += seek_step) check((int)i);
     // last slice is always checked, like pydub
     if (last % seek_step) check(last);
 
-    if (silent.empty()) return {};
-
-    Ranges out;
-    int prev = silent[0];
-    int cur = prev;
-    for (size_t k = 1; k < silent.size(); k++) {
-        int s = silent[k];
-        bool continuous = s == prev + seek_step;
-        // two blips can make one slice loud while the silence runs on
-        bool gap = s > prev + min_silence_len;
-        if (!continuous && gap) {
-            out.push_back({cur, prev + min_silence_len});
-            cur = s;
-        }
-        prev = s;
-    }
-    out.push_back({cur, prev + min_silence_len});
+    if (any) out.push_back({cur, prev + min_silence_len});
     return out;
 }
 

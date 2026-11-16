@@ -8,11 +8,14 @@ import sys
 import subprocess
 from subprocess import Popen, PIPE
 from math import log, ceil
+from io import BytesIO
 from tempfile import TemporaryFile
 from warnings import warn
 from functools import wraps
 
 import _pydub2
+import pydub2
+from .exceptions import CouldntDecodeError
 
 if sys.version_info >= (3, 0):
     basestring = str
@@ -144,13 +147,17 @@ def make_chunks(audio_segment, chunk_length):
 
 def which(program):
     """
-    Mimics behavior of UNIX which command.
+    Mimics behavior of UNIX which command. The current directory is not searched.
     """
     # Add .exe program extension for windows support
     if os.name == "nt" and not program.endswith(".exe"):
         program += ".exe"
 
-    envdir_list = [os.curdir] + os.environ["PATH"].split(os.pathsep)
+    # a name with a directory in it is an explicit choice
+    if os.path.dirname(program):
+        envdir_list = [""]
+    else:
+        envdir_list = [d for d in os.environ.get("PATH", os.defpath).split(os.pathsep) if d]
 
     for envdir in envdir_list:
         program_path = os.path.join(envdir, program)
@@ -158,14 +165,53 @@ def which(program):
             return program_path
 
 
+def check_duration(frames, rate):
+    limit = pydub2.max_duration
+    if limit is not None and frames > limit * rate:
+        raise CouldntDecodeError("this file is longer than max_duration")
+
+
+def run(command, data=None, **kwargs):
+    try:
+        return subprocess.run(command, input=data, capture_output=True, creationflags=NOWINDOW,
+                              timeout=pydub2.ffmpeg_timeout, **kwargs)
+    except subprocess.TimeoutExpired:
+        raise TimeoutError("ffmpeg took longer than ffmpeg_timeout")
+
+
+def source(filepath, read_ahead_limit=-1):
+    """the input arguments for ffmpeg or ffprobe and the bytes for its stdin, if any"""
+    try:
+        path = fsdecode(filepath)
+    except TypeError:
+        filepath.seek(0)
+        return ["-protocol_whitelist", "cache,pipe", "-read_ahead_limit", str(read_ahead_limit),
+                "-i", "cache:pipe:0"], filepath.read()
+    try:
+        with open(path, "rb") as f:
+            head = f.read(64)
+    except OSError:
+        head = b""
+    # these name other files and a protocol whitelist cant stop that
+    if head.lstrip(b"\xef\xbb\xbf \t\r\n").startswith((b"ffconcat", b"#EXTM3U", b"<MPD", b"<?xml")):
+        raise CouldntDecodeError("cant decode this file")
+    return ["-protocol_whitelist", "file", "-i", "file:" + path], None
+
+
+def _first(*names):
+    for name in names:
+        path = which(name)
+        if path:
+            return path
+
+
 def get_encoder_name():
     """
     Return enconder default application for system, either avconv or ffmpeg
     """
-    if which("avconv"):
-        return "avconv"
-    elif which("ffmpeg"):
-        return "ffmpeg"
+    path = _first("ffmpeg", "avconv")
+    if path:
+        return path
     else:
         # should raise exception
         warn("Couldn't find ffmpeg or avconv - defaulting to ffmpeg, but may not work", RuntimeWarning)
@@ -176,10 +222,9 @@ def get_player_name():
     """
     Return enconder default application for system, either avconv or ffmpeg
     """
-    if which("avplay"):
-        return "avplay"
-    elif which("ffplay"):
-        return "ffplay"
+    path = _first("ffplay", "avplay")
+    if path:
+        return path
     else:
         # should raise exception
         warn("Couldn't find ffplay or avplay - defaulting to ffplay, but may not work", RuntimeWarning)
@@ -190,10 +235,9 @@ def get_prober_name():
     """
     Return probe application, either avconv or ffmpeg
     """
-    if which("avprobe"):
-        return "avprobe"
-    elif which("ffprobe"):
-        return "ffprobe"
+    path = _first("ffprobe", "avprobe")
+    if path:
+        return path
     else:
         # should raise exception
         warn("Couldn't find ffprobe or avprobe - defaulting to ffprobe, but may not work", RuntimeWarning)
@@ -233,8 +277,8 @@ def get_extra_info(stderr):
     """
     extra_info = {}
 
-    re_stream = r'(?P<space_start> +)Stream #0[:\.](?P<stream_id>([0-9]+))(?P<content_0>.+)\n?(?! *Stream)((?P<space_end> +)(?P<content_1>.+))?'
-    for i in re.finditer(re_stream, stderr):
+    re_stream = r'^(?P<space_start> +)Stream #0[:\.](?P<stream_id>([0-9]+))(?P<content_0>.+)\n?(?! *Stream)((?P<space_end> +)(?P<content_1>.+))?'
+    for i in re.finditer(re_stream, stderr, re.M):
         if i.group('space_end') is not None and len(i.group('space_start')) <= len(
                 i.group('space_end')):
             content_line = ','.join([i.group('content_0'), i.group('content_1')])
@@ -247,33 +291,14 @@ def get_extra_info(stderr):
 
 def _run_prober(filepath, read_ahead_limit):
     prober = get_prober_name()
-    command_args = [
-        "-v", "info",
-        "-show_format",
-        "-show_streams",
-    ]
-    try:
-        command_args += ["-i", fsdecode(filepath)]
-        stdin_parameter = None
-        stdin_data = None
-    except TypeError:
-        if prober == 'ffprobe':
-            command_args += ["-read_ahead_limit", str(read_ahead_limit),
-                             "cache:pipe:0"]
-        else:
-            command_args += ["-"]
-        stdin_parameter = PIPE
-        file, close_file = _fd_or_path_or_tempfile(filepath, 'rb', tempfile=False)
-        file.seek(0)
-        stdin_data = file.read()
-        if close_file:
-            file.close()
-
-    command = [prober, '-of', 'json'] + command_args
-    res = Popen(command, stdin=stdin_parameter, stdout=PIPE, stderr=PIPE, creationflags=NOWINDOW)
-    output, stderr = res.communicate(input=stdin_data)
-    output = output.decode("utf-8", 'ignore')
-    stderr = stderr.decode("utf-8", 'ignore')
+    command_args = ["-v", "info", "-show_format", "-show_streams"]
+    args, data = source(filepath, read_ahead_limit)
+    if data is not None and not os.path.basename(prober).startswith("ffprobe"):
+        args = ["-"]
+    command = [prober, '-of', 'json'] + command_args + args
+    res = run(command, data)
+    output = res.stdout.decode("utf-8", 'ignore')
+    stderr = res.stderr.decode("utf-8", 'ignore')
 
     return json.loads(output), stderr
 
@@ -356,14 +381,13 @@ def mediainfo_json(filepath, read_ahead_limit=-1):
             info = {"streams": [{k: v for k, v in stream.items() if v != "N/A"}], "format": dict(fmt, nb_streams=1)}
             extra_info = {0: [stream["sample_fmt"] + (" (%s bit)" % raw if raw != "N/A" else "")]}
         else:
-            p = Popen([get_encoder_name(), "-read_ahead_limit", "-1", "-i", "cache:pipe:0"],
-                      stdin=PIPE, stdout=PIPE, stderr=PIPE, creationflags=NOWINDOW)
-            extra_info = get_extra_info(p.communicate(input=data)[1].decode("utf-8", "ignore"))
+            args = source(BytesIO(data))[0]
+            extra_info = get_extra_info(run([get_encoder_name()] + args, data).stderr.decode("utf-8", "ignore"))
             info = {"streams": [
                 {"index": i, "codec_type": "audio", "codec_name": t[t.index("Audio") + 1].split()[0],
                  "bits_per_sample": 0} for i, t in extra_info.items() if "Audio" in t[:2]]}
 
-    audio_streams = [x for x in info['streams'] if x['codec_type'] == 'audio']
+    audio_streams = [x for x in info.get('streams', []) if x.get('codec_type') == 'audio']
     if len(audio_streams) == 0:
         return info
 
@@ -374,7 +398,7 @@ def mediainfo_json(filepath, read_ahead_limit=-1):
         if prop not in stream or stream[prop] == 0:
             stream[prop] = value
 
-    for token in extra_info[stream['index']]:
+    for token in extra_info.get(stream['index'], []):
         m = re.match(r'([su]([0-9]{1,2})p?) \(([0-9]{1,2}) bit\)$', token)
         m2 = re.match(r'([su]([0-9]{1,2})p?)( \(default\))?$', token)
         if m:
@@ -406,21 +430,16 @@ def mediainfo(filepath):
             return {**native[0], **native[1]}
 
     prober = get_prober_name()
-    try:
-        source, data = ["-i", fsdecode(filepath)], None
-    except TypeError:
-        filepath.seek(0)
-        source, data = ["-read_ahead_limit", "-1", "-i", "cache:pipe:0"], filepath.read()
-    command_args = ["-v", "quiet", "-show_format", "-show_streams"] + source
-    stdin = PIPE if data else None
+    source_args, data = source(filepath)
+    command_args = ["-v", "quiet", "-show_format", "-show_streams"] + source_args
 
     command = [prober, '-of', 'old'] + command_args
-    res = Popen(command, stdin=stdin, stdout=PIPE, creationflags=NOWINDOW)
-    output = res.communicate(data)[0].decode("utf-8", "ignore")
+    res = run(command, data)
+    output = res.stdout.decode("utf-8", "ignore")
 
     if res.returncode != 0:
         command = [prober] + command_args
-        output = Popen(command, stdin=stdin, stdout=PIPE, creationflags=NOWINDOW).communicate(data)[0].decode("utf-8", "ignore")
+        output = run(command, data).stdout.decode("utf-8", "ignore")
 
     rgx = re.compile(r"(?:(?P<inner_dict>.*?):)?(?P<key>.*?)\=(?P<value>.*?)$")
     info = {}
@@ -465,10 +484,10 @@ def get_supported_codecs():
     encoder = get_encoder_name()
     command = [encoder, "-codecs"]
     try:
-        res = Popen(command, stdout=PIPE, stderr=PIPE, creationflags=NOWINDOW)
+        res = run(command)
     except OSError:
         return set(), set()
-    output = res.communicate()[0].decode("utf-8", "ignore")
+    output = res.stdout.decode("utf-8", "ignore")
     if res.returncode != 0:
         return set(), set()
 
