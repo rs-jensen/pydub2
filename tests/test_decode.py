@@ -363,6 +363,15 @@ def test_mp3_seek_after_a_dropped_frame(tmp_path):
         assert d.read(1500) == whole[at * 4:(at + 1500) * 4]
 
 
+# the private bits in the side info are no scfsi, set them in every frame
+@pytest.mark.parametrize("channels", [1, 2])
+def test_mp3_private_bits(tmp_path, channels):
+    m = bytearray(open(make(tmp_path, "a.mp3", channels, "-c:a", "libmp3lame", "-b:a", "128k"), "rb").read())
+    for at in mp3_frames(m)[1:]:
+        m[at + 5] |= 0x7c if channels == 1 else 0x70
+    same_as_ffmpeg(tmp_path, "priv.mp3", bytes(m))
+
+
 def test_mp3_starts_inside_the_bit_reservoir(tmp_path):
     m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k", "-write_xing", "0"), "rb").read()
     starts = mp3_frames(m)

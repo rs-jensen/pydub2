@@ -39,6 +39,7 @@ Two vendored files have a small change so that opening files from several thread
 `src/third_party/dr_mp3.h` has small changes so that it decodes like ffmpeg. Each one is marked with a `pydub2:` comment:
 
 - a short granule ignores its own scfsi bits but no longer clears the ones of the next granule
+- the private bits in front of the scfsi bits are skipped, minimp3 read them as scfsi of granule 0
 - MPEG 2 intensity stereo: the highest scalefactor value is a position like any other, only 16 and up are illegal
 - a frame whose granules claim more bits than it has is decoded, not dropped. The huffman decoder stops at the end of
   the data before each pair and each quad, reads zeros after it, and drops a last quad that ran past its granule
