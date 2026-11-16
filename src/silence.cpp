@@ -9,9 +9,15 @@
 namespace pydub2 {
 
 static int64_t sample(const char *p, int width) {
-    if (width == 1) return (int8_t)p[0];
-    if (width == 2) return (int16_t)((uint8_t)p[0] | (uint8_t)p[1] << 8);
-    if (width == 3) return (uint8_t)p[0] | (uint8_t)p[1] << 8 | (int8_t)p[2] * 65536;
+    if (width == 1) {
+        return (int8_t)p[0];
+    }
+    if (width == 2) {
+        return (int16_t)((uint8_t)p[0] | (uint8_t)p[1] << 8);
+    }
+    if (width == 3) {
+        return (uint8_t)p[0] | (uint8_t)p[1] << 8 | (int8_t)p[2] * 65536;
+    }
     int32_t v;
     memcpy(&v, p, 4);
     return v;
@@ -28,17 +34,27 @@ static bool mul_less(uint64_t hi, uint64_t lo, uint64_t a, uint64_t b) {
 }
 
 Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh, int seek_step, const Cancel &cancel) {
-    if (a.width < 1 || a.width > 4) throw std::invalid_argument("bad sample width");
-    if (seek_step <= 0) throw std::invalid_argument("seek_step must be positive");
-    if (min_silence_len < 0) throw std::invalid_argument("min_silence_len must not be negative");
+    if (a.width < 1 || a.width > 4) {
+        throw std::invalid_argument("bad sample width");
+    }
+    if (seek_step <= 0) {
+        throw std::invalid_argument("seek_step must be positive");
+    }
+    if (min_silence_len < 0) {
+        throw std::invalid_argument("min_silence_len must not be negative");
+    }
 
     // python round, same as nearbyint
     size_t fw = (size_t)a.channels * a.width;
     double frames = (double)(a.data.size() / fw);
     double ms = std::nearbyint(1000.0 * (frames / a.rate));
-    if (ms > INT_MAX) throw std::invalid_argument("too long for detect_silence");
+    if (ms > INT_MAX) {
+        throw std::invalid_argument("too long for detect_silence");
+    }
     int seg_len = (int)ms;
-    if (seg_len < min_silence_len) return {};
+    if (seg_len < min_silence_len) {
+        return {};
+    }
 
     double thresh = std::pow(10.0, silence_thresh / 20) * (double)(1LL << (a.width * 8 - 1));
 
@@ -76,7 +92,9 @@ Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh
             h -= l < q;
             l -= q;
         }
-        if (!(n == 0 ? thresh >= 0 : all || mul_less(h, l, lim, n))) return;
+        if (!(n == 0 ? thresh >= 0 : all || mul_less(h, l, lim, n))) {
+            return;
+        }
         if (any) {
             // two blips can make one slice loud while the silence runs on
             bool continuous = i == (long long)prev + seek_step;
@@ -94,13 +112,19 @@ Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh
 
     int last = seg_len - min_silence_len;
     for (long long i = 0; i <= last; i += seek_step) {
-        if ((i / seek_step & 4095) == 0) cancel();
+        if ((i / seek_step & 4095) == 0) {
+            cancel();
+        }
         check((int)i);
     }
     // last slice is always checked, like pydub
-    if (last % seek_step) check(last);
+    if (last % seek_step) {
+        check(last);
+    }
 
-    if (any) out.push_back({cur, prev + min_silence_len});
+    if (any) {
+        out.push_back({cur, prev + min_silence_len});
+    }
     return out;
 }
 
