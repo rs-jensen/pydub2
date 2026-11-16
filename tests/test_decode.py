@@ -463,6 +463,17 @@ def test_flac_damaged_keeps_the_length(tmp_path):
         assert abs(len(_pydub2.decode(bytes(d))[0]) - len(AudioSegment.from_file(p).raw_data)) <= 2 * one
 
 
+# a max block size of 0 puts every frame at sample 0, so the seek guessed an infinite byte offset (undefined in C)
+def test_flac_seek_with_zero_max_block_size():
+    rng = random.Random(5)
+    pcm = struct.pack("<5000h", *[rng.randint(-30000, 30000) for _ in range(5000)])
+    m = bytearray(_pydub2.encode(pcm, 8000, 1, 2, "flac", 0, []))
+    m[10:12] = b"\0\0"
+    d = _pydub2.Decoder(bytes(m))
+    d.seek(4096)
+    d.read(10)
+
+
 # ffmpeg keeps the channels of the first frame and mixes the rest, a new rate it resamples so that goes to ffmpeg
 def test_mp3_channels_change(tmp_path):
     args = ["-c:a", "libmp3lame", "-write_xing", "0", "-id3v2_version", "0"]
