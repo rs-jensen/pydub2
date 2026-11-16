@@ -2,6 +2,8 @@
 
 This page lists where pydub2 does something other than pydub 0.25.1. The short version is in the README.
 
+With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "Damaged files", "Stream info and tags without ffprobe", "Writing files" and the `parameters` and ffmpeg-missing lines below do not apply: those calls use ffmpeg and ffprobe like pydub. What stays is listed in [migrating.md](migrating.md#strict-mode).
+
 ## Reading files
 
 - wav, flac, ogg and opus are read without ffmpeg, and so is mp3. With a missing converter `from_mp3` works instead of raising `OSError`.

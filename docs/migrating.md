@@ -104,6 +104,20 @@ A URL passed as a file name is not fetched. pydub hands it to ffmpeg. pydub2 loo
 
 pydub2 prints no warning at import when ffmpeg is missing.
 
+## Strict mode
+
+If the sample differences above worry you, turn on strict mode and change nothing else:
+
+    PYDUB2_STRICT=1 python your_script.py
+
+or `pydub2.strict = True` in code. Loading, partial loading, `mediainfo` and exporting then go through ffmpeg and ffprobe like in pydub, with the same command line, so the decoded samples and the exported bytes are the same as pydub's. A wav that pydub reads itself is read the way pydub reads it, also where pydub reads it wrongly (float or a-law wav with an extensible header). `parameters` go after the output file like in pydub, where ffmpeg ignores them, and `export` without `format` writes mp3 whatever the file name says. `export(format="m4a")` and `"aac"` raise `CouldntEncodeError` as in pydub.
+
+It costs two things. ffmpeg and ffprobe have to be installed, and without them the call raises the error pydub raises, with one sentence added about strict mode. And those calls are as slow and as heavy on memory as in pydub. ffmpeg puts a random stream serial in ogg vorbis and opus files, so two exports of the same audio differ in a few bytes, in pydub as well.
+
+Turn it off when you have looked at the differences and are happy with them. A good order is to switch the import with strict on, run your tests, then turn strict off and run them again.
+
+Strict mode does not cover the new functions (`stream`, `detect_speech`, `from_numpy`), the error class where pydub raises `audioop.error` (pydub2 raises `ValueError`), calls that hang in pydub, `rms` on arm64 where audioop fuses the multiplications, and the URL, playlist and demuxer limits for untrusted files. File names are handed to ffmpeg as they are, like in pydub.
+
 ## Check your own code
 
 Run your tests with both. If you use `pydub2-compat`, that is one variable:

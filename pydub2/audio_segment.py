@@ -715,6 +715,16 @@ class AudioSegment(object):
             else:
                 return cls(data=file.read(), metadata=metadata)[start_second*1000:(start_second+duration)*1000]
 
+        if pydub2.strict and wav:
+            # what pydub does, it reads any wav it can parse itself
+            try:
+                obj = cls._from_safe_wav(file)[None if start_second is None else start_second * 1000:
+                                               None if duration is None else ((start_second or 0) + duration) * 1000]
+                if close_file:
+                    file.close()
+                return obj
+            except Exception:
+                pass
         if wav:
             # pydub rewinds a wav
             file.seek(0)
@@ -730,7 +740,7 @@ class AudioSegment(object):
             head[27 + head[26]:][:7] == b"\x01vorbis" and _ffmpeg.find(cls.converter)
 
         tried = False
-        if (own or (codec is None and parameters is None)) and not cut:
+        if not pydub2.strict and (own or (codec is None and parameters is None)) and not cut:
             tried = True
             try:
                 d = _pydub2.Decoder(filename if data is None else data)
@@ -917,7 +927,7 @@ class AudioSegment(object):
             ext = ""
             if isinstance(out_f, (basestring, os.PathLike)):
                 ext = os.path.splitext(fsdecode(out_f))[1][1:].lower()
-            format = ext if ext in ("wav", "flac", "ogg", "opus", "mp3", "m4a", "aac") else "mp3"
+            format = ext if ext in ("wav", "flac", "ogg", "opus", "mp3", "m4a", "aac") and not pydub2.strict else "mp3"
 
         if format in ("raw", "pcm") and (codec is not None or parameters is not None):
             raise AttributeError(
@@ -935,7 +945,7 @@ class AudioSegment(object):
 
         # wav ignores tags and bitrate in pydub too
         if codec is None and parameters is None and (
-                format == "wav" or (format in ("flac", "ogg", "opus") and cover is None)):
+                format == "wav" or (format in ("flac", "ogg", "opus") and cover is None and not pydub2.strict)):
             rate = 0
             if bitrate and format in ("ogg", "opus"):
                 bitrate = str(bitrate).lower()
@@ -965,14 +975,14 @@ class AudioSegment(object):
                 raise InvalidID3TagVersion(
                     "id3v2_version not allowed, allowed versions: %s" % id3v2_allowed_versions)
 
-        if format in ("wav", "flac") and (codec or parameters) and cover is None and tags is None:
+        if format in ("wav", "flac") and (codec or parameters) and cover is None and tags is None and not pydub2.strict:
             out = _export_pcm(self, format, codec, parameters)
             if out is not None:
                 out_f.write(out)
                 out_f.seek(0)
                 return out_f
 
-        if format == "mp3" and codec is None and cover is None:
+        if format == "mp3" and codec is None and cover is None and not pydub2.strict:
             if _mp3.available():
                 mp3 = _mp3.encode(self._data, self.frame_rate, self.channels, self.sample_width,
                                   bitrate, tags, id3v2_version, parameters, self.converter)
