@@ -116,7 +116,7 @@ It costs two things. ffmpeg and ffprobe have to be installed, and without them t
 
 Turn it off when you have looked at the differences and are happy with them. A good order is to switch the import with strict on, run your tests, then turn strict off and run them again.
 
-Strict mode does not cover the new functions (`stream`, `detect_speech`, `from_numpy`), the error class where pydub raises `audioop.error` (pydub2 raises `ValueError`), calls that hang in pydub, `rms` on arm64 where audioop fuses the multiplications, and the URL, playlist and demuxer limits for untrusted files. File names are handed to ffmpeg as they are, like in pydub.
+Strict mode does not cover the new functions (`stream`, `detect_speech`, `from_numpy`), the error class where pydub raises `audioop.error` (pydub2 raises `ValueError`), calls that hang in pydub, and the URL, playlist and demuxer limits for untrusted files. File names are handed to ffmpeg as they are, like in pydub.
 
 ## Check your own code
 
