@@ -616,10 +616,12 @@ struct Mp3 : Dec {
         size_t at = 0;
         for (; at < fr.size() && (fr[at].bad || g++ < want); at++) {
         }
-        // start early enough that the bit reservoir and the overlap are the same as from the start. a frame has
-        // at least n - 38 bytes of main data and the reservoir is at most 511 of them
-        k = at ? at - 1 : 0;
-        for (size_t b = 0, i = 0; k > 0 && b < 511 + 38 * i; i++) {
+        // the overlap comes from the last kept frame, its reservoir from up to 511 bytes of main data before it
+        k = at;
+        while (k > 0 && fr[--k].bad) {
+        }
+        size_t front = spf == 1152 ? 38 : 23;
+        for (size_t b = 0, i = 0; k > 0 && b < 511 + front * i; i++) {
             b += fr[--k].n;
         }
         memset(&dec, 0, sizeof(dec));

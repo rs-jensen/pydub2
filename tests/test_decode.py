@@ -349,6 +349,20 @@ def test_mp3_one_frame(tmp_path):
         pydub2.AudioSegment.from_file(path)
 
 
+# a seek right after a frame ffmpeg drops gives the same samples as a read from the start
+def test_mp3_seek_after_a_dropped_frame(tmp_path):
+    m = bytearray(open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "320k", samples=CLICKS), "rb").read())
+    for k in (20, 21):
+        at = mp3_frames(m)[k]
+        big = (at + 4) * 8 + 20 + 12
+        m[big // 8:big // 8 + 3] = (int.from_bytes(m[big // 8:big // 8 + 3], "big") | 0x1ff << (15 - big % 8)).to_bytes(3, "big")
+    d = _pydub2.Decoder(bytes(m))
+    whole = d.read()
+    for at in range(18 * 1152, 26 * 1152, 300):
+        d.seek(at)
+        assert d.read(1500) == whole[at * 4:(at + 1500) * 4]
+
+
 def test_mp3_starts_inside_the_bit_reservoir(tmp_path):
     m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k", "-write_xing", "0"), "rb").read()
     starts = mp3_frames(m)
