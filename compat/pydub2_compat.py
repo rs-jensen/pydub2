@@ -17,7 +17,10 @@ class Alias:
         except Exception as e:
             if name == "pydub":
                 self.off = True
-                sys.stderr.write("pydub2-compat: cant import pydub2 (%s), using the real pydub\n" % e)
+                try:
+                    sys.stderr.write("pydub2-compat: cant import pydub2 (%s), using the real pydub\n" % e)
+                except Exception:
+                    pass
                 return None
             if isinstance(e, ModuleNotFoundError) and e.name == new:
                 return None
@@ -39,5 +42,8 @@ class Alias:
         module.__spec__ = self.orig[module.__name__]
 
 
-if os.environ.get("PYDUB2_COMPAT") != "0":
-    sys.meta_path.insert(0, Alias())
+try:
+    if os.environ.get("PYDUB2_COMPAT") != "0":
+        sys.meta_path.insert(0, Alias())
+except Exception:
+    pass

@@ -6,13 +6,14 @@ import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 
 import pytest
 
 import _pydub2
 import pydub2
-from pydub2 import AudioSegment, _ffmpeg, _mp3, utils
+from pydub2 import AudioSegment, _ffmpeg, _mp3, playback, utils
 from pydub2.exceptions import CouldntDecodeError
 
 ffmpeg = shutil.which("ffmpeg")
@@ -347,6 +348,30 @@ def test_current_directory_is_not_searched(tmp_path, monkeypatch):
     assert found is None or os.path.isabs(found)
 
 
+def test_nothing_is_started_from_a_name_that_was_not_found(tmp_path, monkeypatch):
+    for name in ("ffmpeg", "ffprobe", "ffplay", "avconv", "avprobe", "avplay"):
+        for ext in ("", ".exe"):
+            (tmp_path / (name + ext)).write_bytes(b"MZ")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", str(empty))
+    monkeypatch.setattr(AudioSegment, "converter", "ffmpeg")
+    started = []
+    for name in ("run", "call", "Popen"):
+        monkeypatch.setattr(subprocess, name, lambda *a, **k: started.append(a))
+    utils._codecs.cache_clear()
+    with pytest.warns(RuntimeWarning):
+        assert utils.get_supported_codecs() == (set(), set())
+    with pytest.warns(RuntimeWarning), pytest.raises(FileNotFoundError):
+        playback._play_with_ffplay(AudioSegment.silent(100))
+    with pytest.raises(FileNotFoundError):
+        _ffmpeg.run("ffmpeg", [], None, "this file")
+    assert not utils._has_prober()
+    assert started == []
+    utils._codecs.cache_clear()
+
+
 @posix
 def test_explicit_converter_and_found_path(tmp_path, monkeypatch):
     for name in ("ffmpeg", "avconv", "ffprobe"):
@@ -536,3 +561,61 @@ def test_mp3_frame_at_the_end_of_the_scan_buffer(tmp_path):
             AudioSegment.from_file(src, format="mp3")
         except CouldntDecodeError:
             pass
+
+
+BEAT = "import sys, time\nf = open(sys.argv[1], 'a')\nwhile True:\n    f.write('x')\n    f.flush()\n    time.sleep(0.05)\n"
+
+
+def assert_stopped(beat):
+    assert beat.stat().st_size > 0
+    size = beat.stat().st_size
+    time.sleep(0.5)
+    assert beat.stat().st_size == size
+
+
+def test_ffmpeg_is_killed_on_timeout(tmp_path, monkeypatch):
+    monkeypatch.setattr(pydub2, "ffmpeg_timeout", 3)
+    with pytest.raises(TimeoutError):
+        utils.run([sys.executable, "-c", BEAT, str(tmp_path / "beat")])
+    assert_stopped(tmp_path / "beat")
+
+
+@pytest.mark.skipif(sys.platform == "win32" and sys.version_info < (3, 13), reason="a thread join cant be interrupted")
+def test_ffmpeg_is_killed_on_interrupt(tmp_path, monkeypatch):
+    import _thread
+    import signal
+    import threading
+    if signal.getsignal(signal.SIGINT) is signal.SIG_IGN:
+        pytest.skip("SIGINT is ignored, pytest was started in the background")
+    monkeypatch.setattr(pydub2, "ffmpeg_timeout", 60)
+    timer = threading.Timer(3, _thread.interrupt_main if os.name == "nt" else lambda: os.kill(os.getpid(), signal.SIGINT))
+    timer.start()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            utils.run([sys.executable, "-c", BEAT, str(tmp_path / "beat")])
+    finally:
+        timer.cancel()
+    assert_stopped(tmp_path / "beat")
+
+
+def test_a_tag_too_long_for_the_command_line(tmp_path):
+    with pytest.raises(CouldntEncodeError_(), match="tags"):
+        _ffmpeg.from_wav(sys.executable, b"RIFF", "mp3", tags={"comment": "x" * 3000000})
+    with pytest.raises(FileNotFoundError):
+        _ffmpeg.from_wav(str(tmp_path / "nope"), b"RIFF", "mp3")
+
+
+def test_a_held_temp_file_does_not_fail_the_export(tmp_path, monkeypatch):
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+
+    def fake(converter, args, data, what):
+        with open(args[-1], "wb") as f:
+            f.write(b"encoded")
+        # what a virus scanner holding the file does to the cleanup
+        for name in ("unlink", "rmdir"):
+            monkeypatch.setattr(os, name, lambda *a, **k: (_ for _ in ()).throw(PermissionError("in use")))
+        return subprocess.CompletedProcess(args, 0, b"", b"")
+
+    monkeypatch.setattr(_ffmpeg, "run", fake)
+    assert _ffmpeg.from_wav("ffmpeg", b"RIFF", "mp3") == b"encoded"
+    monkeypatch.undo()

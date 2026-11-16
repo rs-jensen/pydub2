@@ -1,5 +1,6 @@
 from __future__ import division
 
+import ctypes
 import json
 import os
 import re
@@ -25,7 +26,8 @@ from .exceptions import CouldntDecodeError
 if sys.version_info >= (3, 0):
     basestring = str
 
-NOWINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# with a console the child shares it and gets Ctrl-C, without one it would open its own window
+NOWINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" and not ctypes.windll.kernel32.GetConsoleWindow() else 0
 
 FRAME_WIDTHS = {
     8: 1,
@@ -156,7 +158,7 @@ def which(program):
     """
     program = os.fspath(program)
     # Add .exe program extension for windows support
-    if os.name == "nt" and not program.endswith(".exe"):
+    if os.name == "nt" and not program.lower().endswith(".exe"):
         program += ".exe"
 
     # a name with a directory in it is an explicit choice
@@ -340,10 +342,10 @@ def get_extra_info(stderr):
 
 
 def _run_prober(filepath, read_ahead_limit):
-    prober = get_prober_name()
+    prober = _has_prober()
     command_args = ["-v", "info", "-show_format", "-show_streams"]
     args, data = source(filepath, read_ahead_limit, prober)
-    if data is not None and not os.path.basename(prober).startswith("ffprobe"):
+    if data is not None and not os.path.basename(prober).lower().startswith("ffprobe"):
         args = ["-"]
     command = [prober, '-of', 'json'] + command_args + args
     res = run(command, data)
@@ -933,7 +935,7 @@ def mediainfo(filepath):
         streams = mediainfo_json(filepath).get("streams", [])
         return {k: str(v) for k, v in streams[0].items()} if streams else {}
 
-    prober = get_prober_name()
+    prober = _has_prober()
     source_args, data = source(filepath, exe=prober)
     command_args = ["-v", "quiet", "-show_format", "-show_streams"] + source_args
 
@@ -990,7 +992,9 @@ def get_supported_codecs():
 @lru_cache(None)
 def _codecs(converter):
     from . import _ffmpeg
-    encoder = _ffmpeg.find(converter) or get_encoder_name()
+    encoder = _ffmpeg.find(converter) or which(get_encoder_name())
+    if not encoder:
+        return set(), set()
     command = [encoder, "-codecs"]
     try:
         res = run(command)

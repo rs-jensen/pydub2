@@ -54,6 +54,19 @@ def test_normalize_lufs():
     assert abs(now + 23) < 0.1
 
 
+def test_normalize_lufs_keeps_the_peak_under_full_scale():
+    pcm = array.array("h", (int(100 * math.sin(i * 0.3)) for i in range(16000)))
+    pcm[4000] = pcm[12000] = 3000
+    new = AudioSegment(data=pcm.tobytes(), sample_width=2, frame_rate=8000, channels=1)
+    out = effects.normalize(new, target_lufs=-14)
+    top = 32767 * 10 ** (-0.1 / 20)
+    assert top * 0.99 < out.max <= top + 1
+    out = effects.normalize(new, headroom=3, target_lufs=-14)
+    assert 32767 * 10 ** (-3 / 20) * 0.99 < out.max <= 32767 * 10 ** (-3 / 20) + 1
+    # a target that needs less gain than the peak allows is met as before
+    out = effects.normalize(new, target_lufs=-60)
+    assert abs(_pydub2.loudness(out.raw_data, 8000, 1, 2) + 60) < 0.1
+
 def test_speedup():
     new, old = pair()
     same(effects.speedup(new), old_effects.speedup(old))
