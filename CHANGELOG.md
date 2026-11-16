@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to pydub2 are written here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+What changed in each release.
 
 ## [Unreleased]
 
@@ -11,8 +11,8 @@ The first release.
 ### Reading and writing
 
 - wav, flac, ogg vorbis, opus and mp3 are read without ffmpeg. wav, flac, ogg vorbis and opus are written without ffmpeg.
-- mp3 can be written without ffmpeg when the small `pydub2-mp3` package is installed (`pip install pydub2[mp3]`). It carries the LAME encoder.
-- Tags of flac, ogg and opus files can be written with `tags=` and read back with `mediainfo`, all without ffmpeg. `mediainfo` also reads wav tags without ffprobe. mp3 tags still need ffprobe.
+- mp3 can be written without ffmpeg when the small `pydub2-mp3` package is installed (`pip install "pydub2[mp3]"`). It carries the LAME encoder.
+- Tags of flac, ogg and opus files can be written with `tags=` without ffmpeg. `mediainfo` reads the tags of wav, flac, ogg, opus and mp3 files without ffprobe.
 - `mediainfo` and `mediainfo_json` work without ffprobe for wav, flac, ogg, opus and mp3.
 - `from_file` decodes a path straight from disk. Wav files over 4 GB load.
 - Loading part of a file with `start_second` or `duration` seeks in wav, flac, mp3 and opus files instead of running ffmpeg.
@@ -36,7 +36,7 @@ The first release.
 - A copy of pydub's own test suite runs against pydub2.
 - Python 3.13 and newer work without `audioop`. pydub2 does not use it.
 - The optional `pydub2-compat` package makes `import pydub` load pydub2, even when pydub is installed. `PYDUB2_COMPAT=0` turns it off.
-- `AudioSegment.converter` and the old name `AudioSegment.ffmpeg` still work. ffmpeg, ffprobe and ffplay are found on `PATH` only.
+- ffmpeg, ffprobe and ffplay are looked up on `PATH`, never in the current directory. ffprobe and ffplay are also found next to `AudioSegment.converter`. `AudioSegment.converter` still works.
 - No warning at import when ffmpeg is missing.
 - `parameters` given to `export` are placed before the output file, so they take effect.
 - mp3, ogg and opus samples can differ slightly from what ffmpeg gives, because other decoders are used. The lengths are the same. All differences are listed in [docs/differences.md](docs/differences.md).

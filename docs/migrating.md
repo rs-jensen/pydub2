@@ -1,6 +1,6 @@
 # Moving from pydub to pydub2
 
-For most projects the move is one changed import. This page covers that, what to do when you cannot edit the code that imports pydub, what happens to ffmpeg, the places where pydub2 behaves differently, and the errors people hit most often with pydub.
+For most projects the move is one changed import.
 
 Install it with pip:
 
@@ -65,7 +65,7 @@ seg.export("tone.mp3", format="mp3", bitrate="128k").close()
 print(len(AudioSegment.from_file("tone.mp3")))
 ```
 
-I ran this with no ffmpeg on `PATH`. Without the encoder package and without ffmpeg, the same export raises `FileNotFoundError: ffmpeg not found, pip install pydub2-mp3 to write mp3 without it`.
+This works with no ffmpeg on `PATH`. Without the encoder package and without ffmpeg, the same export raises `FileNotFoundError: ffmpeg not found, pip install pydub2-mp3 to write mp3 without it`.
 
 ## ffmpeg and AudioSegment.converter
 
@@ -137,7 +137,7 @@ Give it a few files of each format you use. A different length is worth a bug re
 
 `FileNotFoundError: [Errno 2] No such file or directory: 'ffprobe'`. In pydub this happens for every file that is not wav. pydub2 does not run ffprobe to read a file, so reading wav, flac, ogg, opus and mp3 works without it, and m4a and the like work with only ffmpeg installed. `utils.mediainfo` and `mediainfo_json` fall back to `ffmpeg -i` for formats pydub2 cannot read itself, and return only the codec, the stream index and the sample size keys.
 
-`FileNotFoundError` when exporting mp3 or m4a. For mp3, install `pydub2[mp3]` or ffmpeg. For m4a and aac you need ffmpeg. The error message says which one.
+`FileNotFoundError` when exporting mp3 or m4a. For mp3, install `"pydub2[mp3]"` or ffmpeg. For m4a and aac you need ffmpeg. The error message says which one.
 
 `CouldntDecodeError: Decoding failed. ffmpeg returned error code ...`. pydub2 raises the same exception with the last part of what ffmpeg said. When ffmpeg is not installed and the file is one of the five formats pydub2 reads itself, you get `CouldntDecodeError: cant read this file`.
 

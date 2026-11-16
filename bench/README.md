@@ -10,8 +10,8 @@ Run on 2026-11-16 on an Apple M2 Pro (10 cores), macOS 15.7.9, Python 3.13.1 (py
 |---|---|
 | pydub | pydub 0.25.1 and audioop-lts 0.2.2 |
 | pydublts | pydub-lts 0.26.0.post5 |
-| pydub2 | pydub2 0.1.0 built with `pip wheel` from commit 580d4c4 |
-| pydub2mp3 | the same and pydub2-mp3 3.100.0, only used where mp3 is written |
+| pydub2 | pydub2 0.0.1 built with `pip wheel` from commit 580d4c4 |
+| pydub2mp3 | the same and pydub2-mp3 0.0.1, only used where mp3 is written |
 | sf | soundfile 0.14.0 |
 | av | PyAV 19.0.2 |
 | mini | miniaudio 1.73 |
@@ -30,22 +30,24 @@ The timed part of each case is only the call named in the row. Reading the input
 
 ## Rerun it
 
+    pip wheel --no-deps -w wheels .
+    pip wheel --no-deps -w wheels mp3
     cd bench
     for v in pydub pydublts pydub2 pydub2mp3 sf av mini; do python3.13 -m venv venvs/$v; venvs/$v/bin/pip install numpy; done
     venvs/pydub/bin/pip install pydub==0.25.1 audioop-lts
     venvs/pydublts/bin/pip install pydub-lts
-    venvs/pydub2/bin/pip install ../pydub2-0.1.0-*.whl
-    venvs/pydub2mp3/bin/pip install ../pydub2-0.1.0-*.whl ../pydub2_mp3-*.whl
+    venvs/pydub2/bin/pip install ../wheels/pydub2-0.0.1-*.whl
+    venvs/pydub2mp3/bin/pip install ../wheels/pydub2-0.0.1-*.whl ../wheels/pydub2_mp3-*.whl
     venvs/sf/bin/pip install soundfile
     venvs/av/bin/pip install av
     venvs/mini/bin/pip install miniaudio
     venvs/sf/bin/python bench.py gen data
     venvs/sf/bin/python bench.py run --venvs venvs --data data --out results.jsonl --quick --runs 5 --slow 30
     venvs/sf/bin/python bench.py report results.jsonl
-    venvs/sf/bin/python bench.py footprint venvs wheels
+    venvs/sf/bin/python bench.py footprint venvs ../wheels
     venvs/sf/bin/python bench.py noffmpeg venvs data
 
-The wheels come from `pip wheel --no-deps -w wheels .` and `pip wheel --no-deps -w wheels mp3` in the repo root. `bench.py` needs ffmpeg on `PATH` for `gen`. Without `--quick` it also runs 5 second files, `speedup`, `fade`, `dBFS` and a high quality resample, and wants librosa, audioread and silero-vad venvs. The run above took about 45 minutes. `gen` writes about 0.4 GB, the venvs about 0.4 GB. Run only one case with `--only "load speech_10m"`, only one library with `--libs pydub2`. Results are appended to the `--out` file and a rerun skips what is already in it.
+The first two lines run in the repo root and build the wheels. `bench.py` needs ffmpeg on `PATH` for `gen`. Without `--quick` it also runs 5 second files, `speedup`, `fade`, `dBFS` and a high quality resample, and wants librosa, audioread and silero-vad venvs. The run above took about 45 minutes. `gen` writes about 0.4 GB, the venvs about 0.4 GB. Run only one case with `--only "load speech_10m"`, only one library with `--libs pydub2`. Results are appended to the `--out` file and a rerun skips what is already in it.
 
 ## Size and ffmpeg
 
