@@ -103,11 +103,16 @@ def make():
         ff("-i", src("f.wav", 48000, 1.5, 2, 0.1), "-c:a", "libopus", out("test5.webm"))
         ff("-f", "lavfi", "-i", "color=c=gray:s=64x48:r=10:d=2.27", "-i", src("g.wav", 48000, 2.27, 2, 0.1),
            "-c:v", "mpeg4", "-c:a", "aac", "-shortest", out("creative_common.mp4"))
+        hi = src("h.wav", 192000, 0.25, 2, 0.1)
+        shutil.copy(hi, out("test-192khz-16bit.wav"))
+        for name, codec in (("24bit.wav", "pcm_s24le"), ("32bit.wav", "pcm_s32le"), ("64bit.wav", "pcm_f64le")):
+            ff("-i", hi, "-c:a", codec, out("test-192khz-" + name))
+        ff("-i", hi, "-c:a", "flac", "-sample_fmt", "s32", out("test-192khz-32bit.flac"))
         ff("-f", "lavfi", "-i", "testsrc2=s=200x200", "-frames:v", "1", out("cover.jpg"))
         ff("-f", "lavfi", "-i", "testsrc2=s=200x200", "-frames:v", "1", out("cover.png"))
 
 
 @pytest.fixture(scope="session", autouse=True)
 def audio():
-    if not os.path.exists(os.path.join(data, "cover.png")):
+    if not os.path.exists(os.path.join(data, "test-192khz-64bit.wav")):
         make()

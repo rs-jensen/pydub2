@@ -3,7 +3,7 @@
 - ffmpeg `parameters` are placed before the output file, so they take effect.
 - Files that fall back to ffmpeg get the same sample width as in pydub (ffprobe, or the `ffmpeg -i` output when ffprobe is missing). Data on a pipe goes through ffmpeg's `cache:` protocol like pydub does, so mp4 with the moov atom at the end works.
 - Reading and exporting wav, flac, ogg and opus, and reading mp3, need no ffmpeg. With a missing converter `from_mp3` works instead of raising `OSError`.
-- mp3 decodes to the same length as ffmpeg, but about 1 sample in 1000 is off by 1 LSB, because minimp3 does its float synthesis a little differently from ffmpeg's mp3float.
+- mp3 decodes to the same length as ffmpeg, but a few samples in 1000 are off by 1 LSB (up to 1 in 100 against the ffmpeg on ubuntu), because minimp3 does its float synthesis a little differently from ffmpeg's mp3float.
 - ogg vorbis has the same length as ffmpeg, samples differ by under 1024 at 32 bit scale (float rounding in a different decoder).
 - opus goes through libopus, ffmpeg uses its own opus decoder. The length is the same but samples can differ a lot, up to about a quarter of full scale at low bitrates.
 - Loading part of a wav, flac, mp3 or opus file with `start_second` or `duration` seeks in the file instead of running ffmpeg. You get the same frames as pydub (ffmpeg's `-ss`/`-t` rounding, then pydub's slicing), with the same small sample differences as a full load of that format. Part of an ogg vorbis file goes through ffmpeg when it is there, because ffmpeg cuts by packet times that drift from the sample count near the start of some files. Without ffmpeg it is cut at the exact sample, which can be a few hundred samples from pydub. `stream` always cuts at the exact sample.

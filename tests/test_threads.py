@@ -16,8 +16,8 @@ from pydub2.generators import Sine, WhiteNoise
 
 # PYDUB2_SOAK=1 for the long run
 SOAK = bool(os.environ.get("PYDUB2_SOAK"))
-SECONDS = 300 if SOAK else 1
-THREADS = 16 if SOAK else 6
+SECONDS = 300 if SOAK else 3
+THREADS = 16
 EXTS = ["wav", "flac", "ogg", "opus", "mp3"]
 
 
@@ -222,7 +222,7 @@ def test_stream_handed_between_threads(ctx):
     assert got == want
 
 
-@pytest.mark.skipif(sysconfig.get_config_var("Py_GIL_DISABLED"), reason="cpython 3.14t crashes on any generator shared like this")
+@pytest.mark.skipif(sysconfig.get_config_var("Py_GIL_DISABLED"), reason="free threaded cpython crashes when threads advance one generator, plain python code does it too")
 def test_stream_advanced_without_lock(ctx):
     # generators refuse a second thread, anything else would be memory corruption
     gen = AudioSegment.stream(ctx.files["flac"], chunk_ms=10)
