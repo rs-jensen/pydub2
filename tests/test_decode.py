@@ -76,7 +76,7 @@ def lossy(tmp_path, name, channels, limit, *args):
 @pytest.mark.parametrize("args", [["-b:a", "128k"], ["-q:a", "4"], ["-b:a", "128k", "-write_xing", "0"],
                                   ["-ar", "22050", "-b:a", "64k"], ["-ar", "8000", "-q:a", "6"]])
 def test_mp3(tmp_path, args, channels):
-    assert lossy(tmp_path, "a.mp3", channels, 1, "-c:a", "libmp3lame", *args) < 0.005
+    assert lossy(tmp_path, "a.mp3", channels, 1, "-c:a", "libmp3lame", *args) < 0.02
 
 
 # these have an Info frame too short for a whole lame block

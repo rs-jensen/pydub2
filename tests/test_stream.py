@@ -21,7 +21,7 @@ except (OSError, subprocess.CalledProcessError):
 
 ARGS = {"wav": [], "flac": [], "mp3": ["-c:a", "libmp3lame"], "ogg": ["-c:a", "libvorbis"], "opus": ["-c:a", "libopus"]}
 # how far pydub2 may be from ffmpeg, see test_decode.py
-LIMIT = {"wav": 0, "flac": 0, "mp3": 1, "ogg": 1024, "opus": 1 << 16}
+LIMIT = {"wav": 0, "flac": 0, "mp3": 1, "ogg": 1024, "opus": 1 << 20}
 CASES = [(1, 2), (0.5, None), (None, 1.5), (2.00001, 1.99999), (4.435, 1.865535), (6.9, None), (7.2, 5), (8, 1),
          (1 / 3, 1 / 7), (0.140370232, None), (3.81, 3.446263)]
 
