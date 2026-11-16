@@ -91,6 +91,12 @@ nanobind_add_module(_pydub2 NB_STATIC
     src/resample.cpp src/loudness.cpp src/vad.cpp src/third_party/stb_vorbis.c)
 target_link_libraries(_pydub2 PRIVATE FLAC::FLAC vorbisenc vorbis opusfile opusenc
     SampleRate::samplerate ebur128)
+# audioop does not fuse the two products in tomono, so neither do we
+if(MSVC)
+    set_source_files_properties(src/pcm.cpp PROPERTIES COMPILE_OPTIONS /fp:strict)
+else()
+    set_source_files_properties(src/pcm.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
+endif()
 if(UNIX AND NOT APPLE)
     target_link_options(_pydub2 PRIVATE -Wl,--exclude-libs,ALL)
 endif()
