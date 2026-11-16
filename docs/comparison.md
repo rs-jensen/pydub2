@@ -60,7 +60,7 @@ There is no pitch shift and no tempo change that keeps the pitch. `speedup` is p
 
 `play()` is pydub's. It waits until the audio is done and needs simpleaudio, PyAudio or ffplay. You cannot stop it from another thread.
 
-Tags of mp3 files and the stream info of formats pydub2 does not read itself need ffprobe. Tags of wav, flac, ogg and opus files work without it.
+The stream info of formats pydub2 does not read itself needs ffprobe. Tags of wav, flac, ogg, opus and mp3 files work without it.
 
 ## Links
 
