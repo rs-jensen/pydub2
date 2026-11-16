@@ -548,7 +548,7 @@ def _id3_str(d, i, enc):
         return b"", i
     codec = "utf-16-be"
     if enc == 1:
-        # ffmpeg 8 takes an empty string with no bom, 7 gives up
+        # ffmpeg 8.1 takes an empty string with no bom, 7 and 8.0 give up
         if d[i:i + 2] == b"\0\0":
             return b"", min(i + 2, len(d))
         if d[i:i + 2] not in (b"\xff\xfe", b"\xfe\xff"):
