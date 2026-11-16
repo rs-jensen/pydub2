@@ -79,7 +79,7 @@ void bias(std::string_view data, size_t width, int bias, const Alloc &alloc);
 void lowpass(std::string_view data, size_t width, size_t channels, double alpha, const Alloc &alloc);
 void highpass(std::string_view data, size_t width, size_t channels, double alpha, const Alloc &alloc);
 void compress(std::string_view data, size_t width, size_t channels, double thresh, double ratio, double attack_frames,
-              double release_frames, long long look, const Alloc &alloc);
+              double release_frames, long long look, const Cancel &cancel, const Alloc &alloc);
 // state is always None in pydub so there is none here
 void ratecv(std::string_view data, size_t width, size_t channels, int inrate, int outrate, const Alloc &alloc);
 

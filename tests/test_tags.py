@@ -1,7 +1,11 @@
+import io
 import json
+import os
 import shutil
+import struct
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -152,3 +156,81 @@ def test_mediainfo_tag_dict(tmp_path, monkeypatch, format):
     want = pydub.utils.mediainfo(p)["TAG"]
     no_ffprobe(monkeypatch)
     assert utils2.mediainfo(p)["TAG"] == want
+
+
+def wav_with(entries, audio=b"\0\0" * 100):
+    info = b"INFO" + b"".join(k + struct.pack("<I", 2) + b"v\0" for k in entries)
+    body = b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, 8000, 16000, 2, 16) + b"LIST" + struct.pack("<I", len(info)) \
+        + info + b"data" + struct.pack("<I", len(audio)) + audio
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
+def flac_with(tags):
+    return _pydub2.encode(b"\0" * 400, 8000, 1, 2, "flac", 0, tags)
+
+
+def ogg_with(tags):
+    return _pydub2.encode(b"\0" * 400, 8000, 1, 2, "ogg", 0, tags)
+
+
+HOSTILE = {
+    "distinct keys in flac": (lambda n: flac_with([(b"k%d" % i, b"v") for i in range(n)]), 1000),
+    "distinct ids in wav": (lambda n: wav_with([("%04x" % i).encode() for i in range(n)]), 1000),
+    "repeated key in flac": (lambda n: flac_with([(b"k", b"v" * 100)] * n), 1000),
+    "long packet in ogg": (lambda n: ogg_with([(b"k", b"v" * n)]), 1 << 20),
+}
+
+
+def seconds(tmp_path, data, ogg):
+    p = tmp_path / "a"
+    p.write_bytes(data)
+    t = time.perf_counter()
+    if ogg:
+        # the decoder is slower than linear on a packet this long, so the tag reader is timed alone
+        f = io.BytesIO(data)
+        utils2._ogg_tags(lambda i, n: (f.seek(i), f.read(n))[1], 7)
+    else:
+        utils2.mediainfo_json(str(p))
+    return time.perf_counter() - t
+
+
+@pytest.mark.parametrize("name", HOSTILE)
+def test_hostile_tags_take_linear_time(tmp_path, monkeypatch, name):
+    make, n = HOSTILE[name]
+    no_ffprobe(monkeypatch)
+    ogg = "ogg" in name
+    small, big = seconds(tmp_path, make(n), ogg), seconds(tmp_path, make(8 * n), ogg)
+    # 8 times the tags may take 8 times as long, quadratic is 64
+    assert big < 25 * small
+
+
+class Counting(io.BufferedReader):
+    got = 0
+
+    def read(self, n=-1):
+        b = super().read(n)
+        Counting.got += len(b)
+        return b
+
+
+@pytest.mark.parametrize("name", ["wav", "flac", "ogg"])
+def test_mediainfo_reads_only_the_tags(tmp_path, monkeypatch, name):
+    audio = os.urandom(20_000_000)
+    data = {"wav": lambda: wav_with([b"INAM"], audio), "flac": lambda: _pydub2.encode(audio, 8000, 1, 2, "flac", 0, [(b"title", b"t")]),
+            "ogg": lambda: _pydub2.encode(audio[:10_000_000], 8000, 1, 2, "ogg", 0, [(b"title", b"t")])}[name]()
+    p = tmp_path / ("a." + name)
+    p.write_bytes(data)
+    no_ffprobe(monkeypatch)
+    monkeypatch.setattr(utils2, "open", lambda path, mode: Counting(io.FileIO(path)), raising=False)
+    Counting.got = 0
+    info = utils2.mediainfo_json(str(p))
+    assert Counting.got < 100_000 and "title" in str(info)
+    assert len(data) > 1_000_000
+
+
+def test_tags_are_utf8_whatever_the_filesystem_says(tmp_path, monkeypatch):
+    monkeypatch.setattr(os, "fsencode", lambda x: x.encode("latin-1", "surrogateescape"))
+    p = str(tmp_path / "a.flac")
+    ours().export(p, format="flac", tags={"title": "\u00c5l \u65e5\u672c"}).close()
+    no_ffprobe(monkeypatch)
+    assert utils2.mediainfo_json(p)["format"]["tags"]["title"] == "\u00c5l \u65e5\u672c"

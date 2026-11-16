@@ -15,7 +15,7 @@ static void check(std::string_view data, size_t width, size_t frame = 1) {
     if (width < 1 || width > 4) {
         throw std::invalid_argument("bad width");
     }
-    if (frame > 65535) {
+    if (frame < 1 || frame > 65535) {
         throw std::invalid_argument("too many channels");
     }
     if (data.size() % (width * frame)) {
@@ -292,13 +292,13 @@ void highpass(std::string_view data, size_t width, size_t channels, double alpha
 }
 
 void compress(std::string_view data, size_t width, size_t channels, double thresh, double ratio, double attack_frames,
-              double release_frames, long long look, const Alloc &alloc) {
+              double release_frames, long long look, const Cancel &cancel, const Alloc &alloc) {
     check(data, width, channels);
     char *out = alloc(data.size());
     memcpy(out, data.data(), data.size());
     size_t n = data.size() / width / channels, fw = width * channels;
     size_t lk = look > 0 ? (size_t)look : 0;
-    // a sum of squares below 2^53 is exact, so it can slide along. above that rms rounds as it adds and has to be asked each time
+    // below 2^53 the sum is exact and can slide, above it rms rounds as it adds so it is asked each time
     bool exact = (double)std::min(lk, n) * (double)channels * (double)(1ULL << (16 * width - 2)) < 9007199254740992.0;
     auto frame = [&](size_t f) {
         long long sum = 0;
@@ -312,6 +312,9 @@ void compress(std::string_view data, size_t width, size_t channels, double thres
     size_t hi = 0, from = 0;
     double atten = 0.0;
     for (size_t i = 0; i < n; i++) {
+        if (i % 4096 == 0) {
+            cancel();
+        }
         size_t lo = lk == 0 ? i : i > lk ? i - lk : 0;
         unsigned int now = 0;
         if (i > lo && exact) {

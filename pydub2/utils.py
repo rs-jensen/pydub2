@@ -190,15 +190,13 @@ def run(command, data=None, **kwargs):
 
 
 # demuxers that open other files or hosts named inside the file
-PLAYLISTS = {"hls", "applehttp", "dash", "concat", "imf", "sdp", "rtsp", "rtp", "lavfi"}
+PLAYLISTS = {"hls", "applehttp", "dash", "concat", "imf", "sdp", "rtsp", "rtp", "lavfi", "avisynth", "vapoursynth"}
 
 
 @lru_cache(None)
 def allowed_demuxers(exe):
-    try:
-        out = run([exe, "-hide_banner", "-demuxers"]).stdout.decode("utf-8", "ignore")
-    except (OSError, TimeoutError):
-        return ""
+    # a timeout raises and is not remembered, an ffmpeg without -demuxers gets "" and runs open
+    out = run([exe, "-hide_banner", "-demuxers"]).stdout.decode("utf-8", "ignore")
     rows = [x.split() for x in out.partition("\n --")[2].splitlines()]
     return ",".join(x[1] for x in rows if len(x) > 1 and PLAYLISTS.isdisjoint(x[1].split(",")))
 
@@ -328,44 +326,56 @@ def _run_prober(filepath, read_ahead_limit):
     return json.loads(output), stderr
 
 
-def dict_set(items, k, v, join=False):
+# real files stay far under these, a flac comment block cant be bigger than 16 MiB anyway
+LIMIT = 16 << 20
+MAX_TAGS = 4096
+MAX_STEPS = 1 << 14
+
+
+def dict_set(items, idx, k, v, join=False):
     # av_dict_set: keys match without case, the old entry is swapped out for the last one and the new goes
-    # at the end, an empty value deletes
-    for i, (k2, v2) in enumerate(items):
-        if k2.lower() == k.lower():
-            items[i] = items[-1]
-            items.pop()
-            if join:
-                v = v2 + b";" + v
-            break
+    # at the end, an empty value deletes. idx finds an entry by its lowercase key
+    i = idx.pop(k.lower(), None)
+    if i is not None:
+        was = items[i]
+        last = items.pop()
+        if i < len(items):
+            items[i] = last
+            idx[last[0].lower()] = i
+        if join:
+            # a bytearray grows in place, v2 + b";" + v would copy it every time
+            old = was[1] if isinstance(was[1], bytearray) else bytearray(was[1])
+            old += b";"
+            old += v
+            v = old
     if v:
+        idx[k.lower()] = len(items)
         items.append((k, v))
 
 
 def _vorbis_comments(b):
-    out = []
+    out, idx = [], {}
     try:
         i = 4 + struct.unpack_from("<I", b)[0]
         n, = struct.unpack_from("<I", b, i)
         i += 4
-        while n > 0 and i + 4 <= len(b):
+        for _ in range(min(n, MAX_TAGS)):
             size, = struct.unpack_from("<I", b, i)
-            k, eq, v = b[i + 4:i + 4 + size].partition(b"=")
             if i + 4 + size > len(b):
                 break
+            k, eq, v = b[i + 4:i + 4 + size].partition(b"=")
             i += 4 + size
-            n -= 1
             if eq and k and v:
-                dict_set(out, k, v, True)
+                dict_set(out, idx, k, v, True)
     except struct.error:
         pass
     return out
 
 
 def _convert(items, names):
-    out = []
+    out, idx = [], {}
     for k, v in items:
-        dict_set(out, names.get(k.lower(), k), v)
+        dict_set(out, idx, names.get(k.lower(), k), v)
     return {k.decode(errors="replace"): v.decode(errors="replace") for k, v in out}
 
 
@@ -373,70 +383,104 @@ _vorbis_names = {b"albumartist": b"album_artist", b"tracknumber": b"track", b"di
                  b"description": b"comment"}
 
 
-def _flac_tags(head):
+def _flac_tags(at):
     i = 4
-    while i + 4 <= len(head):
-        size = int.from_bytes(head[i + 1:i + 4], "big")
-        if head[i] & 127 == 4:
-            return _vorbis_comments(head[i + 4:i + 4 + size])
-        if head[i] & 128:
+    for _ in range(MAX_STEPS):
+        h = at(i, 4)
+        if len(h) < 4:
+            break
+        size = int.from_bytes(h[1:], "big")
+        if h[0] & 127 == 4:
+            return _vorbis_comments(at(i + 4, size))
+        if h[0] & 128:
             break
         i += 4 + size
     return []
 
 
-def _ogg_tags(head, skip):
+def _ogg_tags(at, skip):
     # the second packet is the comment header
-    packets, cur, i = [], b"", 0
-    while i + 27 <= len(head) and len(packets) < 2:
-        n = head[i + 26]
-        i += 27 + n
-        for size in head[i - n:i]:
-            cur += head[i:i + size]
-            i += size
+    packets, cur, i = [], bytearray(), 0
+    for _ in range(MAX_STEPS):
+        h = at(i, 27)
+        if h[:4] != b"OggS" or len(h) < 27:
+            break
+        lacing = at(i + 27, h[26])
+        body = at(i + 27 + h[26], sum(lacing))
+        i += 27 + h[26] + sum(lacing)
+        j = 0
+        for size in lacing:
+            cur += body[j:j + size]
+            j += size
             if size < 255:
-                packets.append(cur)
-                cur = b""
-    if len(packets) < 2:
-        return []
-    return _vorbis_comments(packets[1][skip:])
+                packets.append(bytes(cur))
+                cur = bytearray()
+        if len(packets) > 1:
+            return _vorbis_comments(packets[1][skip:])
+        if len(cur) > LIMIT:
+            break
+    return []
 
 
-def _wav_tags(data):
-    out = []
+def _wav_chunks(at):
     i = 12
-    while i + 8 <= len(data):
-        size, = struct.unpack_from("<I", data, i + 4)
-        if data[i:i + 4] == b"LIST" and data[i + 8:i + 12] == b"INFO":
-            j = i + 12
-            while j + 8 <= min(i + 8 + size, len(data)):
-                n, = struct.unpack_from("<I", data, j + 4)
-                dict_set(out, data[j:j + 4], data[j + 8:j + 8 + n].split(b"\0")[0])
-                j += 8 + n + n % 2
+    for _ in range(MAX_STEPS):
+        h = at(i, 8)
+        if len(h) < 8:
+            return
+        size, = struct.unpack_from("<I", h, 4)
+        yield h[:4], i + 8, size
         i += 8 + size + size % 2
+
+
+def _wav_tags(at, spans):
+    out, idx, n, room = [], {}, 0, LIMIT
+    for i, end in spans:
+        body = at(i, min(end - i, room))
+        room -= len(body)
+        j = 0
+        while j + 8 <= len(body) and n < MAX_TAGS:
+            n += 1
+            size, = struct.unpack_from("<I", body, j + 4)
+            dict_set(out, idx, body[j:j + 4], body[j + 8:j + 8 + size].split(b"\0")[0])
+            j += 8 + size + size % 2
     return out
 
 
-def _native_info(data):
+def _native_info(f, source):
     try:
-        d = _pydub2.Decoder(data)
+        d = _pydub2.Decoder(source)
         frames = d.frames or len(read_capped(d, -1)) // (d.channels * d.width)
     except RuntimeError:
         return None
     rate, channels = d.rate, d.channels
-    # the audio after an id3 tag
-    head = data[10 + sum((data[6 + i] & 127) << 7 * (3 - i) for i in range(4)):] if data[:3] == b"ID3" else data
+    f.seek(0, 2)
+    size = f.tell()
+
+    def at(i, n):
+        f.seek(start + i)
+        return f.read(n)
+
+    start = 0
+    if at(0, 3) == b"ID3":
+        start = 10 + sum((x & 127) << 7 * (3 - i) for i, x in enumerate(at(6, 4)))
     raw = "N/A"
     bits = "0"
     tag = 0
     tags, in_stream = {}, False
-    if data[:4] in (b"RIFF", b"RF64"):
-        i = 12
-        while data[i:i + 4] != b"fmt ":
-            i += 8 + struct.unpack_from("<I", data, i + 4)[0] + data[i + 4] % 2
-        tag, _, _, _, _, bits = struct.unpack_from("<HHIIHH", data, i + 8)
+    head = at(0, 22)
+    if head[:4] in (b"RIFF", b"RF64"):
+        chunk, lists = None, []
+        for cid, i, n in _wav_chunks(at):
+            if cid == b"fmt " and chunk is None:
+                chunk = at(i, 40).ljust(40, b"\0")
+            elif cid == b"LIST" and at(i, 4) == b"INFO":
+                lists.append((i + 4, i + n))
+        if chunk is None:
+            return None
+        tag, _, _, _, _, bits = struct.unpack_from("<HHIIHH", chunk)
         if tag == 0xFFFE:
-            tag = struct.unpack_from("<H", data, i + 32)[0]
+            tag = struct.unpack_from("<H", chunk, 24)[0]
         if tag == 3:
             name, fmt = "pcm_f%dle" % bits, "flt" if bits == 32 else "dbl"
         elif bits == 8:
@@ -447,18 +491,18 @@ def _native_info(data):
         if tag == 1 and bits in (24, 32):
             raw = str(bits)
         bits = str(bits)
-        tags = _convert(_wav_tags(data), {
+        tags = _convert(_wav_tags(at, lists), {
             b"iart": b"artist", b"icmt": b"comment", b"icop": b"copyright", b"icrd": b"date", b"ignr": b"genre",
             b"ilng": b"language", b"inam": b"title", b"iprd": b"album", b"iprt": b"track", b"isft": b"encoder",
             b"ismp": b"timecode", b"itch": b"encoded_by"})
     elif head[:4] == b"fLaC":
         raw = str((((head[20] & 1) << 4) | (head[21] >> 4)) + 1)
         name, fmt, format_name = "flac", "s16" if int(raw) <= 16 else "s32", "flac"
-        tags = _convert(_flac_tags(head), _vorbis_names)
+        tags = _convert(_flac_tags(at), _vorbis_names)
     elif head[:4] == b"OggS":
-        name = "opus" if b"OpusHead" in head[:200] else "vorbis"
+        name = "opus" if b"OpusHead" in at(0, 200) else "vorbis"
         fmt, format_name = "fltp", "ogg"
-        tags = _convert(_ogg_tags(head, 8 if name == "opus" else 7), _vorbis_names)
+        tags = _convert(_ogg_tags(at, 8 if name == "opus" else 7), _vorbis_names)
         in_stream = True
     else:
         name, fmt, format_name = "mp3", "fltp", "mp3"
@@ -469,21 +513,23 @@ def _native_info(data):
         "bits_per_sample": bits, "bits_per_raw_sample": raw,
         "duration": "%.6f" % (frames / rate),
     }
-    fmt = {"nb_streams": "1", "format_name": format_name, "size": str(len(data))}
+    fmt = {"nb_streams": "1", "format_name": format_name, "size": str(size)}
     if tags:
         (stream if in_stream else fmt)["tags"] = tags
     return stream, fmt
 
 
-def _read_all(filepath):
+def _open(filepath):
     try:
-        with open(fsdecode(filepath), "rb") as f:
-            return f.read()
+        path = fsdecode(filepath)
     except TypeError:
         filepath.seek(0)
-        return filepath.read()
+        data = filepath.read()
+        return BytesIO(data), data
+    try:
+        return open(path, "rb"), path
     except OSError:
-        return None
+        return None, None
 
 
 def _has_prober():
@@ -499,10 +545,11 @@ def mediainfo_json(filepath, read_ahead_limit=-1):
             return info
         extra_info = get_extra_info(stderr)
     else:
-        data = _read_all(filepath)
-        if data is None:
+        f, src = _open(filepath)
+        if f is None:
             return {}
-        native = _native_info(data)
+        with f:
+            native = _native_info(f, src)
         if native:
             stream, fmt = native
             for k in ("index", "channels", "bits_per_sample"):
@@ -511,7 +558,7 @@ def mediainfo_json(filepath, read_ahead_limit=-1):
             info = {"streams": [{k: v for k, v in stream.items() if v != "N/A"}], "format": dict(fmt, nb_streams=1)}
             extra_info = {0: [stream["sample_fmt"] + (" (%s bit)" % raw if raw != "N/A" else "")]}
         else:
-            args = source(BytesIO(data), exe=get_encoder_name())[0]
+            args, data = source(filepath, exe=get_encoder_name())
             extra_info = get_extra_info(run([get_encoder_name()] + args, data).stderr.decode("utf-8", "ignore"))
             info = {"streams": [
                 {"index": i, "codec_type": "audio", "codec_name": t[t.index("Audio") + 1].split()[0],
@@ -554,8 +601,11 @@ def mediainfo(filepath):
     """Return dictionary with media info(codec, duration, size, bitrate...) from filepath
     """
     if not _has_prober():
-        data = _read_all(filepath)
-        native = data and _native_info(data)
+        f, src = _open(filepath)
+        native = None
+        if f is not None:
+            with f:
+                native = _native_info(f, src)
         if native:
             stream, fmt = native
             tags = {**stream.pop("tags", {}), **fmt.pop("tags", {})}

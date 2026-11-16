@@ -22,6 +22,7 @@ CALLS = {
     "detect_speech": (20, lambda d: _pydub2.detect_speech(d, 44100, 2, 2, 0.5, 250, 100)),
     "opus": (10, lambda d: _pydub2.encode(d, 44100, 2, 2, "opus")),
     "ogg": (20, lambda d: _pydub2.encode(d, 44100, 2, 2, "ogg")),
+    "compress_32_bit": (1, lambda d: _pydub2.compress(d, 4, 2, 1000.0, 2.0, 441.0, 441.0, 4410)),
 }
 
 
