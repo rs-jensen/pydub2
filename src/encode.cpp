@@ -20,6 +20,8 @@ static int32_t sample(const Audio &a, size_t i) {
         memcpy(&s, p, 2);
         return s;
     }
+    if (a.width == 3)
+        return (uint8_t)p[0] | (uint8_t)p[1] << 8 | (int8_t)p[2] * 65536;
     int32_t s;
     memcpy(&s, p, 4);
     return s;
@@ -103,19 +105,30 @@ static FLAC__StreamEncoderTellStatus flac_tell(const FLAC__StreamEncoder *, FLAC
 
 static std::string flac(const Audio &a) {
     size_t frames = a.data.size() / a.width / a.channels;
-    std::vector<FLAC__int32> buf(4096 * a.channels);
+    // ffmpeg writes 8 bit as 16 and 32 bit as 24, so do we
+    int bits = a.width == 1 ? 16 : a.width == 4 ? 24 : a.width * 8;
+    // its block size is the biggest standard one under 105 ms
+    uint32_t sizes[] = {16, 192, 256, 512, 576, 1024, 1152, 2048, 2304, 4096, 4608, 8192, 16384};
+    uint32_t block = sizes[0];
+    for (uint32_t b : sizes)
+        if (b <= (uint64_t)a.rate * 105 / 1000)
+            block = b;
+    std::vector<FLAC__int32> buf(block * a.channels);
     FLAC__StreamEncoder *enc = FLAC__stream_encoder_new();
     FLAC__stream_encoder_set_channels(enc, a.channels);
-    FLAC__stream_encoder_set_bits_per_sample(enc, a.width * 8);
+    FLAC__stream_encoder_set_bits_per_sample(enc, bits);
+    FLAC__stream_encoder_set_blocksize(enc, block);
     FLAC__stream_encoder_set_sample_rate(enc, a.rate);
     FLAC__stream_encoder_set_total_samples_estimate(enc, frames);
     Sink s;
     bool ok = FLAC__stream_encoder_init_stream(enc, flac_write, flac_seek, flac_tell, nullptr, &s) ==
               FLAC__STREAM_ENCODER_INIT_STATUS_OK;
-    for (size_t f = 0; ok && f < frames; f += 4096) {
-        size_t n = std::min(frames - f, (size_t)4096);
-        for (size_t i = 0; i < n * a.channels; i++)
-            buf[i] = sample(a, f * a.channels + i);
+    for (size_t f = 0; ok && f < frames; f += block) {
+        size_t n = std::min(frames - f, (size_t)block);
+        for (size_t i = 0; i < n * a.channels; i++) {
+            int32_t v = sample(a, f * a.channels + i);
+            buf[i] = a.width == 1 ? v * 256 : a.width == 4 ? v >> 8 : v;
+        }
         ok = FLAC__stream_encoder_process_interleaved(enc, buf.data(), n);
     }
     ok = FLAC__stream_encoder_finish(enc) && ok;
@@ -149,9 +162,13 @@ static std::string ogg(const Audio &a, int bitrate) {
     std::vector<float> pcm = floats(a);
     vorbis_info vi;
     vorbis_info_init(&vi);
-    // q 3 like ffmpeg when no bitrate is given
-    int err = bitrate ? vorbis_encode_init(&vi, a.channels, a.rate, -1, bitrate, -1)
-                      : vorbis_encode_init_vbr(&vi, a.channels, a.rate, 0.3f);
+    // q 3 like ffmpeg when no bitrate is given, and with a bitrate ffmpeg turns the slow rate management off
+    int err = bitrate ? vorbis_encode_setup_managed(&vi, a.channels, a.rate, -1, bitrate, -1)
+                      : vorbis_encode_setup_vbr(&vi, a.channels, a.rate, 0.3f);
+    if (!err && bitrate)
+        err = vorbis_encode_ctl(&vi, OV_ECTL_RATEMANAGE2_SET, nullptr);
+    if (!err)
+        err = vorbis_encode_setup_init(&vi);
     if (err) {
         vorbis_info_clear(&vi);
         throw std::runtime_error("cant encode this");
@@ -225,8 +242,19 @@ static std::string opus(const Audio &a, int bitrate) {
     ope_comments_destroy(com);
     if (!enc)
         throw std::runtime_error("cant encode this");
+    // ffmpeg: 64k per stream plus 32k per coupled pair, plain vbr, no padding in the tags
+    int streams[] = {1, 1, 2, 2, 3, 4, 5, 5}, pairs[] = {0, 1, 1, 2, 2, 2, 2, 3};
+    if (!bitrate && a.channels <= 8)
+        bitrate = 64000 * streams[a.channels - 1] + 32000 * pairs[a.channels - 1];
     if (bitrate)
         err = ope_encoder_ctl(enc, OPUS_SET_BITRATE(bitrate));
+    err = err || ope_encoder_ctl(enc, OPUS_SET_VBR_CONSTRAINT(0));
+    err = err || ope_encoder_ctl(enc, OPE_SET_COMMENT_PADDING(0));
+    // ffmpeg encodes at the next rate opus has, which caps the bandwidth
+    int band = a.rate <= 8000 ? OPUS_BANDWIDTH_NARROWBAND : a.rate <= 12000 ? OPUS_BANDWIDTH_MEDIUMBAND
+             : a.rate <= 16000 ? OPUS_BANDWIDTH_WIDEBAND : a.rate <= 24000 ? OPUS_BANDWIDTH_SUPERWIDEBAND
+                                                                            : OPUS_BANDWIDTH_FULLBAND;
+    err = err || ope_encoder_ctl(enc, OPUS_SET_MAX_BANDWIDTH(band));
     // it takes the frame count as an int
     size_t frames = pcm.size() / a.channels, step = 1 << 20;
     for (size_t f = 0; !err && f < frames; f += step)
@@ -240,14 +268,20 @@ static std::string opus(const Audio &a, int bitrate) {
 }
 
 std::string encode(const Audio &a, const std::string &format, int bitrate) {
+    if (a.width < 1 || a.width > 4)
+        throw std::invalid_argument("bad sample width");
     if (format == "wav")
         return wav(a);
     if (format == "flac")
         return flac(a);
     if (format == "ogg")
         return ogg(a, bitrate);
-    if (format == "opus")
+    if (format == "opus") {
+        // libopusenc corrupts the heap when it resamples up from below about 90 hz
+        if (a.rate < 100)
+            throw std::runtime_error("cant encode this");
         return opus(a, bitrate);
+    }
     throw std::invalid_argument("cant write this format");
 }
 

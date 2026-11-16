@@ -1,4 +1,7 @@
+#include <mutex>
+
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/string.h>
 
 #include "core.h"
@@ -15,7 +18,7 @@ static nb::bytes bytes(const std::string &s) {
 }
 
 static Audio audio(nb::bytes data, int rate, int channels, int width) {
-    if (rate < 1 || channels < 1 || (width != 1 && width != 2 && width != 4))
+    if (rate < 1 || channels < 1 || width < 1 || width > 4)
         throw std::invalid_argument("bad rate, channels or sample width");
     Audio a;
     a.data = str(data);
@@ -38,17 +41,95 @@ static nb::list ranges(const Ranges &r) {
     return out;
 }
 
+struct Stream {
+    nb::bytes keep; // what the decoder reads from, if it is memory
+    std::unique_ptr<Decoder> d;
+    std::mutex lock; // seek and read from two threads
+};
+
+// n frames or all that is left, decoded straight into the bytes python gets
+// frames comes from the header and can lie, so only the first 64 MB are sized from it, the rest grows with what is decoded
+static nb::bytes take(Stream &s, int64_t n) {
+    Decoder &d = *s.d;
+    size_t fw = (size_t)d.channels * d.width;
+    uint64_t left = n >= 0 ? (uint64_t)n : UINT64_MAX;
+    size_t room = std::min<uint64_t>(n >= 0 ? left : d.frames, ((size_t)64 << 20) / fw) * fw, got = 0;
+    nb::object out = nb::steal(PyBytes_FromStringAndSize(NULL, room));
+    if (!out.is_valid()) {
+        throw nb::python_error();
+    }
+    std::string rest;
+    {
+        char *p = PyBytes_AS_STRING(out.ptr());
+        nb::gil_scoped_release g;
+        std::lock_guard<std::mutex> hold(s.lock);
+        got = d.read(p, room / fw);
+        left -= got / fw;
+        size_t step = std::max<size_t>(1, ((size_t)16 << 20) / fw);
+        bool full = got == room;
+        while (full && left) {
+            size_t k = rest.size(), m = std::min<uint64_t>(left, step);
+            rest.resize(k + m * fw);
+            size_t r = d.read(&rest[k], m);
+            rest.resize(k + r);
+            left -= r / fw;
+            full = r == m * fw;
+        }
+    }
+    if (got < room || rest.size()) {
+        nb::object all = nb::steal(PyBytes_FromStringAndSize(NULL, got + rest.size()));
+        if (!all.is_valid()) {
+            throw nb::python_error();
+        }
+        memcpy(PyBytes_AS_STRING(all.ptr()), PyBytes_AS_STRING(out.ptr()), got);
+        memcpy(PyBytes_AS_STRING(all.ptr()) + got, rest.data(), rest.size());
+        out = all;
+    }
+    return nb::borrow<nb::bytes>(out);
+}
+
 NB_MODULE(_pydub2, m) {
+    nb::class_<Stream>(m, "Decoder")
+        .def("__init__", [](Stream *s, nb::bytes data) {
+            std::unique_ptr<Decoder> d;
+            {
+                // bytes cant change under us, no copy needed
+                const uint8_t *buf = (const uint8_t *)data.c_str();
+                size_t len = data.size();
+                nb::gil_scoped_release g;
+                d = open(buf, len);
+            }
+            new (s) Stream{data, std::move(d)};
+        })
+        .def("__init__", [](Stream *s, std::filesystem::path path) {
+            std::unique_ptr<Decoder> d;
+            {
+                nb::gil_scoped_release g;
+                d = open(path);
+            }
+            new (s) Stream{nb::bytes(), std::move(d)};
+        })
+        .def_prop_ro("rate", [](Stream &s) { return s.d->rate; })
+        .def_prop_ro("channels", [](Stream &s) { return s.d->channels; })
+        .def_prop_ro("width", [](Stream &s) { return s.d->width; })
+        .def_prop_ro("frames", [](Stream &s) { return s.d->frames; })
+        .def("seek", [](Stream &s, uint64_t frame) {
+            nb::gil_scoped_release g;
+            std::lock_guard<std::mutex> hold(s.lock);
+            s.d->seek(frame);
+        })
+        .def("read", &take, nb::arg("n") = -1);
+
     m.def("decode", [](nb::bytes data) {
-        Audio a;
+        std::unique_ptr<Decoder> d;
         {
-            // bytes cant change under us, no copy needed
             const uint8_t *buf = (const uint8_t *)data.c_str();
             size_t len = data.size();
             nb::gil_scoped_release g;
-            a = decode(buf, len);
+            d = open(buf, len);
         }
-        return nb::make_tuple(bytes(a.data), a.rate, a.channels, a.width);
+        Stream s{data, std::move(d)};
+        return nb::make_tuple(take(s, -1), s.d->rate, s.d->channels, s.d->width);
     });
 
     m.def("encode", [](nb::bytes data, int rate, int channels, int width, std::string format, int bitrate) {

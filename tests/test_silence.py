@@ -1,5 +1,6 @@
 import array
 import math
+import random
 
 import pytest
 
@@ -67,3 +68,72 @@ def test_matches_pydub_other_params(min_len, thresh):
 def test_seek_step_zero_raises():
     with pytest.raises(ValueError):
         _pydub2.detect_silence(b"\0" * 100, 8000, 1, 2, 10, -40.0, 0)
+
+
+def naive(data, rate, channels, width, min_len, db, step):
+    audioop = pytest.importorskip("audioop")
+    fw = channels * width
+    seg_len = round(1000 * (len(data) // fw) / rate)
+    if seg_len < min_len:
+        return []
+    thresh = 10 ** (db / 20) * 2 ** (8 * width - 1)
+    per_ms = rate / 1000
+
+    def is_silent(i):
+        b = int(i * per_ms) * fw
+        e = int((i + min_len) * per_ms) * fw
+        s = data[b:e]
+        s += bytes(e - b - len(s))
+        return audioop.rms(s, width) <= thresh
+
+    last = seg_len - min_len
+    starts = list(range(0, last + 1, step))
+    if last % step:
+        starts.append(last)
+    starts = [i for i in starts if is_silent(i)]
+    if not starts:
+        return []
+    out = []
+    prev = cur = starts.pop(0)
+    for s in starts:
+        if s != prev + step and s > prev + min_len:
+            out.append([cur, prev + min_len])
+            cur = s
+        prev = s
+    out.append([cur, prev + min_len])
+    return out
+
+
+def random_signal(rnd, rate, channels, width):
+    full = 2 ** (8 * width - 1)
+    samples = []
+    for _ in range(rnd.randint(1, 6)):
+        n = rnd.randint(1, rate // 4) * channels
+        amp = rnd.choice([0, 1, full // 1000, full // 50, full // 3, full - 1])
+        samples += [rnd.randint(-amp, amp) for _ in range(n)]
+    samples = samples[:len(samples) // channels * channels]
+    out = bytearray()
+    for v in samples:
+        out += v.to_bytes(width, "little", signed=True)
+    return bytes(out)
+
+
+def test_matches_naive_walk():
+    audioop = pytest.importorskip("audioop")
+    rnd = random.Random(7)
+    for _ in range(300):
+        width = rnd.choice([1, 2, 3, 4])
+        channels = rnd.choice([1, 2])
+        rate = rnd.choice([1000, 8000, 11025, 16000])
+        data = random_signal(rnd, rate, channels, width)
+        fw = channels * width
+        if rnd.random() < 0.3:
+            data = data[:len(data) - fw]
+        min_len = rnd.choice([1, 20, 50, 333])
+        step = rnd.choice([1, 3, 10, 50])
+        i = rnd.randrange(max(1, len(data) // fw - 1))
+        win = data[i * fw:(i + max(1, min_len * rate // 1000)) * fw]
+        r = max(audioop.rms(win, width), 1)
+        db = 20 * math.log10(r / 2 ** (8 * width - 1)) + rnd.choice([0, 0, 1e-9, -1e-9, 0.01, -0.01, 3])
+        want = naive(data, rate, channels, width, min_len, db, step)
+        assert ours(data, rate, channels, width, min_len, db, step) == want

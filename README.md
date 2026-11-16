@@ -82,7 +82,7 @@ Samples are kept as the same integer pcm that pydub uses. `raw_data`, `dBFS` and
 suite lives in `tests/pydub_suite` and runs against pydub2.
 
 There are a few deliberate differences, for example files that fall back to ffmpeg come out as
-16 bit. They are listed in [docs/differences.md](docs/differences.md).
+16 bit. They are listed in [docs/differences.md](https://github.com/rs-jensen/pydub2/blob/main/docs/differences.md).
 
 ## Status
 
@@ -107,5 +107,5 @@ without them.
 ## License
 
 MIT. The Python layer is ported from [pydub](https://github.com/jiaaro/pydub) by James Robert,
-which is also MIT. The libraries bundled in the C++ core are listed in
-[THIRD_PARTY.md](THIRD_PARTY.md).
+which is also MIT. This is a separate project and is not affiliated with pydub. The libraries bundled in the C++ core are listed in
+[THIRD_PARTY.md](https://github.com/rs-jensen/pydub2/blob/main/THIRD_PARTY.md).

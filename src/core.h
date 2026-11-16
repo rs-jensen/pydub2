@@ -1,25 +1,43 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace pydub2 {
 
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#error samples are copied as little endian
+#endif
+
 // interleaved signed little endian pcm, the same bytes pydub keeps in _data
 struct Audio {
     std::string data;
     int rate = 0;
     int channels = 0;
-    int width = 0; // bytes per sample, 1 2 or 4
+    int width = 0; // bytes per sample, 1 to 4
 };
 
 typedef std::vector<std::pair<int, int>> Ranges; // [start, end) in ms
 
 // decode.cpp
-// wav, flac, mp3, ogg vorbis and opus. throws std::runtime_error on anything else
-Audio decode(const uint8_t *buf, size_t len);
+// wav, flac, mp3, ogg vorbis and opus, a piece at a time. open throws std::runtime_error on anything else
+struct Decoder {
+    int rate = 0;
+    int channels = 0;
+    int width = 0;
+    uint64_t frames = 0; // what a read from the start gives, from the header for flac and opus so it can lie
+    virtual ~Decoder() {}
+    // up to n frames into out, returns bytes. less only at the end
+    virtual size_t read(char *out, size_t n) = 0;
+    virtual void seek(uint64_t frame) = 0;
+};
+// the memory has to outlive the decoder
+std::unique_ptr<Decoder> open(const uint8_t *buf, size_t len);
+std::unique_ptr<Decoder> open(const std::filesystem::path &path);
 
 // encode.cpp
 // format is wav, flac, ogg or opus. bitrate in bits per second, 0 picks a default

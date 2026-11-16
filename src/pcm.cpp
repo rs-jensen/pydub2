@@ -7,11 +7,11 @@
 
 namespace pydub2 {
 
-static const int maxvals[] = {0, 0x7F, 0x7FFF, 0, 0x7FFFFFFF};
-static const int minvals[] = {0, -0x80, -0x8000, 0, INT32_MIN};
+static const int maxvals[] = {0, 0x7F, 0x7FFF, 0x7FFFFF, 0x7FFFFFFF};
+static const int minvals[] = {0, -0x80, -0x8000, -0x800000, INT32_MIN};
 
 static void check(const std::string &data, int width, int frame = 1) {
-    if (width != 1 && width != 2 && width != 4) throw std::invalid_argument("bad width");
+    if (width < 1 || width > 4) throw std::invalid_argument("bad width");
     if (data.size() % (width * frame)) throw std::invalid_argument("not a whole number of samples");
 }
 
@@ -22,6 +22,7 @@ static int get(const char *p, int width) {
         memcpy(&v, p, 2);
         return v;
     }
+    if (width == 3) return (uint8_t)p[0] | (uint8_t)p[1] << 8 | (int8_t)p[2] * 65536;
     int32_t v;
     memcpy(&v, p, 4);
     return v;
@@ -30,6 +31,7 @@ static int get(const char *p, int width) {
 static void put(char *p, int width, int v) {
     if (width == 1) *p = (char)v;
     else if (width == 2) memcpy(p, &v, 2);
+    else if (width == 3) memcpy(p, &v, 3);
     else memcpy(p, &v, 4);
 }
 

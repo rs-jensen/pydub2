@@ -1,5 +1,6 @@
 #include <cmath>
 #include <cstring>
+#include <stdexcept>
 #include <vector>
 
 #include "core.h"
@@ -95,6 +96,8 @@ static std::vector<float> speech_probs(const std::vector<float> &x) {
 }
 
 Ranges detect_speech(const Audio &in, double threshold, int min_speech_ms, int min_silence_ms) {
+    if (in.width < 1 || in.width > 4)
+        throw std::invalid_argument("bad sample width");
     Audio a = in.rate == 16000 ? in : resample(in, 16000);
     size_t n = a.data.size() / a.width / a.channels;
     std::vector<float> x(n);
@@ -105,6 +108,7 @@ Ranges detect_speech(const Audio &in, double threshold, int min_speech_ms, int m
         for (int ch = 0; ch < a.channels; ch++, p += a.width) {
             if (a.width == 1) sum += (int8_t)p[0];
             else if (a.width == 2) sum += (int16_t)(p[0] | p[1] << 8);
+            else if (a.width == 3) sum += (int32_t)((uint32_t)p[0] << 8 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 24) / 256;
             else sum += (int32_t)((uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24);
         }
         x[i] = sum * scale;

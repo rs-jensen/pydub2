@@ -74,3 +74,25 @@ def test_8bit_close_to_16bit():
     loud = _pydub2.loudness(sine(0.5, 44100, 1, 1), 44100, 1, 1)
     ref = _pydub2.loudness(sine(0.5, 44100, 1, 2), 44100, 1, 2)
     assert abs(loud - ref) < 0.3
+
+
+def to24(raw):
+    return b"".join(raw[i + 1:i + 4] for i in range(0, len(raw), 4))
+
+
+@pytest.mark.parametrize("channels", [1, 2])
+@pytest.mark.parametrize("amp", [0.1, 0.5])
+def test_24_bit_same_as_32(channels, amp):
+    raw = sine(amp, 44100, channels, 4)
+    assert abs(_pydub2.loudness(to24(raw), 44100, channels, 3) - _pydub2.loudness(raw, 44100, channels, 4)) < 0.01
+
+
+@needs_ffmpeg
+def test_24_bit_matches_ffmpeg(tmp_path):
+    raw = to24(sine(0.3, 48000, 2, 4))
+    assert abs(_pydub2.loudness(raw, 48000, 2, 3) - ffmpeg_lufs(tmp_path, raw, 48000, 2, 3)) < 0.1
+
+
+def test_24_bit_negative_samples():
+    raw = to24(struct.pack("<i", -2 ** 31) * 48000)
+    assert _pydub2.loudness(raw, 48000, 1, 3) == _pydub2.loudness(struct.pack("<i", -2 ** 31) * 48000, 48000, 1, 4)

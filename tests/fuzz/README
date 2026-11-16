@@ -1,0 +1,5 @@
+libFuzzer harness for src/decode.cpp. Needs clang with libFuzzer (linux, or homebrew llvm) and opus, opusfile, ogg built with -fsanitize=fuzzer-no-link,address,undefined.
+Build: clang -c -O1 -g -fsanitize=fuzzer-no-link,address,undefined -Isrc src/third_party/stb_vorbis.c -o stb.o && clang++ -std=c++17 -O1 -g -fsanitize=fuzzer,address,undefined -Isrc tests/fuzz/fuzz_decode.cpp src/decode.cpp stb.o -lopusfile -lopus -logg
+Run: mkdir corpus && cp tests/pydub_suite/data/* corpus/ && ./a.out corpus -max_len=100000 -timeout=10 -rss_limit_mb=2048 -malloc_limit_mb=1024 -jobs=8 -workers=8
+A dictionary with RIFF RF64 ds64 "fmt " data LIST fLaC OggS OpusHead OpusTags vorbis ID3 Xing Info LAME Lavf helps, pass it with -dict=.
+Each input is opened from memory and from a file in /dev/shm, read in odd chunk sizes, then seeked and read again. Any report is a bug in src/decode.cpp or in a codec it calls.

@@ -92,11 +92,50 @@ def speedup(seg, playback_speed=1.5, chunk_size=150, crossfade=25):
     chunks = [chunk[:-ms_to_remove_per_chunk] for chunk in chunks[:-1]]
 
     out = chunks[0]
-    for chunk in chunks[1:]:
-        out = out.append(chunk, crossfade=crossfade)
+    if crossfade < 0:
+        for chunk in chunks[1:]:
+            out = out.append(chunk, crossfade=crossfade)
+        return out + last_chunk
 
-    out += last_chunk
-    return out
+    # same as chaining out.append(chunk, crossfade) but only the tail of the
+    # output is touched each time, appending to a growing copy is quadratic
+    if crossfade > len(out) and len(chunks) > 1:
+        raise ValueError("Crossfade is longer than the original AudioSegment ({}ms > {}ms)".format(
+            crossfade, len(out)))
+    width = out.frame_width
+    rate = out.frame_rate / 1000.0
+    pieces = [out._data]
+    size = len(out._data)
+    for chunk in chunks[1:]:
+        if crossfade > len(chunk):
+            raise ValueError("Crossfade is longer than the appended AudioSegment ({}ms > {}ms)".format(
+                crossfade, len(chunk)))
+        if not crossfade:
+            pieces.append(chunk._data)
+            size += len(chunk._data)
+            continue
+        ms = round(1000 * (size // width / out.frame_rate))
+        start = int((ms - crossfade) * rate) * width
+        end = int(ms * rate) * width
+        tail = []
+        while size > start:
+            piece = pieces.pop()
+            size -= len(piece)
+            tail.insert(0, piece)
+        tail = b"".join(tail)
+        pieces.append(tail[:start - size])
+        tail = tail[start - size:end - size]
+        size = start
+        # slicing pads with silence when the output is a frame short
+        tail += b"\0" * (end - start - len(tail))
+        xf = out._spawn(tail).fade(to_gain=-120, start=0, end=float('inf'))
+        xf *= chunk[:crossfade].fade(from_gain=-120, start=0, end=float('inf'))
+        for data in (xf._data, chunk[crossfade:]._data):
+            pieces.append(data)
+            size += len(data)
+
+    pieces.append(last_chunk._data)
+    return out._spawn(pieces)
     
 
 @register_pydub_effect
@@ -150,22 +189,32 @@ def compress_dynamic_range(seg, threshold=-20.0, ratio=4.0, attack=5.0, release=
     thresh_rms = seg.max_possible_amplitude * db_to_float(threshold)
     
     look_frames = int(seg.frame_count(ms=attack))
-    def rms_at(frame_i):
-        return seg.get_sample_slice(frame_i - look_frames, frame_i).rms
     def db_over_threshold(rms):
         if rms == 0: return 0.0
         db = ratio_to_db(rms / thresh_rms)
         return max(db, 0)
 
+    data = seg._data
+    fw = seg.frame_width
+    rms = _pydub2.rms
     output = []
+    done = 0
 
     # amount to reduce the volume of the audio by (in dB)
     attenuation = 0.0
     
     attack_frames = seg.frame_count(ms=attack)
     release_frames = seg.frame_count(ms=release)
-    for i in xrange(int(seg.frame_count())):
-        rms_now = rms_at(i)
+    n = int(seg.frame_count())
+    if n:
+        # the fast path below skips these divisions, pydub raises on a zero in them
+        (1.0 / ratio, 0 / attack_frames, 0 / release_frames)
+    for i in xrange(n):
+        rms_now = rms(data[max(0, i - look_frames) * fw:i * fw], seg.sample_width)
+
+        # nothing to do, the frame stays as it is
+        if attenuation == 0.0 and rms_now <= thresh_rms:
+            continue
         
         # with a ratio of 4.0 this means the volume will exceed the threshold by
         # 1/4 the amount (of dB) that it would otherwise
@@ -181,14 +230,14 @@ def compress_dynamic_range(seg, threshold=-20.0, ratio=4.0, attack=5.0, release=
             attenuation -= attenuation_dec
             attenuation = max(attenuation, 0)
         
-        frame = seg.get_frame(i)
         if attenuation != 0.0:
-            frame = _pydub2.mul(frame,
-                                seg.sample_width,
-                                db_to_float(-attenuation))
-        
-        output.append(frame)
+            output.append(data[done * fw:i * fw])
+            output.append(_pydub2.mul(data[i * fw:(i + 1) * fw],
+                                      seg.sample_width,
+                                      db_to_float(-attenuation)))
+            done = i + 1
     
+    output.append(data[done * fw:n * fw])
     return seg._spawn(data=b''.join(output))
 
 
@@ -236,18 +285,12 @@ def low_pass_filter(seg, cutoff):
     
     original = seg.get_array_of_samples()
     filteredArray = array.array(seg.array_type, original)
-    
-    frame_count = int(seg.frame_count())
 
-    last_val = [0] * seg.channels
-    for i in range(seg.channels):
-        last_val[i] = filteredArray[i] = original[i]
-
-    for i in range(1, frame_count):
-        for j in range(seg.channels):
-            offset = (i * seg.channels) + j
-            last_val[j] = last_val[j] + (alpha * (original[offset] - last_val[j]))
-            filteredArray[offset] = int(last_val[j])
+    for j in range(seg.channels):
+        xs = original[j::seg.channels]
+        last = xs[0] if xs else 0
+        filteredArray[j::seg.channels] = array.array(
+            seg.array_type, xs[:1] + array.array(seg.array_type, [int(last := last + (alpha * (x - last))) for x in xs[1:]]))
 
     return seg._spawn(data=filteredArray)
 
@@ -267,20 +310,14 @@ def high_pass_filter(seg, cutoff):
     
     original = seg.get_array_of_samples()
     filteredArray = array.array(seg.array_type, original)
-    
-    frame_count = int(seg.frame_count())
 
-    last_val = [0] * seg.channels
-    for i in range(seg.channels):
-        last_val[i] = filteredArray[i] = original[i]
-
-    for i in range(1, frame_count):
-        for j in range(seg.channels):
-            offset = (i * seg.channels) + j
-            offset_minus_1 = ((i-1) * seg.channels) + j
-
-            last_val[j] = alpha * (last_val[j] + original[offset] - original[offset_minus_1])
-            filteredArray[offset] = int(min(max(last_val[j], minval), maxval))
+    for j in range(seg.channels):
+        xs = original[j::seg.channels]
+        last = xs[0] if xs else 0
+        filteredArray[j::seg.channels] = array.array(
+            seg.array_type, xs[:1] + array.array(seg.array_type, [
+                int(min(max(last := alpha * (last + x - p), minval), maxval))
+                for x, p in zip(xs[1:], xs)]))
 
     return seg._spawn(data=filteredArray)
     

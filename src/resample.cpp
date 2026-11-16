@@ -10,6 +10,7 @@
 namespace pydub2 {
 
 Audio resample(const Audio &a, int new_rate) {
+    if (a.width < 1 || a.width > 4) throw std::invalid_argument("bad sample width");
     if (new_rate == a.rate) return a;
 
     int w = a.width;

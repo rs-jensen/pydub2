@@ -1,10 +1,14 @@
 from __future__ import division
 
 import array
-from tempfile import TemporaryFile
+import os
+from tempfile import TemporaryFile, NamedTemporaryFile
+import subprocess
 import sys
 import struct
-from .utils import fsdecode
+import wave
+from .utils import fsdecode, get_encoder_name, mediainfo_json
+from .logging_utils import log_conversion, log_subprocess_output
 import base64
 from collections import namedtuple
 
@@ -36,12 +40,57 @@ from .exceptions import (
     MissingAudioParameter,
 )
 from . import _ffmpeg
+from . import _mp3
 import _pydub2
 
 if sys.version_info >= (3, 0):
     basestring = str
     xrange = range
     StringIO = BytesIO
+
+
+def _encode(data, rate, *args):
+    try:
+        # the wave module in pydub rounds the rate
+        return _pydub2.encode(data, round(rate), *args)
+    except RuntimeError as e:
+        raise CouldntEncodeError(str(e))
+
+
+def _export_pcm(seg, format, codec, parameters):
+    # only what ffmpeg gives back bit for bit, resampling and channel mixing stay with ffmpeg
+    if format == "flac" and codec:
+        return None
+    width = 2
+    if codec:
+        width = {"pcm_s16le": 2, "pcm_s24le": 3, "pcm_s32le": 4}.get(codec, 0)
+    elif format == "flac" and seg.sample_width == 4:
+        width = 0
+    p = parameters or []
+    if len(p) % 2:
+        return None
+    for k, v in zip(p[::2], p[1::2]):
+        if k == "-ar" and v == str(seg.frame_rate) or k == "-ac" and v == str(seg.channels):
+            pass
+        elif k == "-sample_fmt" and v in ("s16", "s32"):
+            if format == "flac" and v == "s16":
+                width = 2
+            elif v != {2: "s16", 4: "s32"}.get(width):
+                return None
+        else:
+            return None
+    if not width:
+        return None
+    seg = seg.set_sample_width(4 if width == 3 else width)
+    if width != 3:
+        return _encode(seg._data, seg.frame_rate, seg.channels, width, format, 0)
+    n = len(seg._data) // 4 * 3
+    pcm = bytearray(n)
+    for i in range(3):
+        pcm[i::3] = seg._data[i + 1::4]
+    rate, channels = seg.frame_rate, seg.channels
+    return struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", 36 + n, b"WAVE", b"fmt ", 16, 1, channels, rate,
+                       rate * channels * 3, channels * 3, 24, b"data", n) + bytes(pcm)
 
 
 class ClassPropertyDescriptor(object):
@@ -145,6 +194,61 @@ def fix_wav_headers(data):
     data[pos + 4:pos + 8] = struct.pack('<I', len(data) - pos - 8)
 
 
+def _pydub_wav(head):
+    try:
+        return bool(read_wav_audio(head))
+    except (CouldntDecodeError, struct.error):
+        return False
+
+
+def _ffmpeg_frames(x, rate):
+    # ffmpeg reads str(x) to the microsecond and rounds to the nearest frame
+    i, _, f = str(x).partition(".")
+    if not i.isdigit() or not (f.isdigit() or f == ""):
+        return None
+    us = int(i) * 1000000 + int((f + "000000")[:6])
+    return (us * rate + 500000) // 1000000
+
+
+def _slice_frames(n, rate, start, end):
+    # the frames AudioSegment[start:end] takes out of n frames
+    ms = round(1000 * (n / rate))
+    return int(min(start, ms) * (rate / 1000.0)), int(min(end, ms) * (rate / 1000.0))
+
+
+def _span(d, wav, start_second, duration):
+    # (first frame, frame count or -1, final length from the count read) of what pydub returns, None if odd
+    if start_second is None and duration is None:
+        return 0, -1, lambda m: m
+    if (start_second is not None and start_second < 0) or (duration is not None and duration < 0):
+        return None
+    if wav:
+        # pydub slices the whole wav
+        ss = (start_second or 0) * 1000
+        a, b = _slice_frames(d.frames, d.rate, ss, ss + duration * 1000 if duration is not None else float("inf"))
+        return a, max(0, min(b, d.frames) - a), lambda m: max(0, b - a)
+    # ffmpeg cuts with -ss and -t after -i, then pydub slices that
+    a = _ffmpeg_frames(start_second or 0, d.rate)
+    n = -1 if duration is None else _ffmpeg_frames(duration, d.rate)
+    if a is None or n is None:
+        return None
+    end = float("inf") if duration is None else duration * 1000
+    return a, n, lambda m: _slice_frames(m, d.rate, 0, end)[1]
+
+
+def _fit(data, m, want, fw, rate):
+    # m frames to want frames like pydub slicing: cut, or fill up to 2 ms with silence
+    if want < m:
+        return data[:len(data) - (m - want) * fw]
+    if want > m and m:
+        if want - m > 2 * (rate / 1000.0):
+            raise TooManyMissingFrames("You should never be filling in "
+                                       "   more than 2 ms with silence here, "
+                                       "missing frames: %s" % (want - m))
+        data += b"\0" * ((want - m) * fw)
+    return data
+
+
 class AudioSegment(object):
     """
     AudioSegments are *immutable* objects representing segments of audio
@@ -234,27 +338,23 @@ class AudioSegment(object):
         # Convert 24-bit audio to 32-bit audio.
         # (stdlib audioop and array modules do not support 24-bit data)
         if self.sample_width == 3:
-            byte_buffer = BytesIO()
-
-            # Workaround for python 2 vs python 3. _data in 2.x are length-1 strings,
-            # And in 3.x are ints.
-            pack_fmt = 'BBB' if isinstance(self._data[0], int) else 'ccc'
-
-            # This conversion maintains the 24 bit values.  The values are
-            # not scaled up to the 32 bit range.  Other conversions could be
-            # implemented.
-            i = iter(self._data)
-            padding = {False: b'\x00', True: b'\xFF'}
-            for b0, b1, b2 in izip(i, i, i):
-                byte_buffer.write(padding[b2 > b'\x7f'[0]])
-                old_bytes = struct.pack(pack_fmt, b0, b1, b2)
-                byte_buffer.write(old_bytes)
-
-            self._data = byte_buffer.getvalue()
+            # the low byte is padding, 0xff for negative samples like pydub does
+            out = bytearray(len(self._data) // 3 * 4)
+            out[0::4] = self._data[2::3].translate(bytes(128) + b"\xff" * 128)
+            out[1::4] = self._data[0::3]
+            out[2::4] = self._data[1::3]
+            out[3::4] = self._data[2::3]
+            self._data = bytes(out)
             self.sample_width = 4
             self.frame_width = self.channels * self.sample_width
 
         super(AudioSegment, self).__init__(*args, **kwargs)
+
+    def __getattr__(self, name):
+        if name != "_data" or "_parts" not in self.__dict__:
+            raise AttributeError(name)
+        self._data = b"".join(self._parts)
+        return self._data
 
     @property
     def raw_data(self):
@@ -471,7 +571,7 @@ class AudioSegment(object):
                                    "frame_width": 2})
 
     @classmethod
-    def from_mono_audiosegments(cls, *mono_segments):
+    def from_mono_audiosegments(cls, *mono_segments, fill_up=False):
         if not len(mono_segments):
             raise ValueError("At least one AudioSegment instance is required")
 
@@ -492,7 +592,8 @@ class AudioSegment(object):
         )
 
         for i, seg in enumerate(segs):
-            data[i::channels] = seg.get_array_of_samples()
+            samples = seg.get_array_of_samples()
+            data[i:len(samples) * channels if fill_up else None:channels] = samples
 
         return cls(
             data,
@@ -538,7 +639,8 @@ class AudioSegment(object):
                 'frame_width': channels * sample_width
             })
 
-        if is_format("raw") or is_format("pcm"):
+        wav = is_format("wav")
+        if not wav and (is_format("raw") or is_format("pcm")):
             sample_width = kwargs['sample_width']
             frame_rate = kwargs['frame_rate']
             channels = kwargs['channels']
@@ -557,20 +659,31 @@ class AudioSegment(object):
             else:
                 return cls(data=file.read(), metadata=metadata)[start_second*1000:(start_second+duration)*1000]
 
-        if is_format("wav"):
+        if wav:
             # pydub rewinds a wav
             file.seek(0)
-        data = file.read()
+        # a name goes to the decoder as it is, so the file never sits in memory
+        data = None if close_file else bytes(file.read())
+        # pydub reads pcm wav itself, without codec or parameters, and cuts it in python
+        own = wav and _pydub_wav(file.read(65536) if data is None else data[:65536])
         if close_file:
             file.close()
 
-        # pydub cuts wav in python and everything else in ffmpeg
-        if codec is None and parameters is None and (is_format("wav") or (start_second is None and duration is None)):
+        tried = False
+        if own or (codec is None and parameters is None):
+            tried = True
             try:
-                obj = decoded(data)
-                if start_second is None and duration is None:
-                    return obj
-                elif start_second is not None and duration is None:
+                d = _pydub2.Decoder(filename if data is None else data)
+                span = _span(d, own, start_second, duration)
+                if span:
+                    start, n, final = span
+                    if start:
+                        d.seek(start)
+                    pcm = d.read(n)
+                    fw = d.channels * d.width
+                    return cls._segment(d, _fit(pcm, len(pcm) // fw, final(len(pcm) // fw), fw, d.rate))
+                obj = cls._segment(d, d.read())
+                if start_second is not None and duration is None:
                     return obj[start_second*1000:]
                 elif start_second is None and duration is not None:
                     return obj[:duration*1000]
@@ -579,6 +692,8 @@ class AudioSegment(object):
             except RuntimeError:
                 pass
 
+        if tried and _ffmpeg.find(cls.converter) is None and any(is_format(f) for f in ("wav", "flac", "mp3", "ogg", "opus")):
+            raise CouldntDecodeError("cant read this file")
         obj = decoded(_ffmpeg.to_wav(cls.converter, filename, data, format, codec, parameters,
                                      start_second, duration))
 
@@ -590,6 +705,62 @@ class AudioSegment(object):
             return obj[:duration * 1000]
         else:
             return obj[0:duration * 1000]
+
+    @classmethod
+    def _segment(cls, d, data):
+        return cls(data=data, metadata={
+            'sample_width': d.width,
+            'frame_rate': d.rate,
+            'channels': d.channels,
+            'frame_width': d.channels * d.width
+        })
+
+    @classmethod
+    def stream(cls, file, chunk_ms=10000, start_second=None, duration=None):
+        """Yields the file in chunk_ms pieces without loading all of it. wav, flac, mp3, ogg and opus only."""
+        filename = None if hasattr(file, "read") else fsdecode(file)
+        try:
+            d = _pydub2.Decoder(bytes(file.read()) if filename is None else filename)
+        except RuntimeError:
+            raise CouldntDecodeError("stream only reads wav, flac, mp3, ogg and opus")
+
+        def run(f, *args):
+            try:
+                return f(*args)
+            except RuntimeError:
+                raise CouldntDecodeError("cant read this file")
+        own = False
+        if filename is not None and filename.lower().endswith(".wav"):
+            with open(filename, "rb") as f:
+                own = _pydub_wav(f.read(65536))
+        span = _span(d, own, start_second, duration)
+        if not span:
+            raise ValueError("start_second and duration have to be plain numbers, 0 or more")
+        start, n, final = span
+        fw = d.channels * d.width
+        step = int(chunk_ms * (d.rate / 1000.0))
+        if step < 1:
+            raise ValueError("chunk_ms is too small")
+        if start:
+            run(d.seek, start)
+
+        def chunks():
+            prev = run(d.read, step if n < 0 else min(step, n))
+            got = len(prev) // fw
+            while True:
+                k = step if n < 0 else min(step, n - got)
+                cur = run(d.read, k) if k > 0 else b""
+                got += len(cur) // fw
+                if k <= 0 or len(cur) < k * fw:
+                    break
+                yield cls._segment(d, prev)
+                prev = cur
+            # only the end can change, by under a ms, so it stays inside the last two chunks
+            tail = _fit(prev + cur, got, final(got), fw, d.rate)
+            for i in range(0, len(tail), step * fw):
+                yield cls._segment(d, tail[i:i + step * fw])
+
+        return chunks()
 
     @classmethod
     def from_mp3(cls, file, parameters=None):
@@ -621,7 +792,7 @@ class AudioSegment(object):
             file.close()
         return obj
 
-    def export(self, out_f=None, format='mp3', codec=None, bitrate=None, parameters=None, tags=None, id3v2_version='4',
+    def export(self, out_f=None, format=None, codec=None, bitrate=None, parameters=None, tags=None, id3v2_version='4',
                cover=None):
         """
         Export an AudioSegment to a file with given options
@@ -631,7 +802,7 @@ class AudioSegment(object):
             python >= 3.6
 
         format (string)
-            Format for destination audio file.
+            Format for destination audio file, taken from the extension of out_f when left out (mp3 if unknown).
             ('mp3', 'wav', 'raw', 'ogg' or other ffmpeg/avconv supported files)
 
         codec (string)
@@ -658,7 +829,13 @@ class AudioSegment(object):
         """
         id3v2_allowed_versions = ['3', '4']
 
-        if format == "raw" and (codec is not None or parameters is not None):
+        if format is None:
+            ext = ""
+            if isinstance(out_f, (basestring, os.PathLike)):
+                ext = os.path.splitext(fsdecode(out_f))[1][1:].lower()
+            format = ext if ext in ("wav", "flac", "ogg", "opus", "mp3", "m4a", "aac") else "mp3"
+
+        if format in ("raw", "pcm") and (codec is not None or parameters is not None):
             raise AttributeError(
                     'Can not invoke ffmpeg when export format is "raw"; '
                     'specify an ffmpeg raw format like format="s16le" instead '
@@ -667,7 +844,7 @@ class AudioSegment(object):
         out_f, _ = _fd_or_path_or_tempfile(out_f, 'wb+')
         out_f.seek(0)
 
-        if format == "raw":
+        if format in ("raw", "pcm"):
             out_f.write(self._data)
             out_f.seek(0)
             return out_f
@@ -676,11 +853,15 @@ class AudioSegment(object):
         if codec is None and parameters is None and (
                 format == "wav" or (format in ("flac", "ogg", "opus") and tags is None and cover is None)):
             rate = 0
-            if bitrate:
+            if bitrate and format in ("ogg", "opus"):
                 bitrate = str(bitrate).lower()
                 unit = {"k": 1000, "m": 1000000}.get(bitrate[-1])
                 rate = int(float(bitrate[:-1]) * unit) if unit else int(bitrate)
-            out_f.write(_pydub2.encode(self._data, self.frame_rate, self.channels, self.sample_width, format, rate))
+            data, width = self._data, self.sample_width
+            if format == "flac" and width == 4:
+                # ffmpeg writes 32 bit audio as 24 bit flac
+                data, width = _pydub2.lin2lin(data, 4, 3), 3
+            out_f.write(_encode(data, self.frame_rate, self.channels, width, format, rate))
             out_f.seek(0)
             return out_f
 
@@ -691,11 +872,45 @@ class AudioSegment(object):
                 raise InvalidID3TagVersion(
                     "id3v2_version not allowed, allowed versions: %s" % id3v2_allowed_versions)
 
-        wav = _pydub2.encode(self._data, self.frame_rate, self.channels, self.sample_width, "wav")
+        if format in ("wav", "flac") and (codec or parameters) and cover is None and tags is None:
+            out = _export_pcm(self, format, codec, parameters)
+            if out is not None:
+                out_f.write(out)
+                out_f.seek(0)
+                return out_f
+
+        if format == "mp3" and codec is None and cover is None:
+            if _mp3.available():
+                mp3 = _mp3.encode(self._data, self.frame_rate, self.channels, self.sample_width,
+                                  bitrate, tags, id3v2_version, parameters, self.converter)
+                if mp3 is not None:
+                    out_f.write(mp3)
+                    out_f.seek(0)
+                    return out_f
+            elif _ffmpeg.find(self.converter) is None:
+                raise FileNotFoundError("ffmpeg not found, pip install pydub2-mp3 to write mp3 without it")
+
+        wav = _encode(self._data, self.frame_rate, self.channels, self.sample_width, "wav")
         out_f.write(_ffmpeg.from_wav(self.converter, wav, format, codec, bitrate, parameters, tags,
                                      id3v2_version, cover))
         out_f.seek(0)
         return out_f
+
+    @classmethod
+    def from_numpy(cls, array, frame_rate):
+        """array is (n,) or (n, channels), int8/16/32 as is, float32/64 in -1..1 becomes 16 bit"""
+        import numpy as np
+        array = np.asarray(array)
+        if array.dtype.kind == "f":
+            array = np.rint(np.clip(array, -1, 1) * 32767).astype(np.int16)
+        if array.dtype not in (np.int8, np.int16, np.int32) or array.ndim not in (1, 2):
+            raise ValueError("need a 1d or 2d array of int8, int16, int32, float32 or float64")
+        return cls(np.ascontiguousarray(array).tobytes(), sample_width=array.dtype.itemsize,
+                   frame_rate=frame_rate, channels=array.shape[1] if array.ndim == 2 else 1)
+
+    def to_numpy(self):
+        import numpy as np
+        return np.frombuffer(self._data, dtype="int%d" % (self.sample_width * 8)).reshape(-1, self.channels).copy()
 
     def get_frame(self, index):
         frame_start = index * self.frame_width
@@ -811,7 +1026,7 @@ class AudioSegment(object):
         rms = self.rms
         if not rms:
             return -float("infinity")
-        return ratio_to_db(self.rms / self.max_possible_amplitude)
+        return ratio_to_db(rms / self.max_possible_amplitude)
 
     @property
     def max(self):
@@ -872,7 +1087,10 @@ class AudioSegment(object):
         def remove_data_dc(data, off):
             if not off:
                 off = _pydub2.avg(data, self.sample_width)
-            return _pydub2.bias(data, self.sample_width, -off)
+            try:
+                return _pydub2.bias(data, self.sample_width, -off)
+            except TypeError:
+                raise ValueError("offset does not fit in the sample width")
 
         if self.channels == 1:
             return self._spawn(data=remove_data_dc(self._data, offset))
@@ -968,6 +1186,10 @@ class AudioSegment(object):
             # dec times to break our while loop (eventually)
             times -= 1
 
+            # looping an empty segment never ends
+            if not seg2_len:
+                break
+
         output.write(seg1[pos:])
 
         return spawn(data=output)
@@ -976,7 +1198,12 @@ class AudioSegment(object):
         seg1, seg2 = AudioSegment._sync(self, seg)
 
         if not crossfade:
-            return seg1._spawn(seg1._data + seg2._data)
+            # joined on first read of _data, so seg += chunk in a loop stays linear
+            parts = seg1.__dict__.get("_parts") or [seg1._data]
+            out = seg1._spawn(b"")
+            del out._data
+            out._parts = parts + [seg2._data]
+            return out
         elif crossfade > len(self):
             raise ValueError("Crossfade is longer than the original AudioSegment ({}ms > {}ms)".format(
                 crossfade, len(self)
@@ -1079,7 +1306,7 @@ class AudioSegment(object):
             start_frame = self.frame_count(ms=start)
             end_frame = self.frame_count(ms=end)
             fade_frames = end_frame - start_frame
-            scale_step = gain_delta / fade_frames
+            scale_step = gain_delta / (fade_frames or 1)
 
             for i in range(int(fade_frames)):
                 volume_change = from_power + (scale_step * i)
