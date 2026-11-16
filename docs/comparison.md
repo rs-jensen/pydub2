@@ -14,7 +14,7 @@ I checked everything on 2026-11-16. Versions and dates come from PyPI that day. 
 | Needs ffmpeg installed | for m4a/aac, wma, aiff and video, and for mp3 writing unless you add `pydub2-mp3` | for everything except wav, plus ffprobe | same as pydub | same as pydub | no | no, FFmpeg is in the wheel | no | no | yes, the shared FFmpeg libraries, for all decoding and encoding | no | one of several backends, ffmpeg is one of them |
 | AudioSegment API | yes, pydub's own test suite runs against it | it is the original | yes, a fork | yes, a fork | no | no | no | no | no | no | no |
 | Read with nothing else installed | wav, flac, ogg, opus, mp3 | wav | wav | wav | wav, flac, ogg, opus, mp3, aiff and more | wav, flac, ogg, opus, mp3, m4a, aiff, mp4 | wav, flac, vorbis, mp3 | wav, flac, ogg, opus, mp3, aiff, m4a (m4a through the system codecs on macOS) | none, needs FFmpeg | what soundfile reads | wave, aifc and sunau from the standard library, Core Audio on macOS |
-| Write with nothing else installed | wav, flac, ogg, opus; mp3 after `pip install pydub2[mp3]` | wav | wav | wav | wav, flac, ogg, opus (8, 12, 16, 24 and 48 kHz only), mp3 | wav, flac, mp3, aac, opus; vorbis only with the experimental encoder | wav | wav, flac, ogg, mp3 | none, needs FFmpeg | nothing, it only reads | nothing, it only reads |
+| Write with nothing else installed | wav, flac, ogg, opus; mp3 after `pip install "pydub2[mp3]"` | wav | wav | wav | wav, flac, ogg, opus (8, 12, 16, 24 and 48 kHz only), mp3 | wav, flac, mp3, aac, opus; vorbis only with the experimental encoder | wav | wav, flac, ogg, mp3 | none, needs FFmpeg | nothing, it only reads | nothing, it only reads |
 | Long files in pieces | `AudioSegment.stream` for wav, flac, mp3, ogg, opus | no, the whole file is decoded | no | no | `blocks()` | frame by frame | `stream_file` | read in chunks | decode a sample range | `librosa.stream` | yes, it yields buffers |
 | Python 3.13 and 3.14 | yes, run on 3.14 and 3.15 | import fails on 3.13 and newer unless `audioop-lts` is installed | pulls in `audioop-lts`, run on 3.14 | pulls in `audioop-lts`, run on 3.14 | yes, run on 3.14 | yes, run on 3.14, needs 3.12 or newer | yes, 3.11 or newer | yes, run on 3.14 | 3.10 to 3.14 in the README | 3.12 or newer, 3.13 and 3.14 listed | 3.9 or newer, adds `standard-aifc` on 3.13 |
 | Free threaded builds | yes, 8 threads decoding on 3.15t in my run | pure Python, never tried | not tried | not tried | pure Python plus cffi, the README has a section on threads | wheels for 3.14t | wheels for 3.14t | wheels for 3.14t on some platforms | wheels for 3.14t | not declared | not declared |
@@ -34,7 +34,7 @@ Speech detection in pydub2 uses the Silero VAD model, which is built into the ex
 
 ## Speed and size
 
-I timed the libraries on an Apple M2 Pro (macOS 15.7.9, Python 3.13.1, ffmpeg 7.1.1) with pydub 0.25.1, pydub2 0.1.0, soundfile 0.14.0, PyAV 19.0.2 and miniaudio 1.73. pydub-lts is within a few percent of pydub in every row, so it is left out. The inputs are generated 44.1 kHz stereo files, speech-like and music-like. Each number is the median of at least 5 runs, each in a fresh process. The machine was not idle: a browser was open and the load average was 2 to 4 on 10 cores. Read differences under 15 percent as a tie. The method, the full table with CPU time for every case and the exact versions are in [bench/README.md](../bench/README.md).
+I timed the libraries on an Apple M2 Pro (macOS 15.7.9, Python 3.13.1, ffmpeg 7.1.1) with pydub 0.25.1, pydub2 0.0.1, soundfile 0.14.0, PyAV 19.0.2 and miniaudio 1.73. pydub-lts is within a few percent of pydub in every row, so it is left out. The inputs are generated 44.1 kHz stereo files, speech-like and music-like. Each number is the median of at least 5 runs, each in a fresh process. The machine was not idle, so read differences under 15 percent as a tie. The method, the full table with CPU time for every case and the exact versions are in [bench/README.md](../bench/README.md).
 
 Seconds of wall time on a 10 minute speech file, lower is better. The music file gives the same picture for loading.
 
@@ -116,7 +116,7 @@ Use pydub 0.25.1, or one of its forks, if your code works today, you only touch 
 
 ## What pydub2 does not do yet
 
-It installs with `pip install pydub2`. I develop it on macOS arm64. The tests run on Linux for every push, and on Windows and macOS when I build the wheels. I have not tried it on a real Windows machine.
+I develop it on macOS arm64. The tests run on Linux for every push, and on Windows and macOS when I build the wheels. I have not tried it on a real Windows machine.
 
 m4a and aac, wma, aiff and video files still go through ffmpeg. pydub2 can export m4a and aac when ffmpeg is there. That fails in pydub 0.25.1.
 
@@ -126,7 +126,7 @@ There is no pitch shift and no tempo change that keeps the pitch. `speedup` is p
 
 `play()` is pydub's. It waits until the audio is done and needs simpleaudio, PyAudio or ffplay. You cannot stop it from another thread.
 
-The stream info of formats pydub2 does not read itself needs ffprobe. Tags of wav, flac, ogg, opus and mp3 files work without it.
+For formats pydub2 does not read itself, `mediainfo` needs ffprobe to give the full stream info. With only ffmpeg you get the codec and sample size. Tags of wav, flac, ogg, opus and mp3 files work without ffprobe.
 
 ## Links
 

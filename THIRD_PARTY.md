@@ -19,7 +19,7 @@ folder of the source tree, and in `*.dist-info/licenses/licenses` of an installe
 | libopusenc | 0.3 | BSD-3-Clause | licenses/libopusenc.txt |
 | Speex resampler, inside libopusenc | | BSD-3-Clause | licenses/speex-resampler.txt |
 | libsamplerate | 0.2.2 | BSD-2-Clause | licenses/libsamplerate.txt |
-| nanobind | 3.1.0 | BSD-3-Clause | licenses/nanobind.txt |
+| nanobind | 3.1.0, 2.15.0 for Python 3.9 | BSD-3-Clause | licenses/nanobind.txt |
 | robin-map, inside nanobind | | MIT | licenses/robin-map.txt |
 | Silero VAD | v6.2, weights from silero_vad.onnx | MIT | licenses/silero-vad.txt |
 | pydub | 0.25.1, the Python layer is a port of it | MIT | licenses/pydub.txt |

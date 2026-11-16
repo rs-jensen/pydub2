@@ -18,10 +18,10 @@ No audio from pydub's repository is kept. `tests/pydub_suite/conftest.py` makes 
 
 ## mp3 and aac
 
-mp3 reading is built in (minimp3 through dr_mp3). mp3 writing uses LAME 3.100 (LGPL-2.0-or-later), which is not in this package. It is in the separate package `pydub2-mp3`, installed with `pip install pydub2[mp3]`. LAME is built from the unmodified release tarball (sha256 `ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e`) with `mp3/CMakeLists.txt` as its own shared library, which pydub2 loads with ctypes. Anyone can replace it with their own build. The `LICENSE` of that package has the full LGPL text, the source and how to replace the library.
+mp3 reading is built in (minimp3 through dr_mp3). mp3 writing uses LAME 3.100 (LGPL-2.0-or-later), which is not in this package. It is in the separate package `pydub2-mp3`, installed with `pip install "pydub2[mp3]"`. LAME is built from the unmodified release tarball (sha256 `ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e`) with `mp3/CMakeLists.txt` as its own shared library, which pydub2 loads with ctypes. Anyone can replace it with their own build. The `LICENSE` of that package has the full LGPL text, the source and how to replace the library.
 
 aac, m4a, wma and video files are not bundled. They go to ffmpeg, which you install yourself.
 
 ## The name
 
-pydub2 is a name for compatibility, like pydub-ng. The project is not affiliated with pydub. I found no registered trademark for "pydub" in the US trademark database. I could not search the EU and WIPO databases.
+pydub2 is a name for compatibility, like pydub-ng. The project is not affiliated with pydub.
