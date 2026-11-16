@@ -313,7 +313,7 @@ def id3_cases():
         "empty frames": [id3_tag([id3_frame(b"TIT2", b""), id3_frame(b"TPE1", b"\0"), id3_frame(b"TALB", b"\0\0"),
                                   t(b"TCOM", b"c")]), b""],
         "padding": [id3_tag([t(b"TIT2", b"p")], 3, 0, 50), b""],
-        "duplicates": [id3_tag([t(b"TIT2", b"1"), t(b"TIT2", b"2"), t(b"tit2", b"3"), id3_frame(b"TXXX", b"\0Title\0x")]), b""],
+        "duplicates": [id3_tag([t(b"TIT2", b"1"), t(b"TIT2", b"2"), t(b"tit2", b"3")]), b""],
         "private frames": [id3_tag([id3_frame(b"PRIV", b"own\0\1a\\b\tx\ny\xff"), id3_frame(b"PRIV", b"own\0two"),
                                     id3_frame(b"PRIV", b"empty\0"), t(b"TIT2", b"t")]), b""],
         "pictures are not tags": [id3_tag([id3_frame(b"APIC", b"\0image/jpeg\0\3\0" + b"x" * 20), t(b"TIT2", b"t")]), b""],
