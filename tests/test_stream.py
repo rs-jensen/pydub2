@@ -159,3 +159,33 @@ t = [threading.Thread(target=work, args=(k,)) for k in range(4)]
 """
     r = subprocess.run([sys.executable, "-c", code, files[ext]], capture_output=True, env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)})
     assert r.returncode == 0, r.stderr[-300:]
+
+
+def open_files():
+    out = 0
+    for fd in range(256):
+        try:
+            os.fstat(fd)
+            out += 1
+        except OSError:
+            pass
+    return out
+
+
+@pytest.mark.parametrize("how", ["unstarted", "partly", "all", "dropped"])
+def test_the_file_is_let_go_with_the_generator(tmp_path, how):
+    path = tmp_path / "a.wav"
+    AudioSegment.silent(3000, 8000).export(str(path), "wav")
+    before = open_files()
+    gen = AudioSegment.stream(str(path), chunk_ms=500)
+    if how != "unstarted":
+        next(gen)
+    if how == "all":
+        assert len(list(gen)) == 5
+    elif how == "dropped":
+        gen = None
+    else:
+        gen.close()
+    assert open_files() == before
+    # on windows a file that is still open cant be removed
+    os.remove(path)

@@ -83,3 +83,9 @@ def test_inside_pytest():
     from pydub import AudioSegment
 
     assert AudioSegment is pydub2.AudioSegment
+
+
+def test_pydub2_import_fails_without_stderr(tmp_path):
+    files = {"pydub2/__init__.py": "raise ImportError('boom')", "pydub/__init__.py": "x = 'real'"}
+    r = run("import sys; sys.stderr = None; import pydub; print(pydub.x)", tmp_path, files)
+    assert r.returncode == 0 and r.stdout.strip() == "real", r.stderr

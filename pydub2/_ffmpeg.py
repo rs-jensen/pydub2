@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 import struct
 import sys
 import tempfile
@@ -105,13 +106,21 @@ def from_wav(converter, wav, format, codec=None, bitrate=None, parameters=None, 
         args += ["-id3v2_version", id3v2_version]
     if codec == "mp3" and sys.platform == "darwin":
         args += ["-write_xing", "0"]
-    with tempfile.TemporaryDirectory() as d:
+    # a virus scanner can still hold the file when it is removed, that must not fail the export
+    d = tempfile.mkdtemp()
+    try:
         name = os.path.join(d, "out")
         try:
             p = run(converter, args + ["-f", muxer, name], wav, format)
         except TimeoutError as e:
             raise CouldntEncodeError("cant encode this file: " + str(e))
+        except OSError as e:
+            if find(converter) is None:
+                raise
+            raise CouldntEncodeError("cant start ffmpeg (%s), tags that are too long for the command line can cause this" % e)
         if p.returncode != 0:
             raise CouldntEncodeError("cant encode this file: " + p.stderr.decode(errors="ignore")[-500:])
         with open(name, "rb") as f:
             return f.read()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
