@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <numeric>
 #include <stdexcept>
+#include <type_traits>
 
 #include "core.h"
 
@@ -91,24 +92,47 @@ long long rms(std::string_view data, size_t width) {
     return (unsigned int)sqrt(sum / (double)(data.size() / width));
 }
 
+template <class F>
+static void by_width(size_t width, F f) {
+    if (width == 1) {
+        f(std::integral_constant<size_t, 1>());
+    } else if (width == 2) {
+        f(std::integral_constant<size_t, 2>());
+    } else if (width == 3) {
+        f(std::integral_constant<size_t, 3>());
+    } else {
+        f(std::integral_constant<size_t, 4>());
+    }
+}
+
 long long max(std::string_view data, size_t width) {
     check(data, width);
     unsigned int m = 0;
-    for (size_t i = 0; i < data.size(); i += width) {
-        int val = get(&data[i], width);
-        unsigned int a = val < 0 ? 0u - (unsigned int)val : (unsigned int)val;
-        if (a > m) {
-            m = a;
+    by_width(width, [&](auto w) {
+        constexpr size_t W = decltype(w)::value;
+        for (size_t i = 0; i < data.size(); i += W) {
+            int val = get(&data[i], W);
+            unsigned int a = val < 0 ? 0u - (unsigned int)val : (unsigned int)val;
+            m = a > m ? a : m;
         }
-    }
+    });
     return m;
 }
 
 void mul(std::string_view data, size_t width, double factor, const Alloc &alloc) {
     check(data, width);
     char *out = alloc(data.size());
-    for (size_t i = 0; i < data.size(); i += width) {
-        put(out + i, width, scale(get(&data[i], width) * factor, width));
+    bool nan = false;
+    by_width(width, [&](auto w) {
+        constexpr size_t W = decltype(w)::value;
+        for (size_t i = 0; i < data.size(); i += W) {
+            double v = get(&data[i], W) * factor;
+            nan |= std::isnan(v);
+            put(out + i, W, (int)floor(fbound(v, minvals[W], maxvals[W])));
+        }
+    });
+    if (nan) {
+        throw std::invalid_argument("not a number");
     }
 }
 
@@ -118,9 +142,13 @@ void add(std::string_view a, std::string_view b, size_t width, const Alloc &allo
         throw std::invalid_argument("lengths should be the same");
     }
     char *out = alloc(a.size());
-    for (size_t i = 0; i < a.size(); i += width) {
-        put(out + i, width, scale((double)get(&a[i], width) + (double)get(&b[i], width), width));
-    }
+    by_width(width, [&](auto w) {
+        constexpr size_t W = decltype(w)::value;
+        for (size_t i = 0; i < a.size(); i += W) {
+            long long sum = (long long)get(&a[i], W) + get(&b[i], W);
+            put(out + i, W, (int)std::min<long long>(std::max<long long>(sum, minvals[W]), maxvals[W]));
+        }
+    });
 }
 
 void lin2lin(std::string_view data, size_t width, size_t new_width, const Alloc &alloc) {

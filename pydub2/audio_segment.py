@@ -1235,13 +1235,11 @@ class AudioSegment(object):
             # it's a no-op, make a copy since we never mutate
             return self._spawn(self._data)
 
-        output = StringIO()
-
         seg1, seg2 = AudioSegment._sync(self, seg)
         sample_width = seg1.sample_width
         spawn = seg1._spawn
 
-        output.write(seg1[:position]._data)
+        head = seg1[:position]._data
 
         # drop down to the raw data
         seg1 = seg1[position:]._data
@@ -1257,8 +1255,7 @@ class AudioSegment(object):
             seg1_overlaid = _pydub2.mul(seg1[:pos], self.sample_width, db_to_float(float(gain_during_overlay)))
         else:
             seg1_overlaid = seg1[:pos]
-        output.write(_pydub2.add(seg1_overlaid, seg2, sample_width))
-        output.write(seg1[pos:])
+        output = [head, _pydub2.add(seg1_overlaid, seg2, sample_width), memoryview(seg1)[pos:]]
 
         return spawn(data=output)
 

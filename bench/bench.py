@@ -370,6 +370,7 @@ def op_gradio_in(lib, a):
 
 
 def op_gradio_in_fast(lib, a):
+    import numpy
     A = sub(lib, "audio_segment").AudioSegment
 
     def go():
