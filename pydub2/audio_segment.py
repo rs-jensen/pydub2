@@ -30,6 +30,7 @@ from .utils import (
     ratio_to_db,
     get_array_type,
     check_duration,
+    read_capped,
 )
 from .exceptions import (
     TooManyMissingFrames,
@@ -204,9 +205,7 @@ def _pydub_wav(head):
 
 
 def _own_wav(head, flen, read_at):
-    # pydub reads the first data chunk at its stated size and keeps the bytes of a cut last frame, the decoder reads
-    # like ffmpeg: a size of 0 to the end and a later data chunk instead. gives where to cut the file, or None, and
-    # the stray bytes the way pydub turns them into samples
+    # pydub cuts at the stated data size and keeps a cut last frame, the decoder reads like ffmpeg. gives the cut and the stray bytes
     h = extract_wav_headers(head)
     fmt = [x for x in h if x.id == b"fmt "][0]
     align, bits = struct.unpack_from("<HH", head, fmt.position + 20)
@@ -265,16 +264,6 @@ def _span(d, wav, start_second, duration):
         return None
     end = float("inf") if duration is None else duration * 1000
     return a, n, lambda m: _slice_frames(m, d.rate, 0, end)[1]
-
-
-def _read(d, n):
-    # a header can lie about the length, so read one frame past max_duration and look
-    if pydub2.max_duration is not None:
-        cap = int(pydub2.max_duration * d.rate) + 1
-        n = cap if n < 0 else min(n, cap)
-    pcm = d.read(n)
-    check_duration(len(pcm) // (d.channels * d.width), d.rate)
-    return pcm
 
 
 def _fit(data, m, want, fw, rate):
@@ -719,26 +708,33 @@ class AudioSegment(object):
             tried = True
             try:
                 d = _pydub2.Decoder(filename if data is None else data)
+                if d.chained and _ffmpeg.find(cls.converter):
+                    raise RuntimeError("ffmpeg joins the links")
                 stray = b""
                 if own:
+                    fh = open(filename, "rb") if data is None else None
+
                     def read_at(at, n):
-                        if data is not None:
+                        if fh is None:
                             return data[at:at + n]
-                        with open(filename, "rb") as f:
-                            f.seek(at)
-                            return f.read(n)
-                    cut_at, stray = _own_wav(head, len(data) if data is not None else os.path.getsize(filename), read_at)
-                    if cut_at is not None:
-                        d = _pydub2.Decoder(read_at(0, cut_at))
+                        fh.seek(at)
+                        return fh.read(n)
+                    try:
+                        cut_at, stray = _own_wav(head, len(data) if data is not None else os.path.getsize(filename), read_at)
+                        if cut_at is not None:
+                            d = _pydub2.Decoder(read_at(0, cut_at))
+                    finally:
+                        if fh is not None:
+                            fh.close()
                 span = None if stray else _span(d, own, start_second, duration)
                 if span:
                     start, n, final = span
                     if start:
                         d.seek(start)
-                    pcm = _read(d, n)
+                    pcm = read_capped(d, n)
                     fw = d.channels * d.width
                     return cls._segment(d, _fit(pcm, len(pcm) // fw, final(len(pcm) // fw), fw, d.rate))
-                obj = cls._segment(d, _read(d, -1) + stray)
+                obj = cls._segment(d, read_capped(d, -1) + stray)
                 if start_second is None and duration is None:
                     return obj
                 elif start_second is not None and duration is None:
@@ -923,7 +919,15 @@ class AudioSegment(object):
             if format == "flac" and width == 4:
                 # ffmpeg writes 32 bit audio as 24 bit flac
                 data, width = _pydub2.lin2lin(data, 4, 3), 3
-            out_f.write(_encode(data, self.frame_rate, self.channels, width, format, rate))
+            if format == "wav" and width in (2, 4):
+                # 8 bit is unsigned in a wav, 16 and 32 bit go out as they are
+                try:
+                    out_f.write(_pydub2.wav_head(data, round(self.frame_rate), self.channels, width))
+                except RuntimeError as e:
+                    raise CouldntEncodeError(str(e))
+                out_f.write(data)
+            else:
+                out_f.write(_encode(data, self.frame_rate, self.channels, width, format, rate))
             out_f.seek(0)
             return out_f
 

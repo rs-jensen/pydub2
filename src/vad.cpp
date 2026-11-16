@@ -99,7 +99,16 @@ static std::vector<float> speech_probs(const std::vector<float> &x, const Cancel
 Ranges detect_speech(const Audio &in, double threshold, int min_speech_ms, int min_silence_ms, const Cancel &cancel) {
     if (in.width < 1 || in.width > 4)
         throw std::invalid_argument("bad sample width");
-    Audio a = in.rate == 16000 ? in : resample(in, 16000, cancel);
+    Audio a = in;
+    std::string res;
+    if (in.rate != 16000) {
+        resample(in, 16000, cancel, [&res](size_t n) {
+            res.resize(n);
+            return &res[0];
+        });
+        a.data = res;
+        a.rate = 16000;
+    }
     size_t n = a.data.size() / a.width / a.channels;
     std::vector<float> x(n);
     const uint8_t *p = (const uint8_t *)a.data.data();

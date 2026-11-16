@@ -173,6 +173,7 @@ struct Wav : Dec {
         in_seek(&in, w.dataChunkDataPos, SEEK_SET);
         // the header can claim any size, the file cant hold more
         frames = std::min<uint64_t>(w.totalPCMFrameCount, (in.len - std::min<uint64_t>(in.len, w.dataChunkDataPos)) / frame);
+        exact = true;
     }
 
     size_t read(char *out, size_t n) {
@@ -334,10 +335,7 @@ static uint64_t mp3_tag(Input &in, uint64_t full, size_t &skip, size_t &cut, uin
     return at + junk + fi.frame_bytes;
 }
 
-// minimp3 drops a frame whose bit reservoir is not all there, ffmpeg zeroes the granules that start in the missing
-// part and decodes the rest. so make main_data_begin what minimp3 has and those granules silent and shorter by the
-// missing bits, then the rest starts on the same bit. no scalefactors either, ffmpeg keeps zeros for a later
-// granule to reuse. false if the frame has no missing bits
+// minimp3 drops a frame with a missing bit reservoir, ffmpeg zeroes the granules in the missing part. so do that here, false if nothing is missing
 static bool mp3_fix(uint8_t *o, int n, int have) {
     if (n < 4) {
         return false;
@@ -384,8 +382,7 @@ static bool mp3_fix(uint8_t *o, int n, int have) {
     return true;
 }
 
-// minimp3 drops the last frame when a tag or junk follows it or when it is cut short, ffmpeg decodes it.
-// so end the input right after that frame
+// minimp3 drops the last frame when a tag follows it or it is cut short, ffmpeg decodes it. so end the input after that frame
 static void mp3_end(Input &in) {
     std::vector<uint8_t> buf(1 << 16);
     drmp3dec dec;
@@ -442,8 +439,7 @@ static void mp3_end(Input &in) {
     }
     uint64_t end = last + drmp3_hdr_frame_bytes(h, free) + drmp3_hdr_padding(h);
     if (end > in.len) {
-        // ffmpeg reads zero bits past the cut in the granule where it moves from the bit reservoir into this frame
-        // and stops the huffman data at the cut in the ones after. all ones decodes to zeros in nearly every table
+        // ffmpeg reads zeros past the cut and stops the huffman data there, all ones decodes to zeros in nearly every table
         std::vector<uint8_t> fr(end - last);
         size_t have = in_read(&in, fr.data() + 4, in.len - last - 4) + 4;
         memcpy(fr.data(), h, 4);
@@ -514,6 +510,7 @@ struct Mp3 : Dec {
             cut = n > end || end < cut ? 0 : n + cut > end ? n + cut - end : 0;
         }
         frames = n > skip + cut ? n - skip - cut : 0;
+        exact = true;
         pos = skip;
     }
 
@@ -966,10 +963,10 @@ struct Opus : Dec {
     void init() {
         OpusFileCallbacks cb = {op_read, op_seek, op_tell, NULL};
         of = op_open_callbacks(&in, &cb, NULL, 0, NULL);
-        // libopus starts each link fresh, ffmpeg keeps decoding across, so chains go to ffmpeg like vorbis ones
-        if (!of || op_link_count(of) > 1) {
+        if (!of) {
             fail();
         }
+        chained = op_link_count(of) > 1;
         rate = 48000;
         channels = op_channel_count(of, -1);
         width = 4;
@@ -985,7 +982,8 @@ struct Opus : Dec {
         size_t c = channels, done = 0;
         int k, link;
         while (!end && done < n && (k = op_read_float(of, tmp, (int)std::min<size_t>(n - done, 5760 * 2 / c) * c, &link)) != 0) {
-            if (k < 0) {
+            // a chained file can change channel count, k is sized for the new one
+            if (k < 0 || op_channel_count(of, link) != channels) {
                 fail();
             }
             if (c > 2 && op_head(of, link)->mapping_family == 1) {

@@ -37,9 +37,18 @@ def secret(tmp_path, monkeypatch):
     return tmp_path
 
 
+WIN_PEAK = "import ctypes\nfrom ctypes import wintypes as w\n" \
+    "class C(ctypes.Structure):\n _fields_ = [('cb', w.DWORD), ('f', w.DWORD)] + [(n, ctypes.c_size_t) for n in 'abcdefgh']\n" \
+    "c = C(cb=ctypes.sizeof(C))\nk = ctypes.WinDLL('kernel32')\nk.GetCurrentProcess.restype = w.HANDLE\n" \
+    "p = ctypes.WinDLL('psapi')\np.GetProcessMemoryInfo.argtypes = [w.HANDLE, ctypes.c_void_p, w.DWORD]\n" \
+    "p.GetProcessMemoryInfo(k.GetCurrentProcess(), ctypes.byref(c), c.cb)\nprint(c.h / 1e6)"
+# linux keeps the high water mark of the parent over exec, so ru_maxrss would be the pytest process
+UNIX_PEAK = "import sys\nif sys.platform == 'linux':\n print(int([l for l in open('/proc/self/status') if l.startswith('VmHWM')][0].split()[1]) / 1e3)\n" \
+    "else:\n import resource\n print(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6)"
+
+
 def peak_mb(code):
-    code = "import resource, sys\nimport _pydub2\n" + code + "\nr = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss\n" \
-        "print(r / (1 if sys.platform == 'darwin' else 1024) / 1e6)"
+    code = "import _pydub2\n" + code + "\n" + (WIN_PEAK if sys.platform == "win32" else UNIX_PEAK)
     env = dict(os.environ, PYTHONPATH=os.pathsep.join(sys.path))
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
     assert out.returncode == 0, out.stderr
@@ -72,6 +81,30 @@ def test_playlists_as_path(secret, head):
     (secret / "x.m4a").write_bytes(head + b"secret.wav\n")
     with pytest.raises(CouldntDecodeError):
         AudioSegment.from_file(str(secret / "x.m4a"))
+
+
+@need_ffmpeg
+@pytest.mark.parametrize("before", [b"<!-- x -->\n", b" " * 64, b"\n" * 200])
+def test_dash_manifest_behind_a_comment(secret, before):
+    tone(secret / "other.m4a", 1.0, "-c:a", "aac")
+    mpd = before + (b'<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" profiles="urn:mpeg:dash:profile:isoff-on-demand:2011" '
+                    b'type="static" mediaPresentationDuration="PT1S"><BaseURL>file://' + str(secret).encode() +
+                    b'/</BaseURL><Period><AdaptationSet mimeType="audio/mp4"><Representation id="a" bandwidth="1">'
+                    b'<BaseURL>other.m4a</BaseURL><SegmentBase indexRange="0-0"/></Representation></AdaptationSet>'
+                    b'</Period></MPD>')
+    (secret / "x.m4a").write_bytes(mpd)
+    with pytest.raises(CouldntDecodeError):
+        AudioSegment.from_file(str(secret / "x.m4a"))
+    assert not utils.mediainfo_json(str(secret / "x.m4a")).get("streams")
+
+
+@need_ffmpeg
+def test_commands_name_the_demuxers():
+    names = utils.allowed_demuxers(ffmpeg).split(",")
+    assert {"wav", "mp3", "flac", "ogg", "matroska", "mov", "mp4"} <= set(names)
+    assert not {"hls", "dash", "concat", "imf"} & set(",".join(names).split(","))
+    cmd = utils.source(__file__, exe=ffmpeg)[0]
+    assert cmd[cmd.index("-format_whitelist") + 1] == ",".join(names)
 
 
 def test_commands_restrict_protocols(monkeypatch, tmp_path):
@@ -206,7 +239,7 @@ def test_max_duration_on_the_ffmpeg_path(secret, monkeypatch):
 @pytest.mark.parametrize("name", ["long.wav", "long.flac", "long.mp3", "long.ogg"])
 def test_max_duration_on_the_native_path(tmp_path, monkeypatch, name):
     subprocess.run([ffmpeg, "-v", "error", "-f", "lavfi", "-i", "anoisesrc=d=1800:r=8000:a=0.1", "-ac", "1",
-                    str(tmp_path / name)], check=True)
+                    *{"long.ogg": ["-c:a", "libvorbis"]}.get(name, []), str(tmp_path / name)], check=True)
     import tracemalloc
     peaks = []
     for limit in (None, 10):
@@ -231,6 +264,21 @@ def test_max_duration_on_the_native_path(tmp_path, monkeypatch, name):
         next(chunks)
     monkeypatch.setattr(pydub2, "max_duration", 1800)
     assert len(AudioSegment.from_file(str(tmp_path / name))) == 1800000
+
+
+@need_ffmpeg
+def test_max_duration_in_mediainfo_without_ffprobe(tmp_path, monkeypatch):
+    path = tmp_path / "long.flac"
+    subprocess.run([ffmpeg, "-v", "error", "-f", "lavfi", "-i", "anullsrc=r=8000:cl=mono", "-t", "600", str(path)], check=True)
+    data = bytearray(path.read_bytes())
+    data[21] &= 0xf0
+    data[22:26] = bytes(4)
+    path.write_bytes(data)
+    monkeypatch.setattr(utils, "_has_prober", lambda: False)
+    assert float(utils.mediainfo_json(str(path))["streams"][0]["duration"]) == 600
+    monkeypatch.setattr(pydub2, "max_duration", 10)
+    with pytest.raises(CouldntDecodeError):
+        utils.mediainfo_json(str(path))
 
 
 @posix

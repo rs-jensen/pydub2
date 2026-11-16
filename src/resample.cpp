@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <stdexcept>
 #include <vector>
 
@@ -9,9 +10,12 @@
 
 namespace pydub2 {
 
-Audio resample(const Audio &a, int new_rate, const Cancel &cancel) {
+void resample(const Audio &a, int new_rate, const Cancel &cancel, const Alloc &alloc) {
     if (a.width < 1 || a.width > 4) throw std::invalid_argument("bad sample width");
-    if (new_rate == a.rate) return a;
+    if (new_rate == a.rate) {
+        memcpy(alloc(a.data.size()), a.data.data(), a.data.size());
+        return;
+    }
 
     // libsamplerate only takes ratios up to 256 and would say so after the buffers are made
     if (new_rate > 256LL * a.rate || a.rate > 256LL * new_rate) throw std::runtime_error("rates too far apart");
@@ -56,19 +60,14 @@ Audio resample(const Audio &a, int new_rate, const Cancel &cancel) {
     src_delete(st);
     if (err) throw std::runtime_error(src_strerror(err));
 
-    Audio r;
-    r.rate = new_rate;
-    r.channels = a.channels;
-    r.width = w;
-    r.data.resize(out.size() * w);
+    char *res = alloc(out.size() * w);
     long long lo = -full, hi = full - 1;
     for (size_t i = 0; i < out.size(); i++) {
         long long v = std::llround(out[i] * full);
         v = std::min(hi, std::max(lo, v)); // clip, never wrap
         unsigned long long u = v;
-        for (int k = 0; k < w; k++) r.data[i * w + k] = (char)(u >> (8 * k));
+        for (int k = 0; k < w; k++) res[i * w + k] = (char)(u >> (8 * k));
     }
-    return r;
 }
 
 }

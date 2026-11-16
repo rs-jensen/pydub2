@@ -2,6 +2,7 @@ import array
 import io
 import os
 import pathlib
+import re
 import struct
 import subprocess
 import sys
@@ -20,8 +21,10 @@ except (OSError, subprocess.CalledProcessError):
     pytest.skip("no ffmpeg", allow_module_level=True)
 
 ARGS = {"wav": [], "flac": [], "mp3": ["-c:a", "libmp3lame"], "ogg": ["-c:a", "libvorbis"], "opus": ["-c:a", "libopus"]}
-# how far pydub2 may be from ffmpeg, see test_decode.py. opus on the ubuntu runner is up to 509152 off, so 1 << 20
-LIMIT = {"wav": 0, "flac": 0, "mp3": 1, "ogg": 1024, "opus": 1 << 20}
+# how far pydub2 may be from ffmpeg, see test_decode.py
+LIMIT = {"wav": 0, "flac": 0, "mp3": 1, "ogg": 1024, "opus": 1024}
+if re.search(r"version n?8\.0", subprocess.run([ff, "-version"], capture_output=True, text=True).stdout):
+    LIMIT["opus"] = 1 << 19  # ffmpeg 8.0 opus tail differs
 # a part of a vorbis file comes from ffmpeg, the others are cut from the same decoder
 SAME = {"wav": 0, "flac": 0, "mp3": 0, "ogg": 1024, "opus": 0}
 CASES = [(1, 2), (0.5, None), (None, 1.5), (2.00001, 1.99999), (4.435, 1.865535), (6.9, None), (7.2, 5), (8, 1),
