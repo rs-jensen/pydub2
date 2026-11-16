@@ -131,6 +131,7 @@ def test_export_without_format(tmp_path):
 
 def test_no_ffmpeg(files, monkeypatch):
     monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr(pydub2.AudioSegment, "converter", "ffmpeg")
     for fn in (lambda: pydub2.AudioSegment.from_file(files[("mp3cbr", 2)]),
                lambda: pydub2.AudioSegment.from_file(files[("opus", 2)], codec="libopus"),
                lambda: pydub2.AudioSegment.silent(300).export(io.BytesIO(), format="flac"),

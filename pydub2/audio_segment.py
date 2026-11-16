@@ -687,6 +687,8 @@ class AudioSegment(object):
             return False
 
         def decoded(data):
+            if pydub2.strict:
+                return cls(data=data)
             data, frame_rate, channels, sample_width = _pydub2.decode(data)
             return cls(data=data, metadata={
                 'sample_width': sample_width,
@@ -718,8 +720,10 @@ class AudioSegment(object):
         if pydub2.strict and wav:
             # what pydub does, it reads any wav it can parse itself
             try:
-                obj = cls._from_safe_wav(file)[None if start_second is None else start_second * 1000:
-                                               None if duration is None else ((start_second or 0) + duration) * 1000]
+                obj = cls._from_safe_wav(file)
+                if start_second is not None or duration is not None:
+                    obj = obj[None if start_second is None else start_second * 1000:
+                              None if duration is None else ((start_second or 0) + duration) * 1000]
                 if close_file:
                     file.close()
                 return obj
