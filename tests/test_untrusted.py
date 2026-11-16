@@ -215,7 +215,7 @@ def test_max_duration_on_the_ffmpeg_path(secret, monkeypatch):
 @pytest.mark.parametrize("name", ["long.wav", "long.flac", "long.mp3", "long.ogg"])
 def test_max_duration_on_the_native_path(tmp_path, monkeypatch, name):
     subprocess.run([ffmpeg, "-v", "error", "-f", "lavfi", "-i", "anoisesrc=d=1800:r=8000:a=0.1", "-ac", "1",
-                    str(tmp_path / name)], check=True)
+                    *{"long.ogg": ["-c:a", "libvorbis"]}.get(name, []), str(tmp_path / name)], check=True)
     import tracemalloc
     peaks = []
     for limit in (None, 10):
