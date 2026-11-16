@@ -19,9 +19,9 @@ def send():
 
 
 CALLS = {
-    "detect_speech": (2, lambda d: _pydub2.detect_speech(d, 44100, 2, 2, 0.5, 250, 100)),
-    "opus": (2, lambda d: _pydub2.encode(d, 44100, 2, 2, "opus")),
-    "ogg": (4, lambda d: _pydub2.encode(d, 44100, 2, 2, "ogg")),
+    "detect_speech": (20, lambda d: _pydub2.detect_speech(d, 44100, 2, 2, 0.5, 250, 100)),
+    "opus": (10, lambda d: _pydub2.encode(d, 44100, 2, 2, "opus")),
+    "ogg": (20, lambda d: _pydub2.encode(d, 44100, 2, 2, "ogg")),
     "compress_32_bit": (1, lambda d: _pydub2.compress(d, 4, 2, 1000.0, 2.0, 441.0, 441.0, 4410)),
 }
 
@@ -29,21 +29,21 @@ CALLS = {
 @pytest.mark.parametrize("name", CALLS)
 def test_ctrl_c_stops_a_long_call(name):
     minutes, call = CALLS[name]
-    data = os.urandom(minutes * MIN)
-    sent = []
+    data = os.urandom(MIN) * minutes
+    # the whole call would take this long on this machine right now, the time scales with the input
+    start = time.perf_counter()
+    call(data[:MIN])
+    full = (time.perf_counter() - start) * minutes
 
-    def fire():
-        sent.append(time.time())
-        send()
-
-    timer = threading.Timer(0.5, fire)
+    timer = threading.Timer(full / 10, send)
     timer.start()
+    start = time.perf_counter()
     try:
         with pytest.raises(KeyboardInterrupt):
             call(data)
     finally:
         timer.cancel()
-    assert time.time() - sent[0] < 3
+    assert time.perf_counter() - start < full / 2
     # nothing is left half done
     assert _pydub2.encode(data[:MIN], 44100, 2, 2, "opus")[:4] == b"OggS"
     assert _pydub2.loudness(data[:MIN], 44100, 2, 2) > -100

@@ -23,30 +23,31 @@ void resample(const Audio &a, int new_rate, const Cancel &cancel, const Alloc &a
     if (new_rate > 256LL * a.rate || a.rate > 256LL * new_rate) {
         throw std::runtime_error("rates too far apart");
     }
-    int w = a.width;
+    size_t w = a.width;
+    int ch = (int)a.channels;
     long long full = 1LL << (8 * w - 1); // 128, 32768 or 2^31
-    long long n = a.data.size() / (w * a.channels); // frames
-    long long out_n = std::llrint(n * (double)new_rate / a.rate); // half to even, like python round
+    long long n = (long long)(a.data.size() / (w * a.channels)); // frames
+    long long out_n = std::llrint((double)n * new_rate / a.rate); // half to even, like python round
 
     if (n > INT32_MAX || out_n > INT32_MAX) {
         throw std::runtime_error("too long to resample");
     }
-    std::vector<float> in(n * a.channels);
+    std::vector<float> in((size_t)(n * ch));
     for (size_t i = 0; i < in.size(); i++) {
         long long v = 0;
-        for (int k = w - 1; k >= 0; k--) {
+        for (size_t k = w; k--;) {
             v = v * 256 + (unsigned char)a.data[i * w + k];
         }
         if (v >= full) {
             v -= 2 * full;
         }
-        in[i] = (float)v / full;
+        in[i] = (float)v / (float)full;
     }
 
     // zeros stay in the buffer when libsamplerate makes fewer frames than out_n
-    std::vector<float> out(out_n * a.channels, 0.0f);
+    std::vector<float> out((size_t)(out_n * ch), 0.0f);
     int err;
-    SRC_STATE *st = src_new(SRC_SINC_MEDIUM_QUALITY, a.channels, &err);
+    SRC_STATE *st = src_new(SRC_SINC_MEDIUM_QUALITY, ch, &err);
     if (!st) {
         throw std::runtime_error(src_strerror(err));
     }
@@ -56,10 +57,10 @@ void resample(const Audio &a, int new_rate, const Cancel &cancel, const Alloc &a
     try {
         do {
             cancel();
-            d.data_in = in.data() + used * a.channels;
+            d.data_in = in.data() + used * ch;
             d.input_frames = std::min(step, n - used);
             d.end_of_input = used + d.input_frames == n;
-            d.data_out = out.data() + made * a.channels;
+            d.data_out = out.data() + made * ch;
             d.output_frames = out_n - made;
             err = src_process(st, &d);
             used += d.input_frames_used;
@@ -77,10 +78,10 @@ void resample(const Audio &a, int new_rate, const Cancel &cancel, const Alloc &a
     char *res = alloc(out.size() * w);
     long long lo = -full, hi = full - 1;
     for (size_t i = 0; i < out.size(); i++) {
-        long long v = std::llround(out[i] * full);
+        long long v = std::llround(out[i] * (float)full);
         v = std::min(hi, std::max(lo, v)); // clip, never wrap
-        unsigned long long u = v;
-        for (int k = 0; k < w; k++) {
+        uint64_t u = (uint64_t)v;
+        for (size_t k = 0; k < w; k++) {
             res[i * w + k] = (char)(u >> (8 * k));
         }
     }

@@ -19,8 +19,8 @@ namespace pydub2 {
 struct Audio {
     std::string_view data; // not owned
     int rate = 0;
-    int channels = 0;
-    int width = 0; // bytes per sample, 1 to 4 and 8 for a 64 bit wav
+    size_t channels = 0;
+    size_t width = 0; // bytes per sample, 1 to 4 and 8 for a 64 bit wav
 };
 
 typedef std::vector<std::pair<int, int>> Ranges; // [start, end) in ms
@@ -37,8 +37,8 @@ typedef std::function<char *(size_t)> Alloc;
 // wav, flac, mp3, ogg vorbis and opus, a piece at a time. open throws std::runtime_error on anything else
 struct Decoder {
     int rate = 0;
-    int channels = 0;
-    int width = 0;
+    size_t channels = 0;
+    size_t width = 0;
     bool chained = false; // opus with more than one link, libopus starts each link fresh where ffmpeg decodes across
     uint64_t frames = 0; // what a read from the start gives, from the header for flac and opus so it can lie
     bool exact = false; // frames is counted from the file, a reader can size a buffer from it
@@ -62,23 +62,26 @@ void encode(const Audio &a, const std::string &format, int bitrate, const Tags &
 
 // pcm.cpp
 // these do the same math as the old audioop module so the numbers match pydub
-long long rms(std::string_view data, int width);
-long long max(std::string_view data, int width);
-void mul(std::string_view data, int width, double factor, const Alloc &alloc);
-void add(std::string_view a, std::string_view b, int width, const Alloc &alloc);
-void lin2lin(std::string_view data, int width, int new_width, const Alloc &alloc);
-void tomono(std::string_view data, int width, double lfac, double rfac, const Alloc &alloc);
-void tostereo(std::string_view data, int width, double lfac, double rfac, const Alloc &alloc);
-void reverse(std::string_view data, int width, const Alloc &alloc);
-int avg(std::string_view data, int width);
-void bias(std::string_view data, int width, int bias, const Alloc &alloc);
+long long rms(std::string_view data, size_t width);
+long long max(std::string_view data, size_t width);
+void mul(std::string_view data, size_t width, double factor, const Alloc &alloc);
+void add(std::string_view a, std::string_view b, size_t width, const Alloc &alloc);
+void lin2lin(std::string_view data, size_t width, size_t new_width, const Alloc &alloc);
+void tomono(std::string_view data, size_t width, double lfac, double rfac, const Alloc &alloc);
+void tostereo(std::string_view data, size_t width, double lfac, double rfac, const Alloc &alloc);
+// pydubs set_channels(1) from 3 or more channels: each channel floor divided by the count, added up in the sample type
+// throws std::overflow_error where the python array would
+void downmix(std::string_view data, size_t width, size_t channels, const Alloc &alloc);
+void reverse(std::string_view data, size_t width, const Alloc &alloc);
+int avg(std::string_view data, size_t width);
+void bias(std::string_view data, size_t width, int bias, const Alloc &alloc);
 // the loops of the low pass, high pass and compress_dynamic_range effects, alpha and the rest as pydub works them out
-void lowpass(std::string_view data, int width, int channels, double alpha, const Alloc &alloc);
-void highpass(std::string_view data, int width, int channels, double alpha, const Alloc &alloc);
-void compress(std::string_view data, int width, int channels, double thresh, double ratio, double attack_frames,
+void lowpass(std::string_view data, size_t width, size_t channels, double alpha, const Alloc &alloc);
+void highpass(std::string_view data, size_t width, size_t channels, double alpha, const Alloc &alloc);
+void compress(std::string_view data, size_t width, size_t channels, double thresh, double ratio, double attack_frames,
               double release_frames, long long look, const Cancel &cancel, const Alloc &alloc);
 // state is always None in pydub so there is none here
-void ratecv(std::string_view data, int width, int channels, int inrate, int outrate, const Alloc &alloc);
+void ratecv(std::string_view data, size_t width, size_t channels, int inrate, int outrate, const Alloc &alloc);
 
 // silence.cpp
 // same walk as pydub.silence.detect_silence, thresh is in dBFS

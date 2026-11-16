@@ -35,18 +35,18 @@ static std::vector<float> floats(const Audio &a) {
     float scale = 1.0f / (float)(1u << (a.width * 8 - 1));
     std::vector<float> out(n);
     for (size_t i = 0; i < n; i++) {
-        out[i] = sample(a, i) * scale;
+        out[i] = (float)sample(a, i) * scale;
     }
     return out;
 }
 
-static void put32(std::string &s, uint32_t v) {
+static void put32(std::string &s, size_t v) {
     for (int i = 0; i < 4; i++) {
         s += (char)(v >> (8 * i));
     }
 }
 
-static void put16(std::string &s, uint16_t v) {
+static void put16(std::string &s, size_t v) {
     s += (char)v;
     s += (char)(v >> 8);
 }
@@ -56,14 +56,14 @@ std::string wav_head(const Audio &a) {
     if (a.data.size() > UINT32_MAX - 36) {
         throw std::runtime_error("too long for wav");
     }
-    uint32_t n = a.data.size();
+    uint32_t n = (uint32_t)a.data.size();
     std::string out = "RIFF";
     put32(out, 36 + n + (n & 1));
     out += "WAVEfmt ";
     put32(out, 16);
     put16(out, 1);
     put16(out, a.channels);
-    put32(out, a.rate);
+    put32(out, (size_t)a.rate);
     uint64_t byte_rate = (uint64_t)a.rate * a.channels * a.width;
     if (byte_rate > UINT32_MAX) {
         throw std::runtime_error("cant encode this");
@@ -77,7 +77,7 @@ std::string wav_head(const Audio &a) {
 }
 
 static void wav(const Audio &a, const Alloc &alloc) {
-    uint32_t n = a.data.size();
+    uint32_t n = (uint32_t)a.data.size();
     std::string out = wav_head(a);
     size_t start = out.size();
     char *p = alloc(start + n + (n & 1));
@@ -130,7 +130,7 @@ static std::string flac(const Audio &a, const Tags &tags, const Cancel &cancel) 
     }
     size_t frames = a.data.size() / a.width / a.channels;
     // ffmpeg writes 8 bit as 16 and 32 bit as 24, so do we
-    int bits = a.width == 1 ? 16 : a.width == 4 ? 24 : a.width * 8;
+    uint32_t bits = a.width == 1 ? 16 : a.width == 4 ? 24 : (uint32_t)a.width * 8;
     // its block size is the biggest standard one under 105 ms
     uint32_t sizes[] = {16, 192, 256, 512, 576, 1024, 1152, 2048, 2304, 4096, 4608, 8192, 16384};
     uint32_t block = sizes[0];
@@ -141,10 +141,10 @@ static std::string flac(const Audio &a, const Tags &tags, const Cancel &cancel) 
     }
     std::vector<FLAC__int32> buf(block * a.channels);
     FLAC__StreamEncoder *enc = FLAC__stream_encoder_new();
-    FLAC__stream_encoder_set_channels(enc, a.channels);
+    FLAC__stream_encoder_set_channels(enc, (uint32_t)a.channels);
     FLAC__stream_encoder_set_bits_per_sample(enc, bits);
     FLAC__stream_encoder_set_blocksize(enc, block);
-    FLAC__stream_encoder_set_sample_rate(enc, a.rate);
+    FLAC__stream_encoder_set_sample_rate(enc, (uint32_t)a.rate);
     FLAC__stream_encoder_set_total_samples_estimate(enc, frames);
     Sink s;
     bool ok = FLAC__stream_encoder_init_stream(enc, flac_write, flac_seek, flac_tell, nullptr, &s) ==
@@ -157,7 +157,7 @@ static std::string flac(const Audio &a, const Tags &tags, const Cancel &cancel) 
                 int32_t v = sample(a, f * a.channels + i);
                 buf[i] = a.width == 1 ? v * 256 : a.width == 4 ? v >> 8 : v;
             }
-            ok = FLAC__stream_encoder_process_interleaved(enc, buf.data(), n);
+            ok = FLAC__stream_encoder_process_interleaved(enc, buf.data(), (uint32_t)n);
         }
     } catch (...) {
         FLAC__stream_encoder_delete(enc);
@@ -195,8 +195,8 @@ static std::string flac(const Audio &a, const Tags &tags, const Cancel &cancel) 
 static void pages(ogg_stream_state *os, std::string &out, bool flush) {
     ogg_page og;
     while (flush ? ogg_stream_flush(os, &og) : ogg_stream_pageout(os, &og)) {
-        out.append((char *)og.header, og.header_len);
-        out.append((char *)og.body, og.body_len);
+        out.append((char *)og.header, (size_t)og.header_len);
+        out.append((char *)og.body, (size_t)og.body_len);
     }
 }
 
@@ -217,8 +217,9 @@ static std::string ogg(const Audio &a, int bitrate, const Tags &tags, const Canc
     vorbis_info vi;
     vorbis_info_init(&vi);
     // q 3 like ffmpeg when no bitrate is given, and with a bitrate ffmpeg turns the slow rate management off
-    int err = bitrate ? vorbis_encode_setup_managed(&vi, a.channels, a.rate, -1, bitrate, -1)
-                      : vorbis_encode_setup_vbr(&vi, a.channels, a.rate, 0.3f);
+    long ch = (long)a.channels;
+    int err = bitrate ? vorbis_encode_setup_managed(&vi, ch, a.rate, -1, bitrate, -1)
+                      : vorbis_encode_setup_vbr(&vi, ch, a.rate, 0.3f);
     if (!err && bitrate) {
         err = vorbis_encode_ctl(&vi, OV_ECTL_RATEMANAGE2_SET, nullptr);
     }
@@ -254,14 +255,14 @@ static std::string ogg(const Audio &a, int bitrate, const Tags &tags, const Canc
         size_t frames = pcm.size() / a.channels;
         for (size_t f = 0; f < frames; f += 4096) {
             cancel();
-            int n = std::min(frames - f, (size_t)4096);
-            float **buf = vorbis_analysis_buffer(&vd, n);
-            for (int i = 0; i < n; i++) {
-                for (int c = 0; c < a.channels; c++) {
+            size_t n = std::min(frames - f, (size_t)4096);
+            float **buf = vorbis_analysis_buffer(&vd, (int)n);
+            for (size_t i = 0; i < n; i++) {
+                for (size_t c = 0; c < a.channels; c++) {
                     buf[c][i] = pcm[(f + i) * a.channels + c];
                 }
             }
-            vorbis_analysis_wrote(&vd, n);
+            vorbis_analysis_wrote(&vd, (int)n);
             blocks(&vd, &vb, &os, out);
         }
         vorbis_analysis_wrote(&vd, 0);
@@ -284,7 +285,7 @@ static std::string ogg(const Audio &a, int bitrate, const Tags &tags, const Canc
 
 static int opus_write(void *user, const unsigned char *p, opus_int32 len) {
     try {
-        ((std::string *)user)->append((const char *)p, len);
+        ((std::string *)user)->append((const char *)p, (size_t)len);
     } catch (...) {
         return 1;
     }
@@ -304,7 +305,7 @@ static std::string opus(const Audio &a, int bitrate, const Tags &tags, const Can
         ope_comments_add(com, t.first.c_str(), t.second.c_str());
     }
     int err = 0;
-    OggOpusEnc *enc = ope_encoder_create_callbacks(&cb, &out, com, a.rate, a.channels, a.channels > 2, &err);
+    OggOpusEnc *enc = ope_encoder_create_callbacks(&cb, &out, com, a.rate, (int)a.channels, a.channels > 2, &err);
     ope_comments_destroy(com);
     if (!enc) {
         throw std::runtime_error("cant encode this");
@@ -329,7 +330,7 @@ static std::string opus(const Audio &a, int bitrate, const Tags &tags, const Can
     try {
         for (size_t f = 0; !err && f < frames; f += step) {
             cancel();
-            err = ope_encoder_write_float(enc, pcm.data() + f * a.channels, std::min(frames - f, step));
+            err = ope_encoder_write_float(enc, pcm.data() + f * a.channels, (int)std::min(frames - f, step));
         }
     } catch (...) {
         ope_encoder_destroy(enc);

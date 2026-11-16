@@ -20,7 +20,7 @@ double loudness(const Audio &a, const Cancel &cancel) {
         ebur128_state *s = ebur128_init(1, 48000, EBUR128_MODE_I | EBUR128_MODE_HISTOGRAM);
         ebur128_destroy(&s);
     });
-    ebur128_state *st = ebur128_init(a.channels, a.rate, EBUR128_MODE_I);
+    ebur128_state *st = ebur128_init((unsigned)a.channels, (unsigned long)a.rate, EBUR128_MODE_I);
     if (!st) {
         throw std::runtime_error("cant measure loudness");
     }
