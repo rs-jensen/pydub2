@@ -123,6 +123,17 @@ def test_mediainfo_without_ffprobe(tmp_path, monkeypatch):
         assert utils2.mediainfo_json(f)["streams"][0]["codec_name"] == "pcm_s16le"
 
 
+def test_mediainfo_chunks_and_tags_without_ffprobe(tmp_path, monkeypatch):
+    no_ffprobe(monkeypatch, tmp_path)
+    wav = AudioSegment.silent(100, 8000).export(io.BytesIO(), format="wav").getvalue()
+    list_chunk = b"LIST" + struct.pack("<I", 12) + b"INFOfmt abcd"
+    got = utils2.mediainfo_json(io.BytesIO(wav[:12] + list_chunk + wav[12:]))["streams"][0]
+    assert (got["codec_name"], got["sample_rate"], got["channels"]) == ("pcm_s16le", "8000", 1)
+    flac = AudioSegment.silent(100, 8000).export(io.BytesIO(), format="flac").getvalue()
+    tag = b"ID3\x03\0\0\0\0\0\x05abcde"
+    assert utils2.mediainfo_json(io.BytesIO(tag + flac))["streams"][0]["codec_name"] == "flac"
+
+
 def public(mod):
     return [n for n in dir(mod) if not n.startswith("__")]
 
