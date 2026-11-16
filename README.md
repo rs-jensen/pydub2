@@ -40,12 +40,47 @@ louder.fade_out(500).export("intro.flac", format="flac")
 | flac | built in | built in |
 | ogg vorbis | built in | built in |
 | opus | built in | built in |
-| mp3 | built in | ffmpeg, for now |
+| mp3 | built in | `pydub2-mp3` package, or ffmpeg |
 | m4a/aac, wma, video files | ffmpeg | ffmpeg |
 
 The ffmpeg rows only work if ffmpeg is installed. Everything marked built in works without it.
+mp3 writing needs no ffmpeg once you install the small `pydub2-mp3` package, which carries the
+LAME encoder:
+
+    pip install pydub2[mp3]
+
+```python
+seg.export("out.mp3", format="mp3")
+```
+
+If ffmpeg is there, pydub2 uses ffmpeg for the things the built in code does not do, such as a
+chained vorbis file or an mp3 export with unusual `parameters`.
 
 ## What is new
+
+Read a long file piece by piece. `AudioSegment.stream` yields `chunk_ms` long segments and holds
+only the current one in memory. It reads wav, flac, mp3, ogg and opus.
+
+```python
+for chunk in AudioSegment.stream("long.flac", chunk_ms=10000):
+    print(chunk.dBFS)
+```
+
+Go to and from numpy. `to_numpy()` gives an array of shape `(frames, channels)` in the segment's
+integer type, and `from_numpy` takes an int8, int16 or int32 array, or floats between -1 and 1:
+
+```python
+x = seg.to_numpy()
+seg2 = AudioSegment.from_numpy(x, seg.frame_rate)
+```
+
+Read the stream info of a file with `mediainfo`. For wav, flac, ogg, opus and mp3 this works
+without ffprobe.
+
+```python
+from pydub2 import utils
+utils.mediainfo("song.wav")["sample_rate"]
+```
 
 Integrated loudness in LUFS (EBU R128):
 
@@ -82,8 +117,14 @@ Samples are kept as the same integer pcm that pydub uses. `raw_data`, `dBFS` and
 suite lives in `tests/pydub_suite` and runs against pydub2. Its test audio is made the first time
 it runs, so it needs ffmpeg.
 
-There are a few deliberate differences, for example files that fall back to ffmpeg come out as
-16 bit. They are listed in [docs/differences.md](https://github.com/rs-jensen/pydub2/blob/main/docs/differences.md).
+There are a few deliberate differences, for example `from_file` decodes a file straight from disk and
+mp3 and opus samples can differ slightly from what ffmpeg gives. They are listed in [docs/differences.md](https://github.com/rs-jensen/pydub2/blob/main/docs/differences.md).
+
+## Use it as pydub
+
+Packages that write `import pydub` can use pydub2 without changing their code. Install the
+`pydub2-compat` package from the `compat` folder of this repo. Then `import pydub` loads pydub2, even
+when the real pydub is installed. It is opt in, see [compat/README.md](https://github.com/rs-jensen/pydub2/blob/main/compat/README.md).
 
 ## Untrusted files
 
@@ -93,6 +134,9 @@ If your service decodes uploads, set a limit on length and on how long ffmpeg ma
     pydub2.max_duration = 3600   # seconds, longer files raise CouldntDecodeError
     pydub2.ffmpeg_timeout = 60   # seconds for every ffmpeg and ffprobe call
     seg = pydub2.AudioSegment.from_file(upload)
+
+`max_duration` is checked while the file is read, so a header that lies about the length does not
+get around it. `stream` checks it too.
 
 Never build `format`, `codec`, `parameters`, `cover` or `AudioSegment.converter` from user input, they
 go to ffmpeg as they are. Do not show exception text to end users, ffmpeg errors can hold paths on your
@@ -104,9 +148,6 @@ The source package downloads its codec libraries when it is built, so building n
 
 This is early. The version is 0.1.0. It is built and tested on macOS arm64 and Linux so far.
 Windows wheels are untested.
-
-Planned next: streaming for long files, and an mp3 encoder in the wheel so mp3 export does not
-need ffmpeg.
 
 ## Building from source
 

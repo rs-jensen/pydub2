@@ -34,11 +34,7 @@ sha256 `1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3`. Runni
 `tools/silero_weights.py` on that file gives the header in the repo byte for byte. The license at
 that tag is MIT, Copyright (c) 2020-present Silero Team.
 
-Two vendored files have a small change each, so that opening many files from several threads does not write
-shared tables at the same time (ThreadSanitizer flagged both). `src/third_party/stb_vorbis.c`: `crc32_init` is
-not `static` and is no longer called from `start_decoder`, `src/decode.cpp` calls it once. `src/third_party/ebur128.c`:
-the block in `ebur128_init` that writes the static constants runs only while `relative_gate_factor` is still 0,
-and `src/loudness.cpp` makes the first `ebur128_init` call once before any other.
+Two vendored files have a small change so that opening files from several threads does not write shared tables at the same time: `src/third_party/stb_vorbis.c` (`crc32_init` is called once from `src/decode.cpp`) and `src/third_party/ebur128.c` (the static constants are written only by the first `ebur128_init`, which `src/loudness.cpp` makes once before any other).
 
 The mp3 encoder is not part of this package. It is in the separate package pydub2-mp3 (LAME 3.100,
 LGPL-2.0-or-later) and is loaded at runtime. It is its own shared library, built from the unmodified
@@ -47,4 +43,4 @@ release tarball, and its LICENSE has the full LGPL text, the source and how to r
 The test audio in `tests/pydub_suite` is made when the tests run. No audio from pydub's repo is kept.
 `tests/pydub_suite/test_pydub.py` is pydub's test code (MIT, licenses/pydub.txt).
 
-How each of these was checked is in [docs/licensing.md](docs/licensing.md).
+More in [docs/licensing.md](docs/licensing.md).
