@@ -4,10 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       only:
-        description: CIBW_BUILD pattern, empty for all
+        description: CIBW_BUILD pattern for the pydub2 wheels, empty for all (must match cp313 for the tests)
         default: ""
       os:
         description: JSON list of runners, empty for all
+        default: ""
+      tag:
+        description: Run the version check as if this tag was pushed, for example v0.1.0
         default: ""
   push:
     tags: ["v*"]
@@ -15,16 +18,20 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: wheels-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   wheels:
-    name: wheels ${{ matrix.os }}
+    name: pydub2 ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: ${{ fromJSON(inputs.os || '["ubuntu-latest", "ubuntu-24.04-arm", "macos-15", "macos-15-intel", "windows-latest", "windows-11-arm"]') }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - if: runner.os == 'Windows'
         run: choco install ffmpeg -y --no-progress
       - if: runner.os == 'macOS'
@@ -38,17 +45,217 @@ jobs:
         env:
           ONLY: ${{ inputs.only }}
       - uses: pypa/cibuildwheel@f9b966cfadf4109556cadc5bb39ddb72d0ce664e # v4.3.5
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: wheels-${{ matrix.os }}
+          name: main-${{ matrix.os }}
           path: wheelhouse/*.whl
 
   sdist:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: pipx run build --sdist
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: sdist
+          name: main-sdist
           path: dist/*.tar.gz
+
+  mp3:
+    name: mp3 ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.os || '["ubuntu-latest", "ubuntu-24.04-arm", "macos-15", "macos-15-intel", "windows-latest", "windows-11-arm"]') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pypa/cibuildwheel@f9b966cfadf4109556cadc5bb39ddb72d0ce664e # v4.3.5
+        with:
+          package-dir: mp3
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mp3-${{ matrix.os }}
+          path: wheelhouse/*.whl
+
+  compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: pipx run build --wheel compat
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: compat
+          path: compat/dist/*.whl
+
+  check:
+    name: check ${{ matrix.os }}
+    needs: [wheels, mp3, compat]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.os || '["ubuntu-latest", "ubuntu-24.04-arm", "macos-15", "macos-15-intel", "windows-latest", "windows-11-arm"]') }}
+    env:
+      CHECK: |
+        set -eu
+        if command -v ffmpeg; then echo "ffmpeg is on PATH"; exit 1; fi
+        src=$PWD
+        python -m venv venv
+        py=$PWD/venv/bin/python
+        [ -x $py ] || py=$PWD/venv/Scripts/python
+        $py -m pip install -q pytest numpy
+        $py -m pip install -q --no-index --find-links dist pydub2 pydub2-mp3 pydub2-compat
+        $py -m pip list
+        $py - <<'PY'
+        import io, os
+        from importlib.metadata import distribution
+        for name in ("pydub2", "pydub2-mp3", "pydub2-compat"):
+            print(name, [l for l in distribution(name).read_text("WHEEL").splitlines() if l.startswith("Tag")][:1])
+        import pydub, pydub2, pydub2_mp3
+        assert pydub is pydub2 and "site-packages" in pydub2.__file__ and os.path.exists(pydub2_mp3.path())
+        from pydub import AudioSegment
+        from pydub.generators import Sine
+        b = io.BytesIO()
+        Sine(440).to_audio_segment(duration=1000).export(b, format="mp3")
+        b.seek(0)
+        a = AudioSegment.from_file(b, format="mp3")
+        assert abs(len(a) - 1000) < 60 and a.dBFS > -30, (len(a), a.dBFS)
+        print("smoke ok", len(a), a.dBFS)
+        PY
+        cd "$(mktemp -d)"
+        $py -m pytest -rs -q -p no:cacheprovider "$src/tests/test_mp3.py" "$src/tests/test_compat.py"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: main-${{ matrix.os }}
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mp3-${{ matrix.os }}
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: compat
+          path: dist
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - shell: bash
+        run: bash -c "$CHECK"
+      - if: runner.os == 'Linux'
+        run: rm -rf venv && docker run --rm -e CHECK -v "$PWD:/w" -w /w python:3.13-alpine sh -c "$CHECK"
+
+  twine:
+    needs: [wheels, sdist, mp3, compat]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - run: ls -l dist
+      - run: pipx run twine check --strict dist/*
+
+  version:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: tag must match every package version
+        run: |
+          python3 - <<'PY'
+          import os, re, sys, tomllib
+          tag = os.environ["TAG"]
+          if not tag:
+              print("no tag, nothing to check")
+              sys.exit(0)
+          want = tag.removeprefix("v")
+          got = {p: tomllib.load(open(p, "rb"))["project"]["version"] for p in ("pyproject.toml", "mp3/pyproject.toml", "compat/pyproject.toml")}
+          got["pydub2/__init__.py"] = re.search(r'^__version__ = "(.+)"', open("pydub2/__init__.py").read(), re.M).group(1)
+          print(tag, got)
+          bad = {k: v for k, v in got.items() if v != want}
+          if tag[0] != "v" or bad:
+              sys.exit("tag %s does not match %s" % (tag, bad or "the v prefix rule"))
+          text = open("CHANGELOG.md").read()
+          for name in (want, "Unreleased"):
+              m = re.search(r"^## \[%s\][^\n]*\n(.*?)(?=^## \[|\Z)" % re.escape(name), text, re.M | re.S)
+              if m:
+                  break
+          if not m or not m.group(1).strip():
+              sys.exit("no changelog section for " + want)
+          print("changelog section:", name)
+          open("release-notes.md", "w").write(m.group(1).strip() + "\n")
+          PY
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: ignore
+
+  publish-pydub2:
+    if: github.ref_type == 'tag'
+    needs: [wheels, sdist, mp3, compat, check, twine, version]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: main-*
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          attestations: true
+
+  publish-mp3:
+    if: github.ref_type == 'tag'
+    needs: [wheels, sdist, mp3, compat, check, twine, version]
+    runs-on: ubuntu-latest
+    environment: pypi-mp3
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: mp3-*
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          attestations: true
+
+  publish-compat:
+    if: github.ref_type == 'tag'
+    needs: [wheels, sdist, mp3, compat, check, twine, version]
+    runs-on: ubuntu-latest
+    environment: pypi-compat
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: compat
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          attestations: true
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [publish-pydub2, publish-mp3, publish-compat]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: out
+          merge-multiple: true
+      - run: gh release create "$TAG" out/*.whl out/*.tar.gz --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes-file out/release-notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
