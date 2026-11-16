@@ -189,56 +189,15 @@ def compress_dynamic_range(seg, threshold=-20.0, ratio=4.0, attack=5.0, release=
     thresh_rms = seg.max_possible_amplitude * db_to_float(threshold)
     
     look_frames = int(seg.frame_count(ms=attack))
-    def db_over_threshold(rms):
-        if rms == 0: return 0.0
-        db = ratio_to_db(rms / thresh_rms)
-        return max(db, 0)
-
-    data = seg._data
-    fw = seg.frame_width
-    rms = _pydub2.rms
-    output = []
-    done = 0
-
-    # amount to reduce the volume of the audio by (in dB)
-    attenuation = 0.0
-    
     attack_frames = seg.frame_count(ms=attack)
     release_frames = seg.frame_count(ms=release)
     n = int(seg.frame_count())
     if n:
-        # the fast path below skips these divisions, pydub raises on a zero in them
+        # pydub raises on a zero in these
         (1.0 / ratio, 0 / attack_frames, 0 / release_frames)
-    for i in xrange(n):
-        rms_now = rms(data[max(0, i - look_frames) * fw:i * fw], seg.sample_width)
-
-        # nothing to do, the frame stays as it is
-        if attenuation == 0.0 and rms_now <= thresh_rms:
-            continue
-        
-        # with a ratio of 4.0 this means the volume will exceed the threshold by
-        # 1/4 the amount (of dB) that it would otherwise
-        max_attenuation = (1 - (1.0 / ratio)) * db_over_threshold(rms_now)
-        
-        attenuation_inc = max_attenuation / attack_frames
-        attenuation_dec = max_attenuation / release_frames
-        
-        if rms_now > thresh_rms and attenuation <= max_attenuation:
-            attenuation += attenuation_inc
-            attenuation = min(attenuation, max_attenuation)
-        else:
-            attenuation -= attenuation_dec
-            attenuation = max(attenuation, 0)
-        
-        if attenuation != 0.0:
-            output.append(data[done * fw:i * fw])
-            output.append(_pydub2.mul(data[i * fw:(i + 1) * fw],
-                                      seg.sample_width,
-                                      db_to_float(-attenuation)))
-            done = i + 1
-    
-    output.append(data[done * fw:n * fw])
-    return seg._spawn(data=b''.join(output))
+    data = _pydub2.compress(seg._data, seg.sample_width, seg.channels, thresh_rms, ratio, attack_frames,
+                            release_frames, max(-1, min(look_frames, n)))
+    return seg._spawn(data=data)
 
 
 # Invert the phase of the signal.
@@ -283,16 +242,7 @@ def low_pass_filter(seg, cutoff):
 
     alpha = dt / (RC + dt)
     
-    original = seg.get_array_of_samples()
-    filteredArray = array.array(seg.array_type, original)
-
-    for j in range(seg.channels):
-        xs = original[j::seg.channels]
-        last = xs[0] if xs else 0
-        filteredArray[j::seg.channels] = array.array(
-            seg.array_type, xs[:1] + array.array(seg.array_type, [int(last := last + (alpha * (x - last))) for x in xs[1:]]))
-
-    return seg._spawn(data=filteredArray)
+    return seg._spawn(data=_pydub2.lowpass(seg._data, seg.sample_width, seg.channels, alpha))
 
 
 @register_pydub_effect
@@ -306,22 +256,9 @@ def high_pass_filter(seg, cutoff):
 
     alpha = RC / (RC + dt)
 
-    minval, maxval = get_min_max_value(seg.sample_width * 8)
-    
-    original = seg.get_array_of_samples()
-    filteredArray = array.array(seg.array_type, original)
+    return seg._spawn(data=_pydub2.highpass(seg._data, seg.sample_width, seg.channels, alpha))
 
-    for j in range(seg.channels):
-        xs = original[j::seg.channels]
-        last = xs[0] if xs else 0
-        filteredArray[j::seg.channels] = array.array(
-            seg.array_type, xs[:1] + array.array(seg.array_type, [
-                int(min(max(last := alpha * (last + x - p), minval), maxval))
-                for x, p in zip(xs[1:], xs)]))
 
-    return seg._spawn(data=filteredArray)
-    
-    
 @register_pydub_effect
 def pan(seg, pan_amount):
     """

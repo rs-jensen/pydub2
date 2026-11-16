@@ -72,6 +72,34 @@ def test_compress_dynamic_range():
     same(effects.compress_dynamic_range(new), old_effects.compress_dynamic_range(old))
 
 
+@pytest.mark.parametrize("width", [1, 2, 4])
+@pytest.mark.parametrize("channels", [1, 2, 3])
+def test_compress_and_filters_widths(width, channels):
+    import random
+    random.seed(width * 10 + channels)
+    top = 2 ** (8 * width - 1)
+    n = 1500 * channels
+    data = array.array({1: "b", 2: "h", 4: "i"}[width], [
+        random.randint(-top, top - 1) if i // 300 % 2 else random.randint(-top // 40, top // 40) for i in range(n)])
+    kw = dict(data=data.tobytes(), sample_width=width, frame_rate=2000, channels=channels)
+    new, old = AudioSegment(**kw), OldSegment(**kw)
+    for args in [dict(), dict(threshold=-30.0, ratio=3.0, attack=2.0, release=20.0), dict(threshold=-6, ratio=20, attack=0.3, release=1)]:
+        same(effects.compress_dynamic_range(new, **args), old_effects.compress_dynamic_range(old, **args))
+    for cutoff in (50, 900):
+        same(effects.low_pass_filter(new, cutoff), old_effects.low_pass_filter(old, cutoff))
+        same(effects.high_pass_filter(new, cutoff), old_effects.high_pass_filter(old, cutoff))
+
+
+def test_compress_zero_threshold():
+    new, old = pair(rate=2000)
+    with pytest.raises(ZeroDivisionError):
+        old_effects.compress_dynamic_range(old, threshold=-float("inf"))
+    with pytest.raises(ZeroDivisionError):
+        effects.compress_dynamic_range(new, threshold=-float("inf"))
+    quiet = AudioSegment.silent(100)
+    assert effects.compress_dynamic_range(quiet, threshold=-float("inf")) == quiet
+
+
 @pytest.mark.parametrize("channels", [1, 2])
 def test_invert_phase(channels):
     new, old = pair(channels=channels)
