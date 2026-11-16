@@ -217,6 +217,34 @@ NB_MODULE(_pydub2, m) {
         return out;
     });
 
+    m.def("lowpass", [](nb::bytes data, int width, int channels, double alpha) {
+        nb::object out;
+        {
+            nb::gil_scoped_release g;
+            lowpass(str(data), width, channels, alpha, into(out));
+        }
+        return out;
+    });
+
+    m.def("highpass", [](nb::bytes data, int width, int channels, double alpha) {
+        nb::object out;
+        {
+            nb::gil_scoped_release g;
+            highpass(str(data), width, channels, alpha, into(out));
+        }
+        return out;
+    });
+
+    m.def("compress", [](nb::bytes data, int width, int channels, double thresh, double ratio, double attack_frames,
+                         double release_frames, long long look) {
+        nb::object out;
+        {
+            nb::gil_scoped_release g;
+            compress(str(data), width, channels, thresh, ratio, attack_frames, release_frames, look, into(out));
+        }
+        return out;
+    });
+
     m.def("add", [](nb::bytes a, nb::bytes b, int width) {
         nb::object out;
         {
