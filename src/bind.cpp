@@ -1,5 +1,6 @@
 #include <chrono>
 #include <mutex>
+#include <vector>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/filesystem.h>
@@ -29,12 +30,20 @@ static Cancel interrupt() {
     };
 }
 
-static std::string str(nb::bytes b) {
-    return std::string(b.c_str(), b.size());
+// the caller holds the bytes and they cant change, so the core reads them in place
+static std::string_view str(nb::bytes b) {
+    return std::string_view(b.c_str(), b.size());
 }
 
-static nb::bytes bytes(const std::string &s) {
-    return nb::bytes(s.data(), s.size());
+// the core fills the bytes python gets, no second copy
+static Alloc into(nb::object &out) {
+    return [&out](size_t n) {
+        nb::gil_scoped_acquire g;
+        out = nb::steal(PyBytes_FromStringAndSize(NULL, n));
+        if (!out.is_valid())
+            throw nb::python_error();
+        return PyBytes_AS_STRING(out.ptr());
+    };
 }
 
 static Audio audio(nb::bytes data, int rate, int channels, int width) {
@@ -69,16 +78,18 @@ struct Stream {
 
 // n frames or all that is left, decoded straight into the bytes python gets
 // frames comes from the header and can lie, so only the first 64 MB are sized from it, the rest grows with what is decoded
+// unless the decoder counted them itself
 static nb::bytes take(Stream &s, int64_t n) {
     Decoder &d = *s.d;
     size_t fw = (size_t)d.channels * d.width;
     uint64_t left = n >= 0 ? (uint64_t)n : UINT64_MAX;
-    size_t room = std::min<uint64_t>(n >= 0 ? left : d.frames, ((size_t)64 << 20) / fw) * fw, got = 0;
+    size_t room = std::min<uint64_t>(n >= 0 ? left : d.frames, n < 0 && d.exact ? UINT64_MAX : ((size_t)64 << 20) / fw) * fw, got = 0;
     nb::object out = nb::steal(PyBytes_FromStringAndSize(NULL, room));
     if (!out.is_valid()) {
         throw nb::python_error();
     }
-    std::string rest;
+    std::vector<std::string> rest; // pieces, one string that grows would copy itself and hold twice the memory
+    size_t more = 0;
     {
         char *p = PyBytes_AS_STRING(out.ptr());
         Cancel cancel = interrupt();
@@ -97,22 +108,31 @@ static nb::bytes take(Stream &s, int64_t n) {
         bool full = got == room;
         while (full && left) {
             cancel();
-            size_t k = rest.size(), m = std::min<uint64_t>(left, step);
-            rest.resize(k + m * fw);
-            size_t r = d.read(&rest[k], m);
-            rest.resize(k + r);
+            // grow with what came, a full step of zeros for a few frames is 16 MB of rss
+            size_t m = std::min<uint64_t>(left, std::min(step, std::max<size_t>(more / fw, 4096)));
+            std::string piece(m * fw, 0);
+            size_t r = d.read(&piece[0], m);
+            piece.resize(r);
+            more += r;
+            rest.push_back(std::move(piece));
             left -= r / fw;
             full = r == m * fw;
         }
     }
-    if (got < room || rest.size()) {
-        nb::object all = nb::steal(PyBytes_FromStringAndSize(NULL, got + rest.size()));
+    if (got < room || more) {
+        nb::object all = nb::steal(PyBytes_FromStringAndSize(NULL, got + more));
         if (!all.is_valid()) {
             throw nb::python_error();
         }
         memcpy(PyBytes_AS_STRING(all.ptr()), PyBytes_AS_STRING(out.ptr()), got);
-        memcpy(PyBytes_AS_STRING(all.ptr()) + got, rest.data(), rest.size());
         out = all;
+        // let go of each piece as it is copied to keep the peak down
+        char *q = PyBytes_AS_STRING(out.ptr()) + got;
+        for (auto &piece : rest) {
+            memcpy(q, piece.data(), piece.size());
+            q += piece.size();
+            std::string().swap(piece);
+        }
     }
     return nb::borrow<nb::bytes>(out);
 }
@@ -166,102 +186,115 @@ NB_MODULE(_pydub2, m) {
 
     m.def("encode", [](nb::bytes data, int rate, int channels, int width, std::string format, int bitrate) {
         Audio a = audio(data, rate, channels, width);
-        std::string out;
+        nb::object out;
         {
             nb::gil_scoped_release g;
-            out = encode(a, format, bitrate, interrupt());
+            encode(a, format, bitrate, interrupt(), into(out));
         }
-        return bytes(out);
+        return out;
     }, nb::arg("data"), nb::arg("rate"), nb::arg("channels"), nb::arg("width"), nb::arg("format"), nb::arg("bitrate") = 0);
 
+    m.def("wav_head", [](nb::bytes data, int rate, int channels, int width) {
+        std::string s = wav_head(audio(data, rate, channels, width));
+        return nb::bytes(s.data(), s.size());
+    });
+
     m.def("rms", [](nb::bytes data, int width) {
-        std::string s = str(data);
+        std::string_view s = str(data);
         nb::gil_scoped_release g;
         return rms(s, width);
     });
 
     m.def("max", [](nb::bytes data, int width) {
-        std::string s = str(data);
+        std::string_view s = str(data);
         nb::gil_scoped_release g;
         return pydub2::max(s, width);
     });
 
     m.def("mul", [](nb::bytes data, int width, double factor) {
-        std::string s = str(data);
+        std::string_view s = str(data);
+        nb::object out;
         {
             nb::gil_scoped_release g;
-            s = mul(s, width, factor);
+            mul(s, width, factor, into(out));
         }
-        return bytes(s);
+        return out;
     });
 
     m.def("add", [](nb::bytes a, nb::bytes b, int width) {
-        std::string x = str(a), y = str(b);
+        std::string_view x = str(a), y = str(b);
+        nb::object out;
         {
             nb::gil_scoped_release g;
-            x = add(x, y, width);
+            add(x, y, width, into(out));
         }
-        return bytes(x);
+        return out;
     });
 
     m.def("lin2lin", [](nb::bytes data, int width, int new_width) {
-        std::string s = str(data);
+        std::string_view s = str(data);
+        nb::object out;
         {
             nb::gil_scoped_release g;
-            s = lin2lin(s, width, new_width);
+            lin2lin(s, width, new_width, into(out));
         }
-        return bytes(s);
+        return out;
     });
 
     m.def("tomono", [](nb::bytes data, int width, double lfac, double rfac) {
-        std::string s = str(data);
+        std::string_view s = str(data);
+        nb::object out;
         {
             nb::gil_scoped_release g;
-            s = tomono(s, width, lfac, rfac);
+            tomono(s, width, lfac, rfac, into(out));
         }
-        return bytes(s);
+        return out;
     });
 
     m.def("tostereo", [](nb::bytes data, int width, double lfac, double rfac) {
-        std::string s = str(data);
+        std::string_view s = str(data);
+        nb::object out;
         {
             nb::gil_scoped_release g;
-            s = tostereo(s, width, lfac, rfac);
+            tostereo(s, width, lfac, rfac, into(out));
         }
-        return bytes(s);
+        return out;
     });
 
     m.def("reverse", [](nb::bytes data, int width) {
-        std::string s = str(data);
+        std::string_view s = str(data);
+        nb::object out;
         {
             nb::gil_scoped_release g;
-            s = reverse(s, width);
+            reverse(s, width, into(out));
         }
-        return bytes(s);
+        return out;
     });
 
     m.def("avg", [](nb::bytes data, int width) {
-        std::string s = str(data);
+        std::string_view s = str(data);
         nb::gil_scoped_release g;
         return avg(s, width);
     });
 
     m.def("bias", [](nb::bytes data, int width, int bias_) {
-        std::string s = str(data);
+        std::string_view s = str(data);
+        nb::object out;
         {
             nb::gil_scoped_release g;
-            s = bias(s, width, bias_);
+            bias(s, width, bias_, into(out));
         }
-        return bytes(s);
+        return out;
     });
 
     m.def("ratecv", [](nb::bytes data, int width, int channels, int inrate, int outrate) {
-        std::string s = str(data);
+        std::string_view s = str(data);
+        nb::object out;
         {
             nb::gil_scoped_release g;
-            s = ratecv(s, width, channels, inrate, outrate);
+            ratecv(s, width, channels, inrate, outrate, into(out));
         }
-        return bytes(s);
+        return out;
     });
 
     m.def("detect_silence", [](nb::bytes data, int rate, int channels, int width, int min_silence_len,
@@ -279,11 +312,12 @@ NB_MODULE(_pydub2, m) {
         Audio a = audio(data, rate, channels, width);
         if (new_rate < 1)
             throw std::invalid_argument("bad rate");
+        nb::object out;
         {
             nb::gil_scoped_release g;
-            a = resample(a, new_rate, interrupt());
+            resample(a, new_rate, interrupt(), into(out));
         }
-        return bytes(a.data);
+        return out;
     });
 
     m.def("loudness", [](nb::bytes data, int rate, int channels, int width) {

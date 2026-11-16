@@ -48,7 +48,7 @@ static void put16(std::string &s, uint16_t v) {
 }
 
 // same bytes as the wave module writes for pydub
-static std::string wav(const Audio &a) {
+std::string wav_head(const Audio &a) {
     if (a.data.size() > UINT32_MAX - 36)
         throw std::runtime_error("too long for wav");
     uint32_t n = a.data.size();
@@ -67,15 +67,22 @@ static std::string wav(const Audio &a) {
     put16(out, a.width * 8);
     out += "data";
     put32(out, n);
+    return out;
+}
+
+static void wav(const Audio &a, const Alloc &alloc) {
+    uint32_t n = a.data.size();
+    std::string out = wav_head(a);
     size_t start = out.size();
-    out += a.data;
+    char *p = alloc(start + n + (n & 1));
+    memcpy(p, out.data(), start);
+    memcpy(p + start, a.data.data(), n);
     // 8 bit wav is unsigned
     if (a.width == 1)
-        for (size_t i = start; i < out.size(); i++)
-            out[i] = (char)(out[i] + 128);
+        for (size_t i = start; i < start + n; i++)
+            p[i] = (char)(p[i] + 128);
     if (n & 1)
-        out += '\0';
-    return out;
+        p[start + n] = 0;
 }
 
 struct Sink {
@@ -287,20 +294,24 @@ static std::string opus(const Audio &a, int bitrate, const Cancel &cancel) {
     return out;
 }
 
-std::string encode(const Audio &a, const std::string &format, int bitrate, const Cancel &cancel) {
+static void copy(const std::string &s, const Alloc &alloc) {
+    memcpy(alloc(s.size()), s.data(), s.size());
+}
+
+void encode(const Audio &a, const std::string &format, int bitrate, const Cancel &cancel, const Alloc &alloc) {
     if (a.width < 1 || a.width > 4)
         throw std::invalid_argument("bad sample width");
     if (format == "wav")
-        return wav(a);
+        return wav(a, alloc);
     if (format == "flac")
-        return flac(a, cancel);
+        return copy(flac(a, cancel), alloc);
     if (format == "ogg")
-        return ogg(a, bitrate, cancel);
+        return copy(ogg(a, bitrate, cancel), alloc);
     if (format == "opus") {
         // libopusenc corrupts the heap when it resamples up from below about 90 hz
         if (a.rate < 100)
             throw std::runtime_error("cant encode this");
-        return opus(a, bitrate, cancel);
+        return copy(opus(a, bitrate, cancel), alloc);
     }
     throw std::invalid_argument("cant write this format");
 }

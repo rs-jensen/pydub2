@@ -173,6 +173,7 @@ struct Wav : Dec {
         in_seek(&in, w.dataChunkDataPos, SEEK_SET);
         // the header can claim any size, the file cant hold more
         frames = std::min<uint64_t>(w.totalPCMFrameCount, (in.len - std::min<uint64_t>(in.len, w.dataChunkDataPos)) / frame);
+        exact = true;
     }
 
     size_t read(char *out, size_t n) {
@@ -509,6 +510,7 @@ struct Mp3 : Dec {
             cut = n > end || end < cut ? 0 : n + cut > end ? n + cut - end : 0;
         }
         frames = n > skip + cut ? n - skip - cut : 0;
+        exact = true;
         pos = skip;
     }
 

@@ -119,6 +119,7 @@ def test_wav_too_long(monkeypatch):
     def too_long(*a):
         raise RuntimeError("too long for wav")
     monkeypatch.setattr(_pydub2, "encode", too_long)
+    monkeypatch.setattr(_pydub2, "wav_head", too_long)
     with pytest.raises(CouldntEncodeError):
         tone(100).export(format="wav")
 
