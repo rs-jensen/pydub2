@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -23,6 +24,9 @@ struct Audio {
 
 typedef std::vector<std::pair<int, int>> Ranges; // [start, end) in ms
 
+// the long loops call this every so often, it throws to stop the work
+typedef std::function<void()> Cancel;
+
 // decode.cpp
 // wav, flac, mp3, ogg vorbis and opus, a piece at a time. open throws std::runtime_error on anything else
 struct Decoder {
@@ -42,7 +46,7 @@ std::unique_ptr<Decoder> open(const std::filesystem::path &path);
 // encode.cpp
 // format is wav, flac, ogg or opus. bitrate in bits per second, 0 picks a default
 // throws std::invalid_argument for a format we dont have
-std::string encode(const Audio &a, const std::string &format, int bitrate);
+std::string encode(const Audio &a, const std::string &format, int bitrate, const Cancel &cancel);
 
 // pcm.cpp
 // these do the same math as the old audioop module so the numbers match pydub
@@ -61,17 +65,17 @@ std::string ratecv(const std::string &data, int width, int channels, int inrate,
 
 // silence.cpp
 // same walk as pydub.silence.detect_silence, thresh is in dBFS
-Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh, int seek_step);
+Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh, int seek_step, const Cancel &cancel);
 
 // resample.cpp
-Audio resample(const Audio &a, int new_rate);
+Audio resample(const Audio &a, int new_rate, const Cancel &cancel);
 
 // loudness.cpp
 // integrated loudness in LUFS (EBU R128)
-double loudness(const Audio &a);
+double loudness(const Audio &a, const Cancel &cancel);
 
 // vad.cpp
 // silero vad. ranges where somebody is talking
-Ranges detect_speech(const Audio &a, double threshold, int min_speech_ms, int min_silence_ms);
+Ranges detect_speech(const Audio &a, double threshold, int min_speech_ms, int min_silence_ms, const Cancel &cancel);
 
 } // namespace pydub2

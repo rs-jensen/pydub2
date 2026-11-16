@@ -107,7 +107,7 @@ static FLAC__StreamEncoderTellStatus flac_tell(const FLAC__StreamEncoder *, FLAC
     return FLAC__STREAM_ENCODER_TELL_STATUS_OK;
 }
 
-static std::string flac(const Audio &a) {
+static std::string flac(const Audio &a, const Cancel &cancel) {
     if (a.channels > 8)
         throw std::runtime_error("cant encode this");
     size_t frames = a.data.size() / a.width / a.channels;
@@ -131,13 +131,19 @@ static std::string flac(const Audio &a) {
     Sink s;
     bool ok = FLAC__stream_encoder_init_stream(enc, flac_write, flac_seek, flac_tell, nullptr, &s) ==
               FLAC__STREAM_ENCODER_INIT_STATUS_OK;
-    for (size_t f = 0; ok && f < frames; f += block) {
-        size_t n = std::min(frames - f, (size_t)block);
-        for (size_t i = 0; i < n * a.channels; i++) {
-            int32_t v = sample(a, f * a.channels + i);
-            buf[i] = a.width == 1 ? v * 256 : a.width == 4 ? v >> 8 : v;
+    try {
+        for (size_t f = 0; ok && f < frames; f += block) {
+            cancel();
+            size_t n = std::min(frames - f, (size_t)block);
+            for (size_t i = 0; i < n * a.channels; i++) {
+                int32_t v = sample(a, f * a.channels + i);
+                buf[i] = a.width == 1 ? v * 256 : a.width == 4 ? v >> 8 : v;
+            }
+            ok = FLAC__stream_encoder_process_interleaved(enc, buf.data(), n);
         }
-        ok = FLAC__stream_encoder_process_interleaved(enc, buf.data(), n);
+    } catch (...) {
+        FLAC__stream_encoder_delete(enc);
+        throw;
     }
     ok = FLAC__stream_encoder_finish(enc) && ok;
     FLAC__stream_encoder_delete(enc);
@@ -166,7 +172,7 @@ static void blocks(vorbis_dsp_state *vd, vorbis_block *vb, ogg_stream_state *os,
     }
 }
 
-static std::string ogg(const Audio &a, int bitrate) {
+static std::string ogg(const Audio &a, int bitrate, const Cancel &cancel) {
     std::vector<float> pcm = floats(a);
     vorbis_info vi;
     vorbis_info_init(&vi);
@@ -202,6 +208,7 @@ static std::string ogg(const Audio &a, int bitrate) {
 
         size_t frames = pcm.size() / a.channels;
         for (size_t f = 0; f < frames; f += 4096) {
+            cancel();
             int n = std::min(frames - f, (size_t)4096);
             float **buf = vorbis_analysis_buffer(&vd, n);
             for (int i = 0; i < n; i++)
@@ -240,7 +247,7 @@ static int opus_close(void *) {
     return 0;
 }
 
-static std::string opus(const Audio &a, int bitrate) {
+static std::string opus(const Audio &a, int bitrate, const Cancel &cancel) {
     std::string out;
     std::vector<float> pcm = floats(a);
     OpusEncCallbacks cb = {opus_write, opus_close};
@@ -264,9 +271,16 @@ static std::string opus(const Audio &a, int bitrate) {
                                                                             : OPUS_BANDWIDTH_FULLBAND;
     err = err || ope_encoder_ctl(enc, OPUS_SET_MAX_BANDWIDTH(band));
     // it takes the frame count as an int
-    size_t frames = pcm.size() / a.channels, step = 1 << 20;
-    for (size_t f = 0; !err && f < frames; f += step)
-        err = ope_encoder_write_float(enc, pcm.data() + f * a.channels, std::min(frames - f, step));
+    size_t frames = pcm.size() / a.channels, step = 1 << 16;
+    try {
+        for (size_t f = 0; !err && f < frames; f += step) {
+            cancel();
+            err = ope_encoder_write_float(enc, pcm.data() + f * a.channels, std::min(frames - f, step));
+        }
+    } catch (...) {
+        ope_encoder_destroy(enc);
+        throw;
+    }
     if (!err)
         err = ope_encoder_drain(enc);
     ope_encoder_destroy(enc);
@@ -275,20 +289,20 @@ static std::string opus(const Audio &a, int bitrate) {
     return out;
 }
 
-std::string encode(const Audio &a, const std::string &format, int bitrate) {
+std::string encode(const Audio &a, const std::string &format, int bitrate, const Cancel &cancel) {
     if (a.width < 1 || a.width > 4)
         throw std::invalid_argument("bad sample width");
     if (format == "wav")
         return wav(a);
     if (format == "flac")
-        return flac(a);
+        return flac(a, cancel);
     if (format == "ogg")
-        return ogg(a, bitrate);
+        return ogg(a, bitrate, cancel);
     if (format == "opus") {
         // libopusenc corrupts the heap when it resamples up from below about 90 hz
         if (a.rate < 100)
             throw std::runtime_error("cant encode this");
-        return opus(a, bitrate);
+        return opus(a, bitrate, cancel);
     }
     throw std::invalid_argument("cant write this format");
 }
