@@ -1054,7 +1054,7 @@ static std::unique_ptr<Decoder> detect(Input in) {
     }
     d->in = in;
     d->init();
-    if (d->channels < 1 || d->rate < 1) {
+    if (d->channels < 1 || d->channels > 65535 || d->rate < 1) {
         fail();
     }
     return d;
