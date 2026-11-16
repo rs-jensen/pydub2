@@ -239,3 +239,75 @@ def test_errors_are_value_errors():
         seg.set_frame_rate(0)
     with pytest.raises(ValueError):
         pydub2.AudioSegment(b"\x01" * 7717, sample_width=1, frame_rate=8000, channels=1).set_channels(3).get_dc_offset()
+
+
+@pytest.mark.parametrize("rate", [3.5, 7.9, 44100.0, 44100.5])
+def test_float_frame_rate_silence(rate):
+    from pydub import silence as old_silence
+    from pydub2 import silence as new_silence
+    for data in (bytes(2000), noise(50)[0], b"\x01\x00" * 500 + bytes(1000)):
+        new, old = both(data, rate, 2, 1)
+        for name in ("detect_silence", "detect_nonsilent"):
+            assert getattr(new_silence, name)(new, 5, -30) == getattr(old_silence, name)(old, 5, -30)
+        a = [c.raw_data for c in new_silence.split_on_silence(new, 5, -30)]
+        b = [c.raw_data for c in old_silence.split_on_silence(old, 5, -30)]
+        assert a == b
+
+
+def raises(f):
+    try:
+        f()
+    except Exception as e:
+        return type(e).__name__
+    return None
+
+
+def test_strip_silence_at_7_hz_returns_where_pydub_divides_by_zero():
+    new, old = both(b"\x80\x80", 7, 1, 1)
+    kw = dict(silence_len=20, silence_thresh=-3.5, padding=10)
+    assert raises(lambda: old.strip_silence(**kw)) == "ZeroDivisionError"
+    assert new.strip_silence(**kw).raw_data == b"\xff\x80"
+
+
+@pytest.mark.parametrize("args", [(bytes(2050), 7, 1, 2), noise(300)])
+def test_speedup_chunk_size_1_raises_like_pydub(args):
+    new, old = both(*args)
+    start = time.time()
+    assert raises(lambda: new.speedup(chunk_size=1)) == "ZeroDivisionError" == raises(lambda: old.speedup(chunk_size=1))
+    assert time.time() - start < 5
+
+
+def test_rms_of_32_bit_does_not_fuse_the_squares():
+    data = (2122901605).to_bytes(4, "little") * 7
+    total = 0.0
+    for _ in range(7):
+        total += 2122901605.0 * 2122901605.0
+    assert pydub2.AudioSegment(data, sample_width=4, frame_rate=16000, channels=1).rms == int((total / 7) ** 0.5)
+
+
+@pytest.mark.parametrize("call", [lambda s: s.set_sample_width(-1), lambda s: s.set_sample_width(-5), lambda s: s.set_sample_width(5),
+                                  lambda s: s.set_channels(0), lambda s: s.set_channels(-1), lambda s: s.set_frame_rate(-5),
+                                  lambda s: s.set_frame_rate(0)])
+def test_bad_width_channels_rate_are_value_errors(call):
+    new, old = both(bytes(400), 8000, 2, 1)
+    assert raises(lambda: call(new)) == "ValueError"
+    assert raises(lambda: call(old)) in ("ValueError", "error")
+
+
+@pytest.mark.parametrize("name, args", [("rms", (-1,)), ("max", (-1,)), ("mul", (-1, 1.0)), ("lowpass", (-1, 1, 0.5)),
+                                        ("highpass", (2, -1, 0.5)), ("add", (b"\0" * 8, -1)), ("lin2lin", (2, -1)),
+                                        ("lin2lin", (-1, 2)), ("tomono", (-1, 0.5, 0.5)), ("tostereo", (-1, 0.5, 0.5)),
+                                        ("downmix", (2, -1)), ("reverse", (-1,)), ("avg", (-1,)), ("bias", (-1, 1)),
+                                        ("ratecv", (-1, 1, 8000, 4000)), ("ratecv", (2, -1, 8000, 4000))])
+def test_negative_width_or_channels_in_the_core(name, args):
+    import _pydub2
+    with pytest.raises(ValueError):
+        getattr(_pydub2, name)(bytes(16), *args)
+
+
+@pytest.mark.parametrize("kw", [dict(playback_speed=1), dict(playback_speed=0.5), dict(crossfade=-1), dict(playback_speed=0.5, chunk_size=500)])
+def test_speedup_with_a_negative_crossfade_matches_pydub(kw):
+    new, old = both(*noise(100, rate=22050))
+    assert raises(lambda: new.speedup(**kw)) == raises(lambda: old.speedup(**kw))
+    if not raises(lambda: old.speedup(**kw)):
+        assert new.speedup(**kw).raw_data == old.speedup(**kw).raw_data

@@ -93,6 +93,9 @@ def speedup(seg, playback_speed=1.5, chunk_size=150, crossfade=25):
 
     out = chunks[0]
     if crossfade < 0:
+        # pydub fades 0 ms at the first append and divides by zero
+        if len(chunks) > 1 and (not len(out[-crossfade:]) or not len(chunks[1][:crossfade])):
+            raise ZeroDivisionError("division by zero")
         for chunk in chunks[1:]:
             out = out.append(chunk, crossfade=crossfade)
         return out + last_chunk
