@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import wave
+import sys
 
 import numpy as np
 import pytest
@@ -51,6 +52,8 @@ def best_corr(x, y):
 def test_wav_like_pydub(width, channels, secs):
     pydub = pytest.importorskip("pydub")
     data = sine(8000, channels, width, secs)
+    if len(data) % 2 and sys.version_info < (3, 15):
+        pytest.skip("wave only pads odd data from 3.15")
     seg = pydub.AudioSegment(data, frame_rate=8000, channels=channels, sample_width=width)
     assert _pydub2.encode(data, 8000, channels, width, "wav") == seg.export(format="wav").read()
 

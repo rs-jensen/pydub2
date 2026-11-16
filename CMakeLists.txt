@@ -77,6 +77,9 @@ target_link_libraries(opusenc PUBLIC Opus::opus)
 add_library(ebur128 STATIC src/third_party/ebur128.c)
 target_include_directories(ebur128 PUBLIC src/third_party PRIVATE src/third_party/queue)
 target_compile_definitions(ebur128 PRIVATE _USE_MATH_DEFINES) # M_PI on msvc
+if(MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64")
+    target_compile_options(ebur128 PRIVATE /std:clatest) # #warning on arm64
+endif()
 
 find_package(Python 3.9 COMPONENTS Interpreter Development.Module REQUIRED)
 execute_process(COMMAND ${Python_EXECUTABLE} -m nanobind --cmake_dir
