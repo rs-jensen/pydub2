@@ -73,7 +73,7 @@ def masked(tags):
 
 def no_ffprobe(monkeypatch):
     which = utils2.which
-    monkeypatch.setattr(utils2, "which", lambda p: None if p in ("ffprobe", "avprobe") else which(p))
+    monkeypatch.setattr(utils2, "which", lambda p: None if os.path.basename(p) in ("ffprobe", "avprobe") else which(p))
 
 
 @need_ffmpeg
