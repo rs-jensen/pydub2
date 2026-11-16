@@ -4,7 +4,9 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/filesystem.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 
 #include "core.h"
 
@@ -191,15 +193,21 @@ NB_MODULE(_pydub2, m) {
         return nb::make_tuple(take(s, -1), s.d->rate, s.d->channels, s.d->width);
     });
 
-    m.def("encode", [](nb::bytes data, int rate, int channels, int width, std::string format, int bitrate) {
+    m.def("encode", [](nb::bytes data, int rate, int channels, int width, std::string format, int bitrate,
+                       std::vector<std::pair<nb::bytes, nb::bytes>> tags) {
         Audio a = audio(data, rate, channels, width);
+        Tags t;
+        for (auto &p : tags) {
+            t.push_back({std::string(p.first.c_str(), p.first.size()), std::string(p.second.c_str(), p.second.size())});
+        }
         nb::object out;
         {
             nb::gil_scoped_release g;
-            encode(a, format, bitrate, interrupt(), into(out));
+            encode(a, format, bitrate, t, interrupt(), into(out));
         }
         return out;
-    }, nb::arg("data"), nb::arg("rate"), nb::arg("channels"), nb::arg("width"), nb::arg("format"), nb::arg("bitrate") = 0);
+    }, nb::arg("data"), nb::arg("rate"), nb::arg("channels"), nb::arg("width"), nb::arg("format"), nb::arg("bitrate") = 0,
+       nb::arg("tags") = nb::list());
 
     m.def("wav_head", [](nb::bytes data, int rate, int channels, int width) {
         std::string s = wav_head(audio(data, rate, channels, width));
