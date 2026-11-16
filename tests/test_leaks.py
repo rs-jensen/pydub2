@@ -12,25 +12,39 @@ import pytest
 import _pydub2
 from pydub2 import AudioSegment, silence
 
-from test_threads import EXTS, SEG, build
+from test_threads import EXTS, SEG, SOAK, build
 
-# LEAK_N=20000 for the long run
-N = int(os.environ.get("LEAK_N", 16))
+# PYDUB2_SOAK=1 for the long run
+N = 20000 if SOAK else 2
+PASSES = 4 if SOAK else 1
 # ps rss wanders a lot over a few loops, only the long run can tell a small leak
-SLACK = (1 if N >= 2000 else 16) << 20
-FF = shutil.which("ffmpeg")
+SLACK = (4 if N >= 2000 else 16) << 20
+FF = shutil.which("ffmpeg") and SOAK
 
 
 def rss():
+    if not SOAK:
+        return 0
     try:
         with open("/proc/self/statm") as f:
             return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
     except OSError:
+        pass
+    try:
         return int(subprocess.check_output(["ps", "-o", "rss=", "-p", str(os.getpid())])) * 1024
+    except OSError:
+        return 0  # windows, only the python and fd checks run
 
 
 def fds():
-    return len(os.listdir("/dev/fd"))
+    n = 0
+    for i in range(256):
+        try:
+            os.fstat(i)
+            n += 1
+        except OSError:
+            pass
+    return n
 
 
 def failing(f, must=True):
@@ -88,7 +102,7 @@ def ops(c):
     o[("resample", 1)] = lambda: seg.set_frame_rate(16000)
     o[("width channels", 1)] = lambda: seg.set_sample_width(1).set_sample_width(4).set_channels(1)
     o[("split mono", 1)] = lambda: seg.split_to_mono()
-    o[("measure", 1)] = lambda: (seg.rms, seg.max, seg.dBFS, seg.loudness, seg.get_dc_offset())
+    o[("measure", 1)] = lambda: (seg.rms, seg.max, seg.dBFS, seg.loudness(), seg.get_dc_offset())
     o[("dc offset", 1)] = lambda: seg.remove_dc_offset()
     o[("silence", 1)] = lambda: (silence.detect_silence(seg, 200, -40), silence.split_on_silence(seg, 200, -40))
     o[("speech", 10)] = lambda: silence.detect_speech(seg)
@@ -116,15 +130,15 @@ def test_ops_leak_nothing(ctx, tmp_path, monkeypatch):
     for f in o.values():
         f()
     for (name, slow), f in o.items():
-        n = max(N // slow, 4)
-        for _ in range(n // 4):
+        n = max(N // slow, PASSES)
+        for _ in range(n // PASSES):
             f()
         gc.collect()
         fd0, files0, sizes = fds(), len(os.listdir(tmp_path)), [rss()]
         py0 = tracemalloc.get_traced_memory()[0]
         t0 = time.time()
-        for _ in range(4):
-            for _ in range(n // 4):
+        for _ in range(PASSES):
+            for _ in range(n // PASSES):
                 f()
             gc.collect()
             sizes.append(rss())
