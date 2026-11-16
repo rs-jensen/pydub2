@@ -134,9 +134,6 @@ NB_MODULE(_pydub2, m) {
 
     m.def("encode", [](nb::bytes data, int rate, int channels, int width, std::string format, int bitrate) {
         Audio a = audio(data, rate, channels, width);
-        // libopusenc corrupts the heap when it resamples up from below about 90 hz
-        if (format == "opus" && rate < 100)
-            throw std::runtime_error("cant encode this");
         std::string out;
         {
             nb::gil_scoped_release g;

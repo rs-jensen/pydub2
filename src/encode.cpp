@@ -276,8 +276,12 @@ std::string encode(const Audio &a, const std::string &format, int bitrate) {
         return flac(a);
     if (format == "ogg")
         return ogg(a, bitrate);
-    if (format == "opus")
+    if (format == "opus") {
+        // libopusenc corrupts the heap when it resamples up from below about 90 hz
+        if (a.rate < 100)
+            throw std::runtime_error("cant encode this");
         return opus(a, bitrate);
+    }
     throw std::invalid_argument("cant write this format");
 }
 

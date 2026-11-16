@@ -136,6 +136,8 @@ def test_flac_8_bit_roundtrip(channels):
 @pytest.mark.parametrize("secs", [0, 0.5, 1 / 8000])
 def test_wav_24_bit_like_wave_module(channels, secs):
     data = pcm24(3, channels, secs, 8000)
+    if len(data) % 2 and sys.version_info < (3, 15):
+        pytest.skip("wave only pads odd data from 3.15")
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
         w.setnchannels(channels)
@@ -263,3 +265,8 @@ def test_opus_header_and_tags():
 def test_vorbis_last_granule_is_the_input_length(frames):
     out = _pydub2.encode(sine(44100, 1, 2, 1)[:frames * 2], 44100, 1, 2, "ogg")
     assert int.from_bytes(out[out.rfind(b"OggS") + 6:][:8], "little") == frames
+
+
+def test_opus_refuses_tiny_rates():
+    with pytest.raises(RuntimeError):
+        _pydub2.encode(b"\0" * 400, 50, 1, 2, "opus")
