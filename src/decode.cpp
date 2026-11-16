@@ -244,11 +244,15 @@ struct Flac : Dec {
         frames = f->totalPCMFrameCount;
     }
 
+    uint64_t first() {
+        drflac_frame_header &h = f->currentFLACFrame.header;
+        return h.pcmFrameNumber ? h.pcmFrameNumber : (uint64_t)h.flacFrameNumber * f->maxBlockSizeInPCMFrames;
+    }
+
     size_t pull(size_t n, char *out) {
         size_t k = width == 2 ? drflac_read_pcm_frames_s16(f, n, (int16_t *)out) : drflac_read_pcm_frames_s32(f, n, (int32_t *)out);
-        drflac_frame_header &h = f->currentFLACFrame.header;
         if (k) {
-            pos = (h.pcmFrameNumber ? h.pcmFrameNumber : (uint64_t)h.flacFrameNumber * f->maxBlockSizeInPCMFrames) + h.blockSizeInPCMFrames - f->currentFLACFrame.pcmFramesRemaining;
+            pos = first() + f->currentFLACFrame.header.blockSizeInPCMFrames - f->currentFLACFrame.pcmFramesRemaining;
         }
         return k;
     }
@@ -269,17 +273,18 @@ struct Flac : Dec {
                 done += k;
             } else if (f->currentFLACFrame.pcmFramesRemaining) {
                 done += pull(std::min<size_t>(n - done, f->currentFLACFrame.pcmFramesRemaining), out + done * w);
-            } else if (bad < 64 && !(f->totalPCMFrameCount && f->currentPCMFrame >= f->totalPCMFrameCount)) {
-                uint64_t was = pos;
+            } else if (bad < 64) {
+                uint64_t was = pos, blk = f->currentFLACFrame.header.blockSizeInPCMFrames;
                 if (!pull(1, one)) {
                     bad++;
                     lost = true;
                     continue;
                 }
                 bad = 0;
-                drflac_frame_header &h = f->currentFLACFrame.header;
-                uint64_t first = h.pcmFrameNumber ? h.pcmFrameNumber : (uint64_t)h.flacFrameNumber * f->maxBlockSizeInPCMFrames;
-                owed = !lost && was != UINT64_MAX && first > was && first - was <= 8ull * f->maxBlockSizeInPCMFrames ? first - was : 0;
+                // frame numbers count in max block size only when the frames before had that size
+                bool counted = f->currentFLACFrame.header.pcmFrameNumber || blk == f->maxBlockSizeInPCMFrames;
+                uint64_t gap = first() - was;
+                owed = !lost && counted && was != UINT64_MAX && first() > was && gap <= 8ull * f->maxBlockSizeInPCMFrames ? gap : 0;
                 lost = false;
                 held = true;
             } else {
@@ -323,8 +328,7 @@ static uint64_t mp3_id3(Input &in) {
     return at;
 }
 
-// ffmpeg drops the Info frame and takes the lame delay, padding and frame count from it, but only when it sits
-// right after the tags. returns where the audio starts
+// ffmpeg drops the Info frame and takes the lame delay from it only right after the tags, returns where audio starts
 static uint64_t mp3_tag(Input &in, uint64_t at, size_t &skip, size_t &cut, uint64_t &count) {
     std::vector<uint8_t> buf(4096);
     if (!seek_to(&in, at)) {
@@ -441,13 +445,16 @@ static int mp3_fix(uint8_t *o, size_t n, int have) {
 }
 
 // the start of a container that can hold mp3 frames in its payload
-static bool mp3_container(const uint8_t *h) {
-    for (const char *m : {"RIFF", "RF64", "FORM", "caff", "OggS", "fLaC", "wvpk", "MAC ", "FLV\1", ".snd", "\x1a\x45\xdf\xa3", "\x30\x26\xb2\x75"}) {
+static bool mp3_container(const uint8_t *h, uint64_t len) {
+    if (len >= 262 && !memcmp(h + 257, "ustar", 5)) {
+        return true;
+    }
+    for (const char *m : {"RIFF", "RF64", "FORM", "caff", "OggS", "fLaC", "wvpk", "MAC ", "FLV\1", ".snd", "\x1a\x45\xdf\xa3", "\x30\x26\xb2\x75", "\0\0\1\xba", "PK\3\4", "%PDF"}) {
         if (!memcmp(h, m, 4)) {
             return true;
         }
     }
-    for (const char *m : {"ftyp", "moov", "mdat", "free", "wide", "skip"}) {
+    for (const char *m : {"ftyp", "moov", "mdat", "free", "wide", "skip", "styp", "moof", "sidx"}) {
         if (!memcmp(h + 4, m, 4)) {
             return true;
         }
@@ -491,7 +498,7 @@ struct Mp3 : Dec {
         };
         const uint8_t *h0 = at + 4 <= len ? load(at) : NULL;
         bool sync = h0 && h0[0] == 0xff && (h0[1] & 0xe0) == 0xe0, valid = h0 && mp3_head(h0);
-        if (!at && !sync && (len < 8 || mp3_container(h0))) {
+        if (!at && !sync && (len < 8 || mp3_container(h0, len))) {
             fail();
         }
         auto chain = [&](uint64_t q, int n) {
@@ -509,8 +516,7 @@ struct Mp3 : Dec {
             }
             return true;
         };
-        // like ffmpegs demuxer: start where two headers in a row match, give up at the end of the file or after 64k,
-        // then its parser starts at the beginning
+        // like ffmpegs demuxer: first place with two headers in a row, after 64k its parser starts at the beginning
         auto find = [&](uint64_t from) {
             for (uint64_t i = 0; i < 65536; i++) {
                 if (from + i + 4 > len) {
@@ -524,8 +530,7 @@ struct Mp3 : Dec {
             return from;
         };
         uint64_t first = find(at);
-        // a file that starts with junk needs four frames, so that other formats dont get here by chance
-        // shortcut: it looks 1 MiB in, junk past that goes to ffmpeg
+        // a file that starts with junk needs four frames in a row, only in the first 1 MiB, junk past that goes to ffmpeg
         for (uint64_t i = 0; !at && !sync && !chain(i, 4); i++) {
             if (i >= (1 << 20)) {
                 fail();
@@ -538,6 +543,7 @@ struct Mp3 : Dec {
         // like its parser: the 4 byte window starts empty after a frame, junk other than zeros drops the next frame
         uint64_t t = 0, e = count * drmp3_hdr_frame_samples(load(first)), drop = 0;
         bool none = true, after = false;
+        int gaps = 0;
         cut = e < cut ? 0 : cut;
         for (uint64_t p = first; p < len;) {
             uint64_t h = p;
@@ -548,6 +554,7 @@ struct Mp3 : Dec {
             if (h + 4 > len) {
                 break;
             }
+            gaps += h != p && !none;
             uint8_t f[4096];
             size_t n = mp3_size(load(h)), got = (size_t)std::min<uint64_t>(n, len - h);
             memcpy(f, load(h), got);
@@ -574,7 +581,8 @@ struct Mp3 : Dec {
             t += dur;
             p = h + n;
         }
-        if (none || (head[1] & 6) != 2) {
+        // a junk start with frames cut up again and again is another container, ts for one
+        if (none || (head[1] & 6) != 2 || (!at && !sync && gaps > 2)) {
             fail();
         }
         rate = (int)drmp3_hdr_sample_rate_hz(head);

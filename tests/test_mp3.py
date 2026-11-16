@@ -80,7 +80,7 @@ def test_same_as_ffmpeg(name, make, kw):
 
 @has_mp3
 @has_ff
-def test_real_file_same_as_ffmpeg():
+def test_five_seconds_same_as_ffmpeg():
     seg = chirp(secs=5.0)
     _, a = decode(oracle(seg).export(format="mp3", bitrate="192k").read())
     _, b = decode(seg.export(format="mp3", bitrate="192k").read())

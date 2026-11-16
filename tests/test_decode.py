@@ -364,11 +364,55 @@ def test_mp3_id3_that_is_not_one(tmp_path):
     same_as_ffmpeg(tmp_path, "high.mp3", m[:6] + b"\x80" + m[7:])
 
 
-def test_mp3_junk_is_not_left_to_other_formats(tmp_path):
+def test_other_formats_are_not_taken_for_mp3(tmp_path):
     m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k"), "rb").read()
     for data in (bytes(5000), os.urandom(20000), b"\0\0\0\x1cftypM4A " + bytes(3000), b"\0\0\0\x1cftypisom" + m):
         with pytest.raises(RuntimeError):
             _pydub2.decode(data)
+
+
+def test_mp3_inside_a_container_goes_to_ffmpeg(tmp_path):
+    import tarfile
+    import zipfile
+    pydub2_seg = pydub2.AudioSegment
+    mp3 = make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k", samples=CLICKS)
+    for fmt, ext in [("mpegts", "ts"), ("mpeg", "mpg"), ("vob", "vob"), ("avi", "avi"), ("flv", "flv"), ("matroska", "mkv"),
+                     ("mp4", "mp4")]:
+        path = str(tmp_path / ("a." + ext))
+        if subprocess.run([ff, "-v", "error", "-y", "-i", mp3, "-c:a", "copy", "-f", fmt, path]).returncode:
+            continue
+        with pytest.raises(RuntimeError):
+            _pydub2.decode(open(path, "rb").read())
+        assert pydub2_seg.from_file(path).raw_data == AudioSegment.from_file(path).raw_data
+    path = str(tmp_path / "frag.mp4")
+    subprocess.run([ff, "-v", "error", "-y", "-i", mp3, "-c:a", "copy", "-movflags", "frag_keyframe+empty_moov", path], check=True)
+    d = open(path, "rb").read()
+    segment = d[d.index(b"moof") - 4:]
+    with pytest.raises(RuntimeError):
+        _pydub2.decode(segment)
+    with zipfile.ZipFile(tmp_path / "a.zip", "w") as z:
+        z.write(mp3, "a.mp3")
+    with tarfile.open(tmp_path / "a.tar", "w") as t:
+        t.add(mp3, "a.mp3")
+    for name in ("a.zip", "a.tar"):
+        with pytest.raises(RuntimeError):
+            _pydub2.decode(open(tmp_path / name, "rb").read())
+
+
+def patch_streaminfo(m, at, value, size):
+    return m[:8 + at] + value.to_bytes(size, "big") + m[8 + at + size:]
+
+
+# a header that understates the length, or a max block size bigger than the frames, does not change what ffmpeg reads
+def test_flac_header_that_lies(tmp_path):
+    m = open(make(tmp_path, "a.flac", 2, "-c:a", "flac", samples=CLICKS), "rb").read()
+    total = (m[21] & 15) << 32 | int.from_bytes(m[22:26], "big")
+    assert total == len(CLICKS)
+    short = m[:21] + bytes([m[21] & 0xf0]) + (total // 2).to_bytes(4, "big") + m[26:]
+    same_as_ffmpeg(tmp_path, "short.flac", short)
+    assert len(_pydub2.decode(short)[0]) == len(_pydub2.decode(m)[0])
+    same_as_ffmpeg(tmp_path, "block.flac", patch_streaminfo(m, 2, 8192, 2))
+    assert len(_pydub2.decode(patch_streaminfo(m, 2, 8192, 2))[0]) == len(_pydub2.decode(m)[0])
 
 
 def crc8(d):
@@ -388,8 +432,7 @@ def flac_frames(m):
     return out
 
 
-# ffmpeg keeps the samples of a frame with a bad crc and drops one it cannot decode, so the length is the same as
-# with the whole file or one frame less. here the damaged frame is silence and nothing after it is lost
+# a bad crc frame is silence here and ffmpeg keeps its samples, the length is the same and nothing after it is lost
 def test_flac_damaged_keeps_the_length(tmp_path):
     m = open(make(tmp_path, "a.flac", 2, "-c:a", "flac", samples=CLICKS), "rb").read()
     starts = flac_frames(m) + [len(m)]
