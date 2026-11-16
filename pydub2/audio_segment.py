@@ -203,6 +203,35 @@ def _pydub_wav(head):
         return False
 
 
+def _own_wav(head, flen, read_at):
+    # pydub reads the first data chunk at its stated size and keeps the bytes of a cut last frame, the decoder reads
+    # like ffmpeg: a size of 0 to the end and a later data chunk instead. gives where to cut the file, or None, and
+    # the stray bytes the way pydub turns them into samples
+    h = extract_wav_headers(head)
+    fmt = [x for x in h if x.id == b"fmt "][0]
+    align, bits = struct.unpack_from("<HH", head, fmt.position + 20)
+    pos, size = h[-1].position + 8, h[-1].size
+    if size == 0xffffffff or head[:4] == b"RF64":
+        return None, b""
+    n = max(0, min(size, flen - pos))
+    cut = pos if size == 0 else None
+    at = pos + size + size % 2
+    # a thousand chunks at most, past that it is junk
+    for _ in range(1000):
+        if cut is not None or at + 8 > flen:
+            break
+        c = read_at(at, 8)
+        if c[:4] == b"data":
+            cut = pos + n
+        at += 8 + struct.unpack("<I", c[4:])[0] + c[4] % 2
+    stray = read_at(pos + n - n % align, n % align) if align and n % align and bits in (8, 16, 24, 32) else b""
+    if bits == 8:
+        stray = bytes(b ^ 128 for b in stray)
+    if bits == 24:
+        stray = b"".join((b"\xff" if stray[i + 2] > 127 else b"\0") + stray[i:i + 3] for i in range(0, len(stray) - 2, 3))
+    return cut, stray
+
+
 def _ffmpeg_frames(x, rate):
     # ffmpeg reads str(x) to the microsecond and rounds to the nearest frame
     i, _, f = str(x).partition(".")
@@ -690,7 +719,18 @@ class AudioSegment(object):
             tried = True
             try:
                 d = _pydub2.Decoder(filename if data is None else data)
-                span = _span(d, own, start_second, duration)
+                stray = b""
+                if own:
+                    def read_at(at, n):
+                        if data is not None:
+                            return data[at:at + n]
+                        with open(filename, "rb") as f:
+                            f.seek(at)
+                            return f.read(n)
+                    cut_at, stray = _own_wav(head, len(data) if data is not None else os.path.getsize(filename), read_at)
+                    if cut_at is not None:
+                        d = _pydub2.Decoder(read_at(0, cut_at))
+                span = None if stray else _span(d, own, start_second, duration)
                 if span:
                     start, n, final = span
                     if start:
@@ -698,8 +738,10 @@ class AudioSegment(object):
                     pcm = _read(d, n)
                     fw = d.channels * d.width
                     return cls._segment(d, _fit(pcm, len(pcm) // fw, final(len(pcm) // fw), fw, d.rate))
-                obj = cls._segment(d, _read(d, -1))
-                if start_second is not None and duration is None:
+                obj = cls._segment(d, _read(d, -1) + stray)
+                if start_second is None and duration is None:
+                    return obj
+                elif start_second is not None and duration is None:
                     return obj[start_second*1000:]
                 elif start_second is None and duration is not None:
                     return obj[:duration*1000]

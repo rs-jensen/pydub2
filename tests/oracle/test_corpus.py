@@ -16,6 +16,18 @@ LOSSY = {"mp3", "mp2", "mp1", "vorbis", "opus", "aac", "ac3", "eac3", "wmav1", "
 # 16 bit units, more than this is a shift or a different decode, not rounding
 TOL = 328
 MODES = ["path", "format", "fileobj", "bytesio", "bytesio_format", "start", "slice"]
+# known differences by file name, see docs/differences.md
+WRONG_IN_PYDUB = "pydub reads this file wrongly"
+DECODER = "a different decoder"
+EXPECTED = {
+    "pcm_alaw_44100_6ch_1s.wav": WRONG_IN_PYDUB, "pcm_mulaw_44100_6ch_1s.wav": WRONG_IN_PYDUB,
+    "pcm_f32le_44100_6ch_1s.wav": WRONG_IN_PYDUB, "pcm_f64le_44100_6ch_1s.wav": WRONG_IN_PYDUB,
+    "ext_float.wav": WRONG_IN_PYDUB, "ext_24_in_32.wav": WRONG_IN_PYDUB, "bits_12_in_16.wav": WRONG_IN_PYDUB,
+    "s24_192000_6ch_1s.flac": WRONG_IN_PYDUB, "s24_192000_8ch_1s.flac": WRONG_IN_PYDUB,
+    "b6k_48000_2ch.opus": DECODER, "b16k_48000_2ch.opus": DECODER, "b32k_48000_2ch.opus": DECODER,
+    "Boot_to_the_Head.MP3": DECODER, "Ed_Rush_-_Sabotage.mp3": DECODER, "scooter-wicked-02-imraving.mp3": DECODER,
+    "he_mode.mp3": DECODER, "mp3_with_embedded_albumart.mp3": DECODER,
+}
 
 
 def codec(name):
@@ -47,7 +59,7 @@ def load(lib, name, mode):
 
 
 def samples(seg):
-    dt = {1: np.int8, 2: np.int16, 4: np.int32}[seg.sample_width]
+    dt = {1: np.int8, 2: np.int16, 4: np.int32, 8: np.int64}[seg.sample_width]
     raw = seg.raw_data
     # pydub keeps a stray odd byte from a broken wav
     return np.frombuffer(raw[:len(raw) - len(raw) % seg.sample_width], dtype=dt).astype(np.int64)
@@ -56,6 +68,15 @@ def samples(seg):
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("name", files, ids=[os.path.relpath(f, root) for f in files] if root else None)
 def test_corpus(name, mode, record_property):
+    try:
+        compare(name, mode, record_property)
+    except AssertionError:
+        if os.path.basename(name) in EXPECTED:
+            pytest.xfail(EXPECTED[os.path.basename(name)])
+        raise
+
+
+def compare(name, mode, record_property):
     try:
         want = load(pydub, name, mode)
     except Exception as e:
