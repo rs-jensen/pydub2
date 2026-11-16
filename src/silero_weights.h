@@ -1,4 +1,4 @@
-// silero vad v5, 16 khz weights. MIT, github.com/snakers4/silero-vad
+// silero vad v6.2, 16 khz weights. MIT, github.com/snakers4/silero-vad
 // made by tools/silero_weights.py, dont edit
 static const float enc0_w[49536] = {
 .021603532,.019914228,-.01843618,.007987231,.025452128,.037603106,-.033180464,-.046757504,.009115425,-6.353663e-4,
