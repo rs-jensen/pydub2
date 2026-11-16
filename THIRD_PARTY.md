@@ -32,7 +32,7 @@ The Silero weights in `src/silero_weights.h` come from `src/silero_vad/data/sile
 github.com/snakers4/silero-vad at tag v6.2 (first shipped in the PyPI wheel silero-vad 6.2.0),
 sha256 `1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3`. Running
 `tools/silero_weights.py` on that file gives the header in the repo byte for byte. The license at
-that tag is MIT, Copyright (c) 2020-present Silero Team. The comment in the header says v5, which is old.
+that tag is MIT, Copyright (c) 2020-present Silero Team.
 
 Two vendored files have a small change each, so that opening many files from several threads does not write
 shared tables at the same time (ThreadSanitizer flagged both). `src/third_party/stb_vorbis.c`: `crc32_init` is

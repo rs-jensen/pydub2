@@ -41,7 +41,7 @@ for n in then.node:
     if n.op_type == "Constant":
         tensors[n.output[0].split("__")[-1]] = numpy_helper.to_array(n.attribute[0].t)
 
-out = ["// silero vad v5, 16 khz weights. MIT, github.com/snakers4/silero-vad",
+out = ["// silero vad v6.2, 16 khz weights. MIT, github.com/snakers4/silero-vad",
        "// made by tools/silero_weights.py, dont edit"]
 for name, key in names:
     t = tensors[key].astype(np.float32).ravel()
