@@ -365,7 +365,8 @@ def test_mp3_id3_that_is_not_one(tmp_path):
 
 
 def test_mp3_junk_is_not_left_to_other_formats(tmp_path):
-    for data in (bytes(5000), os.urandom(20000), b"\0\0\0\x1cftypM4A " + bytes(3000)):
+    m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k"), "rb").read()
+    for data in (bytes(5000), os.urandom(20000), b"\0\0\0\x1cftypM4A " + bytes(3000), b"\0\0\0\x1cftypisom" + m):
         with pytest.raises(RuntimeError):
             _pydub2.decode(data)
 

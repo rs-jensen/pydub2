@@ -440,6 +440,21 @@ static int mp3_fix(uint8_t *o, size_t n, int have) {
     return (int)z;
 }
 
+// the start of a container that can hold mp3 frames in its payload
+static bool mp3_container(const uint8_t *h) {
+    for (const char *m : {"RIFF", "RF64", "FORM", "caff", "OggS", "fLaC", "wvpk", "MAC ", "FLV\1", ".snd", "\x1a\x45\xdf\xa3", "\x30\x26\xb2\x75"}) {
+        if (!memcmp(h, m, 4)) {
+            return true;
+        }
+    }
+    for (const char *m : {"ftyp", "moov", "mdat", "free", "wide", "skip"}) {
+        if (!memcmp(h + 4, m, 4)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 struct Mp3 : Dec {
     // a frame that gets to ffmpegs decoder. it drops a bad one, but the end of that goes in the bit reservoir
     struct Frame {
@@ -476,6 +491,9 @@ struct Mp3 : Dec {
         };
         const uint8_t *h0 = at + 4 <= len ? load(at) : NULL;
         bool sync = h0 && h0[0] == 0xff && (h0[1] & 0xe0) == 0xe0, valid = h0 && mp3_head(h0);
+        if (!at && !sync && (len < 8 || mp3_container(h0))) {
+            fail();
+        }
         auto chain = [&](uint64_t q, int n) {
             uint32_t a = 0;
             for (int k = 0; k < n; k++) {
