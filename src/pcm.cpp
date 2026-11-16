@@ -10,7 +10,7 @@ namespace pydub2 {
 static const int maxvals[] = {0, 0x7F, 0x7FFF, 0x7FFFFF, 0x7FFFFFFF};
 static const int minvals[] = {0, -0x80, -0x8000, -0x800000, INT32_MIN};
 
-static void check(const std::string &data, int width, int frame = 1) {
+static void check(std::string_view data, int width, int frame = 1) {
     if (width < 1 || width > 4) throw std::invalid_argument("bad width");
     if (frame > 65535) throw std::invalid_argument("too many channels");
     if (data.size() % ((size_t)width * frame)) throw std::invalid_argument("not a whole number of samples");
@@ -56,7 +56,7 @@ static int scale(double val, int width) {
     return (int)floor(fbound(val, minvals[width], maxvals[width]));
 }
 
-long long rms(const std::string &data, int width) {
+long long rms(std::string_view data, int width) {
     check(data, width);
     double sum = 0;
     for (size_t i = 0; i < data.size(); i += width) {
@@ -67,7 +67,7 @@ long long rms(const std::string &data, int width) {
     return (unsigned int)sqrt(sum / (double)(data.size() / width));
 }
 
-long long max(const std::string &data, int width) {
+long long max(std::string_view data, int width) {
     check(data, width);
     unsigned int m = 0;
     for (size_t i = 0; i < data.size(); i += width) {
@@ -78,66 +78,60 @@ long long max(const std::string &data, int width) {
     return m;
 }
 
-std::string mul(const std::string &data, int width, double factor) {
+void mul(std::string_view data, int width, double factor, const Alloc &alloc) {
     check(data, width);
-    std::string out(data.size(), 0);
+    char *out = alloc(data.size());
     for (size_t i = 0; i < data.size(); i += width) {
-        put(&out[i], width, scale(get(&data[i], width) * factor, width));
+        put(out + i, width, scale(get(&data[i], width) * factor, width));
     }
-    return out;
 }
 
-std::string add(const std::string &a, const std::string &b, int width) {
+void add(std::string_view a, std::string_view b, int width, const Alloc &alloc) {
     check(a, width);
     if (a.size() != b.size()) throw std::invalid_argument("lengths should be the same");
-    std::string out(a.size(), 0);
+    char *out = alloc(a.size());
     for (size_t i = 0; i < a.size(); i += width) {
-        put(&out[i], width, scale((double)get(&a[i], width) + (double)get(&b[i], width), width));
+        put(out + i, width, scale((double)get(&a[i], width) + (double)get(&b[i], width), width));
     }
-    return out;
 }
 
-std::string lin2lin(const std::string &data, int width, int new_width) {
+void lin2lin(std::string_view data, int width, int new_width, const Alloc &alloc) {
     check(data, width);
     check("", new_width);
-    std::string out(data.size() / width * new_width, 0);
+    char *out = alloc(data.size() / width * new_width);
     for (size_t i = 0, j = 0; i < data.size(); i += width, j += new_width) {
-        put32(&out[j], new_width, get32(&data[i], width));
+        put32(out + j, new_width, get32(&data[i], width));
     }
-    return out;
 }
 
-std::string tomono(const std::string &data, int width, double lfac, double rfac) {
+void tomono(std::string_view data, int width, double lfac, double rfac, const Alloc &alloc) {
     check(data, width, 2);
-    std::string out(data.size() / 2, 0);
+    char *out = alloc(data.size() / 2);
     for (size_t i = 0; i < data.size(); i += width * 2) {
         double val = (double)get(&data[i], width) * lfac + (double)get(&data[i + width], width) * rfac;
-        put(&out[i / 2], width, scale(val, width));
+        put(out + i / 2, width, scale(val, width));
     }
-    return out;
 }
 
-std::string tostereo(const std::string &data, int width, double lfac, double rfac) {
+void tostereo(std::string_view data, int width, double lfac, double rfac, const Alloc &alloc) {
     check(data, width);
-    std::string out(data.size() * 2, 0);
+    char *out = alloc(data.size() * 2);
     for (size_t i = 0; i < data.size(); i += width) {
         double val = get(&data[i], width);
-        put(&out[i * 2], width, scale(val * lfac, width));
-        put(&out[i * 2 + width], width, scale(val * rfac, width));
+        put(out + i * 2, width, scale(val * lfac, width));
+        put(out + i * 2 + width, width, scale(val * rfac, width));
     }
-    return out;
 }
 
-std::string reverse(const std::string &data, int width) {
+void reverse(std::string_view data, int width, const Alloc &alloc) {
     check(data, width);
-    std::string out(data.size(), 0);
+    char *out = alloc(data.size());
     for (size_t i = 0; i < data.size(); i += width) {
-        memcpy(&out[data.size() - width - i], &data[i], width);
+        memcpy(out + data.size() - width - i, &data[i], width);
     }
-    return out;
 }
 
-int avg(const std::string &data, int width) {
+int avg(std::string_view data, int width) {
     check(data, width);
     if (data.empty()) return 0;
     double sum = 0;
@@ -145,16 +139,15 @@ int avg(const std::string &data, int width) {
     return (int)floor(sum / (double)(data.size() / width));
 }
 
-std::string bias(const std::string &data, int width, int bias) {
+void bias(std::string_view data, int width, int bias, const Alloc &alloc) {
     check(data, width);
-    std::string out(data.size(), 0);
+    char *out = alloc(data.size());
     for (size_t i = 0; i < data.size(); i += width) {
-        put(&out[i], width, (int)((uint32_t)get(&data[i], width) + (uint32_t)bias));
+        put(out + i, width, (int)((uint32_t)get(&data[i], width) + (uint32_t)bias));
     }
-    return out;
 }
 
-std::string ratecv(const std::string &data, int width, int channels, int inrate, int outrate) {
+void ratecv(std::string_view data, int width, int channels, int inrate, int outrate, const Alloc &alloc) {
     if (channels < 1) throw std::invalid_argument("channels should be >= 1");
     check(data, width, channels);
     if (inrate <= 0 || outrate <= 0) throw std::invalid_argument("sampling rate not > 0");
@@ -168,7 +161,10 @@ std::string ratecv(const std::string &data, int width, int channels, int inrate,
     int d = -outrate;
     for (;;) {
         while (d < 0) {
-            if (len == 0) return out;
+            if (len == 0) {
+                memcpy(alloc(out.size()), out.data(), out.size());
+                return;
+            }
             for (int c = 0; c < channels; c++) {
                 prev[c] = cur[c];
                 cur[c] = get32(p, width);
