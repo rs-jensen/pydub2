@@ -4,6 +4,7 @@
 #include <cstring>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #define DR_WAV_IMPLEMENTATION
@@ -45,28 +46,39 @@ static void put(char *out, const float *f, size_t n, int width) {
     }
 }
 
-// a file or a piece of memory. base hides bytes at the start from the decoder
+// a file or a piece of memory. base hides bytes at the start from the decoder, tail goes after the end
+// and fix replaces the bytes at fix_at
 struct Input {
     FILE *f = NULL;
     const uint8_t *buf = NULL;
-    uint64_t len = 0, pos = 0, base = 0;
+    uint64_t len = 0, pos = 0, base = 0, fix_at = 0;
+    std::string tail, fix;
 };
 
 static size_t in_read(void *u, void *out, size_t n) {
     Input *in = (Input *)u;
-    n = (size_t)std::min<uint64_t>(n, in->len - in->pos);
+    n = (size_t)std::min<uint64_t>(n, in->len + in->tail.size() - in->pos);
+    size_t k = (size_t)std::min<uint64_t>(n, in->len - std::min(in->len, in->pos));
     if (in->f) {
-        n = fread(out, 1, n, in->f);
-    } else if (n) {
-        memcpy(out, in->buf + in->pos, n);
+        k = fread(out, 1, k, in->f);
+        n = k < n && in->pos + k < in->len ? k : n;
+    } else if (k) {
+        memcpy(out, in->buf + in->pos, k);
+    }
+    if (n > k) {
+        memcpy((char *)out + k, &in->tail[in->pos + k - in->len], n - k);
+    }
+    uint64_t a = std::max(in->pos, in->fix_at), b = std::min(in->pos + n, in->fix_at + in->fix.size());
+    if (a < b) {
+        memcpy((char *)out + (a - in->pos), &in->fix[a - in->fix_at], b - a);
     }
     in->pos += n;
     return n;
 }
 
 static bool in_seek(Input *in, int64_t off, int origin) {
-    int64_t at = off + (origin == SEEK_SET ? (int64_t)in->base : origin == SEEK_CUR ? (int64_t)in->pos : (int64_t)in->len);
-    if (at < (int64_t)in->base || at > (int64_t)in->len || (in->f && fseeko(in->f, at, SEEK_SET))) {
+    int64_t at = off + (origin == SEEK_SET ? (int64_t)in->base : origin == SEEK_CUR ? (int64_t)in->pos : (int64_t)(in->len + in->tail.size()));
+    if (at < (int64_t)in->base || at > (int64_t)(in->len + in->tail.size()) || (in->f && fseeko(in->f, std::min<int64_t>(at, in->len), SEEK_SET))) {
         return false;
     }
     in->pos = at;
@@ -210,9 +222,23 @@ struct Flac : Dec {
     }
 };
 
+// where the audio ends, before an APE tag and an ID3v1 tag. dr_mp3 reads the APE size from the wrong place
+static uint64_t mp3_strip(Input &in) {
+    uint64_t end = in.len;
+    uint8_t t[32];
+    if (end >= 128 && in_seek(&in, end - 128, SEEK_SET) && in_read(&in, t, 3) == 3 && !memcmp(t, "TAG", 3)) {
+        end -= 128;
+    }
+    if (end >= 32 && in_seek(&in, end - 32, SEEK_SET) && in_read(&in, t, 32) == 32 && !memcmp(t, "APETAGEX", 8)) {
+        uint64_t n = (t[12] | t[13] << 8 | t[14] << 16 | (uint64_t)t[15] << 24) + (t[23] & 128 ? 32 : 0);
+        end -= std::min(n, end);
+    }
+    return end;
+}
+
 // dr_mp3 gives up on a short Info frame, so find it here. ffmpeg drops the frame and the lame delay and padding
 // count is the number of frames the tag says the file has
-static uint64_t mp3_tag(Input &in, size_t &skip, size_t &cut, uint64_t &count) {
+static uint64_t mp3_tag(Input &in, uint64_t full, size_t &skip, size_t &cut, uint64_t &count) {
     uint8_t h[10];
     uint64_t at = 0;
     while (in_seek(&in, at, SEEK_SET) && in_read(&in, h, 10) == 10 && !memcmp(h, "ID3", 3)) {
@@ -249,14 +275,23 @@ static uint64_t mp3_tag(Input &in, size_t &skip, size_t &cut, uint64_t &count) {
     }
     int flags = f[o + 7];
     o += 8;
-    if ((flags & 1) && o + 4 <= fi.frame_bytes) {
-        count = (uint32_t)f[o] << 24 | f[o + 1] << 16 | f[o + 2] << 8 | f[o + 3];
-    }
+    auto be32 = [&](int q) { return q + 4 <= fi.frame_bytes ? (uint32_t)f[q] << 24 | f[q + 1] << 16 | f[q + 2] << 8 | f[q + 3] : 0; };
+    uint64_t size = 0;
     const int sizes[] = {4, 4, 100, 4};
     for (int i = 0; i < 4; i++) {
         if (flags >> i & 1) {
+            if (i == 0) {
+                count = be32(o);
+            } else if (i == 1) {
+                size = be32(o);
+            }
             o += sizes[i];
         }
+    }
+    // a file much bigger than the tag says counts as files glued together, ffmpeg then forgets the frame count
+    uint64_t have = full - at - junk;
+    if (size && have > size && have - size > size >> 4) {
+        count = 0;
     }
     if (!junk && o + 24 <= fi.frame_bytes && (!memcmp(f + o, "LAME", 4) || !memcmp(f + o, "Lavf", 4) || !memcmp(f + o, "Lavc", 4))) {
         skip = (f[o + 21] << 4 | f[o + 22] >> 4) + 528 + 1;
@@ -264,6 +299,141 @@ static uint64_t mp3_tag(Input &in, size_t &skip, size_t &cut, uint64_t &count) {
         cut = pad > 529 ? pad - 529 : 0;
     }
     return at + junk + fi.frame_bytes;
+}
+
+// minimp3 drops a frame whose bit reservoir is not all there, ffmpeg zeroes the granules that start in the missing
+// part and decodes the rest. so make main_data_begin what minimp3 has and those granules silent and shorter by the
+// missing bits, then the rest starts on the same bit. no scalefactors either, ffmpeg keeps zeros for a later
+// granule to reuse. false if the frame has no missing bits
+static bool mp3_fix(uint8_t *o, int have) {
+    auto get = [&](size_t p, int n) {
+        int v = 0;
+        for (; n--; p++) {
+            v = v << 1 | (o[p / 8] >> (7 - p % 8) & 1);
+        }
+        return v;
+    };
+    auto set = [&](size_t p, int n, int v) {
+        for (; n--; p++) {
+            o[p / 8] = (o[p / 8] & ~(128 >> p % 8)) | (v >> n & 1) << (7 - p % 8);
+        }
+    };
+    bool v1 = o[1] & 8;
+    int nch = (o[3] >> 6) == 3 ? 1 : 2, ng = v1 ? 2 : 1, step = v1 ? 59 : 63;
+    size_t p = (4 + (o[1] & 1 ? 0 : 2)) * 8;
+    int mdb = get(p, v1 ? 9 : 8), acc = have * 8, z = 0;
+    if (mdb <= have) {
+        return false;
+    }
+    size_t gr = p + (v1 ? 9 + (nch == 1 ? 5 : 3) + 4 * nch : 8 + nch);
+    for (; z < ng && acc >> 3 < mdb; z++) {
+        for (int c = 0; c < nch; c++) {
+            acc += get(gr + (z * nch + c) * step, 12);
+        }
+    }
+    int rem = (mdb - have) * 8;
+    for (int i = 0; i < z * nch; i++) {
+        size_t q = gr + i * step;
+        int n = get(q, 12), d = std::min(n, rem);
+        rem -= d;
+        set(q, 12, n - d);
+        set(q + 12, 9, 0);
+        set(q + 21, 8, 0);
+        set(q + 29, v1 ? 4 : 9, 0);
+    }
+    set(p, v1 ? 9 : 8, have);
+    return true;
+}
+
+// minimp3 drops the last frame when a tag or junk follows it or when it is cut short, ffmpeg decodes it.
+// so end the input right after that frame
+static void mp3_end(Input &in) {
+    std::vector<uint8_t> buf(1 << 16);
+    drmp3dec dec;
+    drmp3dec_init(&dec);
+    drmp3dec_frame_info fi;
+    size_t have = 0, at = 0;
+    uint64_t off = in.base, last = 0;
+    uint8_t hd[4], h[4];
+    int free = 0;
+    bool start = true;
+    drmp3dec keep;
+    in_seek(&in, 0, SEEK_SET);
+    for (;;) {
+        if (have - at < 16384) {
+            memmove(buf.data(), buf.data() + at, have - at);
+            off += at;
+            have -= at;
+            at = 0;
+            have += in_read(&in, buf.data() + have, buf.size() - have);
+        }
+        if (at == have) {
+            break;
+        }
+        if (start) {
+            keep = dec;
+        }
+        int k = drmp3dec_decode_frame(&dec, buf.data() + at, (int)(have - at), NULL, &fi);
+        if (!fi.frame_bytes) {
+            break;
+        }
+        if (start && fi.layer == 3) {
+            // only from the start, after junk ffmpeg still has the old reservoir and minimp3 has none
+            int n = drmp3_hdr_frame_bytes(dec.header, dec.free_format_bytes) + drmp3_hdr_padding(dec.header);
+            uint8_t *fr = buf.data() + at + fi.frame_bytes - n;
+            start = !k && n <= fi.frame_bytes && (in.fix.empty() || fi.frame_bytes == n) && mp3_fix(fr, in.fix.empty() ? 0 : keep.reserv);
+            if (start) {
+                if (in.fix.empty()) {
+                    in.fix_at = off + at + fi.frame_bytes - n;
+                }
+                in.fix.append((char *)fr, n);
+                dec = keep;
+                k = drmp3dec_decode_frame(&dec, buf.data() + at, (int)(have - at), NULL, &fi);
+            }
+        }
+        at += fi.frame_bytes;
+        if (k) {
+            last = off + at;
+            memcpy(hd, dec.header, 4);
+            free = dec.free_format_bytes;
+        }
+    }
+    if (!last || !in_seek(&in, last - in.base, SEEK_SET) || in_read(&in, h, 4) < 4 || !drmp3_hdr_compare(hd, h)) {
+        return;
+    }
+    uint64_t end = last + drmp3_hdr_frame_bytes(h, free) + drmp3_hdr_padding(h);
+    if (end > in.len) {
+        // ffmpeg reads zero bits past the cut in the granule where it moves from the bit reservoir into this frame
+        // and stops the huffman data at the cut in the ones after. all ones decodes to zeros in nearly every table
+        std::vector<uint8_t> fr(end - last);
+        size_t have = in_read(&in, fr.data() + 4, in.len - last - 4) + 4;
+        memcpy(fr.data(), h, 4);
+        bool v1 = h[1] & 8;
+        int nch = (h[3] >> 6) == 3 ? 1 : 2;
+        size_t p = (4 + (h[1] & 1 ? 0 : 2)) * 8, side = p / 8 + (v1 ? (nch == 1 ? 17 : 32) : (nch == 1 ? 9 : 17));
+        auto get = [&](int n) {
+            int v = 0;
+            for (; n--; p++) {
+                v = v << 1 | (fr[p / 8] >> (7 - p % 8) & 1);
+            }
+            return v;
+        };
+        int64_t cut = ((int64_t)have - (int64_t)side) * 8, zero = 0;
+        int64_t at = -8 * get(v1 ? 9 : 8);
+        p += v1 ? (nch == 1 ? 5 : 3) + 4 * nch : nch;
+        for (int g = 0; have >= side && g < (v1 ? 2 : 1) * nch; g++) {
+            int len = get(12);
+            p += (v1 ? 59 : 63) - 12;
+            if (at < 0 && at < cut && at + len > cut) {
+                zero = at + len;
+            }
+            at += len;
+        }
+        for (size_t i = have; i < fr.size(); i++) {
+            in.tail += i < side || ((int64_t)i - (int64_t)side) * 8 < zero ? '\0' : '\xff';
+        }
+    }
+    in.len = std::min(in.len, end);
 }
 
 struct Mp3 : Dec {
@@ -283,7 +453,10 @@ struct Mp3 : Dec {
     }
 
     void init() {
-        in.base = mp3_tag(in, skip, cut, count);
+        uint64_t full = in.len;
+        in.len = mp3_strip(in);
+        in.base = mp3_tag(in, full, skip, cut, count);
+        mp3_end(in);
         if (!in_seek(&in, 0, SEEK_SET) || !drmp3_init(&m, in_read, dr_seek<drmp3_seek_origin>, dr_tell, NULL, &in, NULL)) {
             fail();
         }

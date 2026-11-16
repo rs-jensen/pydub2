@@ -29,6 +29,7 @@ from .utils import (
     db_to_float,
     ratio_to_db,
     get_array_type,
+    check_duration,
 )
 from .exceptions import (
     TooManyMissingFrames,
@@ -42,6 +43,7 @@ from .exceptions import (
 from . import _ffmpeg
 from . import _mp3
 import _pydub2
+import pydub2
 
 if sys.version_info >= (3, 0):
     basestring = str
@@ -234,6 +236,16 @@ def _span(d, wav, start_second, duration):
         return None
     end = float("inf") if duration is None else duration * 1000
     return a, n, lambda m: _slice_frames(m, d.rate, 0, end)[1]
+
+
+def _read(d, n):
+    # a header can lie about the length, so read one frame past max_duration and look
+    if pydub2.max_duration is not None:
+        cap = int(pydub2.max_duration * d.rate) + 1
+        n = cap if n < 0 else min(n, cap)
+    pcm = d.read(n)
+    check_duration(len(pcm) // (d.channels * d.width), d.rate)
+    return pcm
 
 
 def _fit(data, m, want, fw, rate):
@@ -679,10 +691,10 @@ class AudioSegment(object):
                     start, n, final = span
                     if start:
                         d.seek(start)
-                    pcm = d.read(n)
+                    pcm = _read(d, n)
                     fw = d.channels * d.width
                     return cls._segment(d, _fit(pcm, len(pcm) // fw, final(len(pcm) // fw), fw, d.rate))
-                obj = cls._segment(d, d.read())
+                obj = cls._segment(d, _read(d, -1))
                 if start_second is not None and duration is None:
                     return obj[start_second*1000:]
                 elif start_second is None and duration is not None:
@@ -747,10 +759,14 @@ class AudioSegment(object):
         def chunks():
             prev = run(d.read, step if n < 0 else min(step, n))
             got = len(prev) // fw
+            check_duration(got, d.rate)
             while True:
                 k = step if n < 0 else min(step, n - got)
                 cur = run(d.read, k) if k > 0 else b""
                 got += len(cur) // fw
+                if pydub2.max_duration is not None and got > pydub2.max_duration * d.rate:
+                    yield cls._segment(d, prev)
+                    check_duration(got, d.rate)
                 if k <= 0 or len(cur) < k * fw:
                     break
                 yield cls._segment(d, prev)
