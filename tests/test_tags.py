@@ -267,3 +267,11 @@ def test_cover_and_many_tags_like_ffprobe(tmp_path, monkeypatch):
     no_ffprobe(monkeypatch)
     for name in paths:
         assert where(utils2.mediainfo_json(str(tmp_path / name))) == want[name]
+
+
+@pytest.mark.parametrize("format", ["ogg", "opus"])
+def test_a_cut_comment_page_gives_what_was_read(format):
+    data = _pydub2.encode(raw(), 22050, 1, 2, format, 0, [(b"title", b"T" * 150000), (b"artist", b"A")])
+    for cut in range(200, 170000, 997):
+        f = io.BytesIO(data[:cut])
+        utils2._ogg_tags(lambda i, n: (f.seek(i), f.read(n))[1], 7 if format == "ogg" else 8)

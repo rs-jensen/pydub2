@@ -379,8 +379,7 @@ def dict_set(items, idx, k, v, join=False):
 
 
 def _vorbis_comments(at, end):
-    # at(i, n) reads inside the comment block. ffprobe turns pictures into a video stream, so they are no tags.
-    # what is kept stays under LIMIT, a value that does not fit is skipped and the rest still comes out
+    # pictures are no tags for ffprobe, values that do not fit in LIMIT are skipped
     out, idx, room = [], {}, LIMIT
     try:
         i = 4 + struct.unpack("<I", at(0, 4))[0]
@@ -428,8 +427,7 @@ def _flac_tags(at):
 
 
 def _ogg_tags(at, skip):
-    # the second packet is the comment header. its pages are found from their headers and the bytes are
-    # read when a tag asks for them, so a big cover is never held
+    # the second packet is the comment header, read page by page so a big cover is never held
     packet, spans, i, size = 0, [], 0, 0
     for _ in range(MAX_STEPS):
         h = at(i, 27)
@@ -455,10 +453,11 @@ def _ogg_tags(at, skip):
 
             def read(a, n):
                 out, k, n = [], bisect_right(starts, a) - 1, min(n, size - a)
-                while n > 0:
+                while n > 0 and k < len(spans):
                     off, pos, length = spans[k]
                     part = at(pos + a - off, min(n, off + length - a))
-                    if not part:
+                    if len(part) < min(n, off + length - a):
+                        out.append(part)
                         break
                     out.append(part)
                     a, n, k = a + len(part), n - len(part), k + 1
