@@ -23,17 +23,7 @@ static int64_t sample(const char *p, size_t width) {
     return v;
 }
 
-// is the 128 bit number hi:lo below a * b. no __int128 on msvc
-static bool mul_less(uint64_t hi, uint64_t lo, uint64_t a, uint64_t b) {
-    uint64_t a0 = (uint32_t)a, a1 = a >> 32, b0 = (uint32_t)b, b1 = b >> 32;
-    uint64_t p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1;
-    uint64_t mid = (p00 >> 32) + (uint32_t)p01 + (uint32_t)p10;
-    uint64_t plo = (uint32_t)p00 | mid << 32;
-    uint64_t phi = p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32);
-    return hi < phi || (hi == phi && lo < plo);
-}
-
-Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh, int seek_step, const Cancel &cancel) {
+Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh, int seek_step, bool fused, const Cancel &cancel) {
     if (a.width < 1 || a.width > 4) {
         throw std::invalid_argument("bad sample width");
     }
@@ -58,7 +48,8 @@ Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh
 
     double thresh = std::pow(10.0, silence_thresh / 20) * (double)(1LL << (a.width * 8 - 1));
 
-    // pydub compares the truncated rms, so rms <= thresh is sum < (floor(thresh) + 1)^2 * n, all in integers
+    // pydub compares the truncated rms, so rms <= thresh is about sum < (floor(thresh) + 1)^2 * n
+    // audioop sums in a double that rounds, so close calls are decided by summing the slice like audioop
     // rms is never above 2^31 so a bigger thresh means everything is silent
     bool all = thresh >= 2147483648.0;
     uint64_t lim = thresh >= 0 && !all ? (uint64_t)thresh + 1 : 0;
@@ -92,7 +83,19 @@ Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh
             h -= l < q;
             l -= q;
         }
-        if (!(n == 0 ? thresh >= 0 : all || mul_less(h, l, lim, n))) {
+        bool quiet = n == 0 ? thresh >= 0 : all;
+        if (n > 0 && !all) {
+            double sum = (double)h * 18446744073709551616.0 + (double)l;
+            double top = (double)lim * (double)n;
+            double slack = top * ((double)n + 16) * 0x1p-51;
+            if (sum < top - slack || sum > top + slack) {
+                quiet = sum < top;
+            } else {
+                size_t from = std::min(s * a.channels, total), to = std::min(e * a.channels, total);
+                quiet = (unsigned int)sqrt(sumsq(std::string_view(p + from * w, (to - from) * w), w, fused) / (double)n) <= thresh;
+            }
+        }
+        if (!quiet) {
             return;
         }
         if (any) {
