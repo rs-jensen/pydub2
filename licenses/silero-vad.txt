@@ -1,3 +1,7 @@
+Silero VAD v6.2, src/silero_vad/data/silero_vad.onnx
+https://github.com/snakers4/silero-vad/tree/v6.2
+sha256 1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
+
 MIT License
 
 Copyright (c) 2020-present Silero Team
