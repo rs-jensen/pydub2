@@ -13,6 +13,9 @@ endif()
 if(NOT MSVC)
     set(CMAKE_C_FLAGS_RELEASE "-O2 -DNDEBUG -fstack-protector-strong -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2")
     set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG -fstack-protector-strong -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2")
+else()
+    add_compile_options(/guard:cf)
+    add_link_options(/GUARD:CF)
 endif()
 
 # vorbis 1.3.7 still asks for cmake 2.8
@@ -52,6 +55,10 @@ FetchContent_Declare(opusenc
 FetchContent_Declare(samplerate EXCLUDE_FROM_ALL
     URL https://github.com/libsndfile/libsamplerate/releases/download/0.2.2/libsamplerate-0.2.2.tar.xz
     URL_HASH SHA256=3258da280511d24b49d6b08615bbe824d0cacc9842b0e4caf11c52cf2b043893)
+# on windows arm64 opus probes for neon by running 32 bit arm opcodes, that is an illegal instruction and a crash in threads
+if(MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64")
+    set(OPUS_DISABLE_INTRINSICS ON CACHE BOOL "")
+endif()
 FetchContent_MakeAvailable(ogg vorbis flac opus opusfile opusenc samplerate)
 
 # opusfile and libopusenc only ship autotools, so build their few files here
