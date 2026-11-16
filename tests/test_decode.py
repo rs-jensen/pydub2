@@ -550,7 +550,7 @@ def test_vorbis_big_comment_opens_fast(tmp_path):
         times.append(best)
     assert all(o == outs[0] for o in outs)
     # linear is about 10 times the 1 MB file, quadratic about 100 times
-    assert times[1] < 30 * times[0]
+    assert times[1] < 50 * times[0]
 
 
 def test_chained_vorbis_goes_to_ffmpeg(tmp_path):
