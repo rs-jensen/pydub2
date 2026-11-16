@@ -238,6 +238,16 @@ def test_chained_vorbis_goes_to_ffmpeg(tmp_path):
         _pydub2.decode(one + one)
 
 
+def test_chained_opus_goes_to_ffmpeg(tmp_path):
+    with open(make(tmp_path, "a.opus", 2), "rb") as f:
+        one = f.read()
+    with open(make(tmp_path, "b.opus", 2), "rb") as f:
+        two = f.read()
+    assert one[14:18] != two[14:18]
+    with pytest.raises(RuntimeError):
+        _pydub2.decode(one + two)
+
+
 def test_seek_back_after_the_end(tmp_path):
     for name, args in [("a.ogg", ["-c:a", "libvorbis"]), ("a.mp3", []), ("a.opus", []), ("a.flac", []), ("a.wav", [])]:
         d = _pydub2.Decoder(make(tmp_path, name, 2, *args))

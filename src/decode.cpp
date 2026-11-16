@@ -930,7 +930,8 @@ struct Opus : Dec {
     void init() {
         OpusFileCallbacks cb = {op_read, op_seek, op_tell, NULL};
         of = op_open_callbacks(&in, &cb, NULL, 0, NULL);
-        if (!of) {
+        // libopus starts each link fresh, ffmpeg keeps decoding across, so chains go to ffmpeg like vorbis ones
+        if (!of || op_link_count(of) > 1) {
             fail();
         }
         rate = 48000;
@@ -948,8 +949,7 @@ struct Opus : Dec {
         size_t c = channels, done = 0;
         int k, link;
         while (!end && done < n && (k = op_read_float(of, tmp, (int)std::min<size_t>(n - done, 5760 * 2 / c) * c, &link)) != 0) {
-            // a chained file can change channel count, k is sized for the new one
-            if (k < 0 || op_channel_count(of, link) != channels) {
+            if (k < 0) {
                 fail();
             }
             if (c > 2 && op_head(of, link)->mapping_family == 1) {
