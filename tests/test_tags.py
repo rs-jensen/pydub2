@@ -4,6 +4,7 @@ import os
 import shutil
 import struct
 import subprocess
+import sys
 import time
 
 import pytest
@@ -35,6 +36,13 @@ sets = {
     "bytes": {"title": "a\udc80b"},
 }
 formats = ["flac", "ogg", "opus"]
+
+
+def windows_cant(name):
+    return sys.platform == "win32" and name in ("long", "bytes")
+
+
+CANT = "a windows command line holds 32k and no lone surrogate, so the oracle cant do this"
 
 
 def raw():
@@ -72,6 +80,8 @@ def no_ffprobe(monkeypatch):
 @pytest.mark.parametrize("name", sets)
 @pytest.mark.parametrize("format", formats)
 def test_tags_like_pydub(tmp_path, monkeypatch, name, format):
+    if windows_cant(name):
+        pytest.skip(CANT)
     tags = sets[name]
     a, b, plain = (str(tmp_path / (n + "." + format)) for n in "abc")
     theirs().export(a, format=format, tags=tags)
@@ -102,6 +112,8 @@ def test_wav_keeps_dropping_tags():
 @pytest.mark.parametrize("name", sets)
 @pytest.mark.parametrize("format", formats + ["wav"])
 def test_mediainfo_tags_without_ffprobe(tmp_path, monkeypatch, name, format):
+    if windows_cant(name):
+        pytest.skip(CANT)
     # wav only gets tags from ffmpeg, with a codec
     kw = {"codec": "pcm_s16le"} if format == "wav" else {}
     paths = [str(tmp_path / (n + "." + format)) for n in "ab"]
