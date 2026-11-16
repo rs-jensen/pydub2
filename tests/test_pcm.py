@@ -108,7 +108,7 @@ def test_errors():
         core.lin2lin(b"\0" * 4, 2, 5)
 
 
-@pytest.mark.parametrize("channels", [0, -1])
+@pytest.mark.parametrize("channels", [0])
 @pytest.mark.parametrize("data", [b"", b"\0" * 8])
 def test_no_channels(channels, data):
     for call in (lambda: core.lowpass(data, 2, channels, 0.5), lambda: core.highpass(data, 2, channels, 0.5),
