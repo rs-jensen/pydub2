@@ -9,7 +9,9 @@ import wave
 
 import pytest
 
-from pydub2 import AudioSegment, _ffmpeg, utils
+import pathlib
+
+from pydub2 import AudioSegment, _ffmpeg, playback, utils
 
 pydub = pytest.importorskip("pydub")
 
@@ -151,8 +153,69 @@ def test_prober_and_player_lookup(tmp_path, monkeypatch, probe):
 @need_real
 def test_patched_prober_is_used_without_one_on_path(tmp_path, monkeypatch, m4a):
     private(tmp_path, monkeypatch, "full", False)
-    monkeypatch.setattr(utils, "get_prober_name", lambda: real[1])
-    monkeypatch.setattr(pydub.utils, "get_prober_name", lambda: real[1])
+    monkeypatch.setattr(utils, "get_prober_name", lambda *a: real[1])
+    monkeypatch.setattr(pydub.utils, "get_prober_name", lambda *a: real[1])
     want = pydub.utils.mediainfo(m4a)
     assert utils.mediainfo(m4a)["bits_per_sample"] == want["bits_per_sample"]
     assert utils.mediainfo(m4a)["duration"] == want["duration"]
+
+
+@need_real
+@pytest.mark.parametrize("probe", [True, False])
+@pytest.mark.parametrize("kind", [str, pathlib.Path])
+def test_a_subclass_converter_is_used_everywhere(tmp_path, monkeypatch, m4a, probe, kind):
+    folder = private(tmp_path, monkeypatch, "full", probe)
+    (folder / "ffplay").unlink(missing_ok=True)
+    (folder / "ffplay").write_text("#!/bin/sh\n")
+    (folder / "ffplay").chmod(0o755)
+    monkeypatch.setattr(AudioSegment, "converter", "no-such-ffmpeg")
+
+    class My(AudioSegment):
+        converter = kind(folder / "ffmpeg")
+
+    assert len(My.from_file(m4a)) > 400
+    assert len(My.from_file(io.BytesIO(open(m4a, "rb").read()))) > 400
+    assert utils.mediainfo(m4a, converter=My.converter)["codec_name"] == "aac"
+    assert utils.mediainfo_json(m4a, converter=My.converter)["streams"][0]["codec_name"] == "aac"
+    assert "aac" in utils.get_supported_decoders(My.converter)
+    for fmt in ("m4a", "mp3"):
+        assert len(My.silent(200).export(io.BytesIO(), format=fmt).getvalue()) > 100
+    seen = []
+    monkeypatch.setattr(playback.subprocess, "call", lambda cmd, **kw: seen.append(cmd))
+    playback._play_with_ffplay(My.silent(100))
+    assert seen[0][0] == str(folder / "ffplay")
+
+
+def test_which_takes_a_path_on_windows(monkeypatch):
+    monkeypatch.setattr(utils.os, "name", "nt")
+    assert utils.which(pathlib.PurePath("no-such-program")) is None
+
+
+FORMATS = {
+    "wav": "pcm_u8 pcm_s16le pcm_s24le pcm_s32le pcm_f32le pcm_f64le pcm_mulaw pcm_alaw adpcm_ima_wav adpcm_ms",
+    "aiff": "pcm_u8 pcm_s8 pcm_s16be pcm_s24be pcm_s32be pcm_f32be pcm_mulaw pcm_alaw adpcm_ima_qt",
+    "caf": "pcm_s16le pcm_s24le pcm_s24be pcm_s32le pcm_f32le pcm_f64be pcm_mulaw pcm_alaw adpcm_ima_qt",
+    "mov": "pcm_u8 pcm_s16be pcm_s24le pcm_s24be pcm_s32le pcm_f32be pcm_mulaw pcm_alaw adpcm_ima_qt",
+    "au": "pcm_s8 pcm_s16be pcm_s24be pcm_s32be pcm_f32be pcm_f64be pcm_mulaw pcm_alaw",
+    "w64": "pcm_u8 pcm_s16le pcm_s24le pcm_s32le pcm_f32le pcm_mulaw pcm_alaw adpcm_ima_wav",
+}
+
+
+@need_real
+@pytest.mark.parametrize("fmt,codec", [(f, c) for f, cs in FORMATS.items() for c in cs.split()])
+def test_reading_without_ffprobe_gives_what_ffprobe_gives(tmp_path, monkeypatch, fmt, codec):
+    path = str(tmp_path / ("a." + fmt))
+    made = subprocess.run([real[0], "-y", "-v", "quiet", "-f", "lavfi", "-i", "sine=d=0.2:r=11025", "-ac", "2",
+                           "-c:a", codec, path])
+    if made.returncode:
+        pytest.skip("this ffmpeg cant write it")
+
+    def read():
+        seg = AudioSegment.from_file(path)
+        return (seg.sample_width, seg.frame_rate, seg.channels, seg.raw_data,
+                utils.mediainfo_json(path)["streams"][0]["bits_per_sample"])
+
+    want = read()
+    which = utils.which
+    monkeypatch.setattr(utils, "which", lambda p: None if os.path.basename(p) in ("ffprobe", "avprobe") else which(p))
+    assert read() == want

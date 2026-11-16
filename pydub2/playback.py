@@ -11,7 +11,7 @@ from tempfile import NamedTemporaryFile
 from .utils import get_player_name, make_chunks, NOWINDOW
 
 def _play_with_ffplay(seg):
-    PLAYER = get_player_name()
+    PLAYER = get_player_name(seg.converter)
     f = NamedTemporaryFile("w+b", suffix=".wav", delete=False)
     f.close()
     try:

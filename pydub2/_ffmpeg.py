@@ -42,7 +42,7 @@ def _to_wav(converter, path, data, format, codec, parameters, start_second, dura
     inp = source(path if path is not None else BytesIO(data), exe=find(converter))[0]
     out = ["-vn", "-f", "wav"]
     if not codec:
-        info = mediainfo_json(path if path is not None else BytesIO(data))
+        info = mediainfo_json(path if path is not None else BytesIO(data), converter=converter)
         streams = [x for x in info.get("streams", []) if x.get("codec_type") == "audio"]
         if streams:
             stream = streams[0]

@@ -124,6 +124,16 @@ def test_demuxer_list_skips_scripts_and_survives_a_timeout(monkeypatch):
     assert utils.allowed_demuxers("fake-ffmpeg") == "wav"
 
 
+def test_demuxer_list_skips_devices_and_an_empty_list_raises_and_is_not_kept(monkeypatch):
+    table = "Formats:\n ..d = Is a device\n ---\n D   wav  WAV\n D d lavfi  Lavfi\n D d avfoundation  AVF\n D   aac  AAC\n"
+    out = [b"", table.encode()]
+
+    monkeypatch.setattr(utils, "run", lambda cmd, data=None, **kw: subprocess.CompletedProcess(cmd, 0, out.pop(0), b""))
+    with pytest.raises(CouldntDecodeError, match="3.3"):
+        utils.allowed_demuxers("old-ffmpeg")
+    assert utils.allowed_demuxers("old-ffmpeg") == "wav,aac"
+
+
 def test_commands_restrict_protocols(monkeypatch, tmp_path):
     seen = []
 
@@ -132,7 +142,7 @@ def test_commands_restrict_protocols(monkeypatch, tmp_path):
         raise TimeoutError("stop")
 
     monkeypatch.setattr(_ffmpeg, "run_command", fake)
-    monkeypatch.setattr(_ffmpeg, "mediainfo_json", lambda f: {})
+    monkeypatch.setattr(_ffmpeg, "mediainfo_json", lambda f, **k: {})
     monkeypatch.setattr(_ffmpeg, "find", lambda c: "ffmpeg")
     (tmp_path / "a.m4a").write_bytes(b"\0" * 100)
     for kw in ({"data": b"\0" * 100}, {"path": str(tmp_path / "a.m4a")}):
@@ -291,7 +301,7 @@ def test_max_duration_in_mediainfo_without_ffprobe(tmp_path, monkeypatch):
     data[21] &= 0xf0
     data[22:26] = bytes(4)
     path.write_bytes(data)
-    monkeypatch.setattr(utils, "_has_prober", lambda: False)
+    monkeypatch.setattr(utils, "_has_prober", lambda *a: False)
     assert float(utils.mediainfo_json(str(path))["streams"][0]["duration"]) == 600
     monkeypatch.setattr(pydub2, "max_duration", 10)
     with pytest.raises(CouldntDecodeError):
@@ -305,7 +315,7 @@ def test_ffmpeg_timeout(tmp_path, monkeypatch):
     slow.chmod(0o755)
     monkeypatch.setattr(AudioSegment, "converter", str(slow))
     monkeypatch.setattr(pydub2, "ffmpeg_timeout", 0.5)
-    monkeypatch.setattr(utils, "_has_prober", lambda: False)
+    monkeypatch.setattr(utils, "_has_prober", lambda *a: False)
     start = time.time()
     with pytest.raises(CouldntDecodeError):
         AudioSegment.from_file(io.BytesIO(b"not audio at all" * 10), format="m4a")
@@ -474,7 +484,7 @@ def test_bits_from_a_hostile_file(monkeypatch):
     monkeypatch.setattr(_ffmpeg, "find", lambda c: "ffmpeg")
     for bits in (64, 12, 0, None):
         info = {"streams": [{"codec_type": "audio", "bits_per_sample": bits}]}
-        monkeypatch.setattr(_ffmpeg, "mediainfo_json", lambda f, info=info: info)
+        monkeypatch.setattr(_ffmpeg, "mediainfo_json", lambda f, info=info, **k: info)
         with pytest.raises(CouldntDecodeError):
             _ffmpeg.to_wav("ffmpeg", data=b"x")
         assert "pcm_s16le" in seen[-1]
@@ -494,11 +504,11 @@ def test_odd_ffprobe_and_ffmpeg_output(monkeypatch):
     monkeypatch.setattr(_ffmpeg, "find", lambda c: "ffmpeg")
     monkeypatch.setattr(_ffmpeg, "run_command", lambda cmd, data=None: Done)
     for info in ({"streams": [{"index": 0}]}, {"streams": [{"codec_type": "audio"}]}, {}):
-        monkeypatch.setattr(_ffmpeg, "mediainfo_json", lambda f, info=info: info)
+        monkeypatch.setattr(_ffmpeg, "mediainfo_json", lambda f, info=info, **k: info)
         with pytest.raises(CouldntDecodeError):
             _ffmpeg.to_wav("ffmpeg", data=b"x")
 
-    def dies(f):
+    def dies(f, **k):
         return json.loads("")
 
     monkeypatch.setattr(_ffmpeg, "mediainfo_json", dies)

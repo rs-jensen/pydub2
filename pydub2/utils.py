@@ -12,6 +12,7 @@ from io import BytesIO
 from tempfile import TemporaryFile
 from warnings import warn
 from functools import lru_cache, wraps
+from bisect import bisect_right
 
 import _pydub2
 import pydub2
@@ -149,6 +150,7 @@ def which(program):
     """
     Mimics behavior of UNIX which command. The current directory is not searched.
     """
+    program = os.fspath(program)
     # Add .exe program extension for windows support
     if os.name == "nt" and not program.endswith(".exe"):
         program += ".exe"
@@ -195,16 +197,19 @@ PLAYLISTS = {"hls", "applehttp", "dash", "concat", "imf", "sdp", "rtsp", "rtp", 
 
 @lru_cache(None)
 def allowed_demuxers(exe):
-    # a timeout raises and is not remembered, an ffmpeg without -demuxers gets "" and runs open
+    # a timeout or an empty list raises and is not remembered
     out = run([exe, "-hide_banner", "-demuxers"]).stdout.decode("utf-8", "ignore")
-    rows = [x.split() for x in out.partition("\n --")[2].splitlines()]
-    return ",".join(x[1] for x in rows if len(x) > 1 and PLAYLISTS.isdisjoint(x[1].split(",")))
+    # the third flag column is d for a device, those are left out
+    rows = re.findall(r"^ D[ E]([ d]) *(\S+)", out.partition("\n --")[2], re.M)
+    names = ",".join(n for flag, n in rows if flag != "d" and PLAYLISTS.isdisjoint(n.split(",")))
+    if not names:
+        raise CouldntDecodeError("cant list the demuxers of this ffmpeg, pydub2 needs ffmpeg 3.3 or newer")
+    return names
 
 
 def source(filepath, read_ahead_limit=-1, exe=None):
     # sniffing the start of a file is not enough, so ffmpeg is also told which demuxers it may use
-    names = allowed_demuxers(exe) if exe else ""
-    allow = ["-format_whitelist", names] if names else []
+    allow = ["-format_whitelist", allowed_demuxers(exe)] if exe else []
     try:
         path = fsdecode(filepath)
     except TypeError:
@@ -221,25 +226,25 @@ def source(filepath, read_ahead_limit=-1, exe=None):
     return ["-protocol_whitelist", "file"] + allow + ["-i", "file:" + path], None
 
 
-def _first(*names):
+def _first(names, converter):
     from .audio_segment import AudioSegment
     for name in names:
         path = which(name)
         if path:
             return path
     # a private ffmpeg usually has its ffprobe and ffplay beside it
-    folder = os.path.dirname(AudioSegment.converter)
+    folder = os.path.dirname(os.fspath(converter or AudioSegment.converter))
     for name in names:
         path = folder and which(os.path.join(folder, name))
         if path:
             return path
 
 
-def get_encoder_name():
+def get_encoder_name(converter=None):
     """
     Return enconder default application for system, either avconv or ffmpeg
     """
-    path = _first("ffmpeg", "avconv")
+    path = _first(("ffmpeg", "avconv"), converter)
     if path:
         return path
     else:
@@ -248,11 +253,11 @@ def get_encoder_name():
         return "ffmpeg"
 
 
-def get_player_name():
+def get_player_name(converter=None):
     """
     Return enconder default application for system, either avconv or ffmpeg
     """
-    path = _first("ffplay", "avplay")
+    path = _first(("ffplay", "avplay"), converter)
     if path:
         return path
     else:
@@ -261,11 +266,11 @@ def get_player_name():
         return "ffplay"
 
 
-def get_prober_name():
+def get_prober_name(converter=None):
     """
     Return probe application, either avconv or ffmpeg
     """
-    return _first("ffprobe", "avprobe") or "ffprobe"
+    return _first(("ffprobe", "avprobe"), converter) or "ffprobe"
 
 
 def fsdecode(filename):
@@ -313,8 +318,8 @@ def get_extra_info(stderr):
     return extra_info
 
 
-def _run_prober(filepath, read_ahead_limit):
-    prober = get_prober_name()
+def _run_prober(filepath, read_ahead_limit, converter):
+    prober = get_prober_name(converter)
     command_args = ["-v", "info", "-show_format", "-show_streams"]
     args, data = source(filepath, read_ahead_limit, prober)
     if data is not None and not os.path.basename(prober).startswith("ffprobe"):
@@ -327,9 +332,9 @@ def _run_prober(filepath, read_ahead_limit):
     return json.loads(output), stderr
 
 
-# real files stay far under these, a flac comment block cant be bigger than 16 MiB anyway
+# real files stay far under these, only a cover picture is big and that is skipped
 LIMIT = 16 << 20
-MAX_TAGS = 4096
+MAX_TAGS = 1 << 16
 MAX_STEPS = 1 << 14
 
 
@@ -354,20 +359,24 @@ def dict_set(items, idx, k, v, join=False):
         items.append((k, v))
 
 
-def _vorbis_comments(b):
-    out, idx = [], {}
+def _vorbis_comments(at, end):
+    # at(i, n) reads inside the comment block. ffprobe turns pictures into a video stream, so they are no tags.
+    # what is kept stays under LIMIT, a value that does not fit is skipped and the rest still comes out
+    out, idx, room = [], {}, LIMIT
     try:
-        i = 4 + struct.unpack_from("<I", b)[0]
-        n, = struct.unpack_from("<I", b, i)
+        i = 4 + struct.unpack("<I", at(0, 4))[0]
+        n, = struct.unpack("<I", at(i, 4))
         i += 4
         for _ in range(min(n, MAX_TAGS)):
-            size, = struct.unpack_from("<I", b, i)
-            if i + 4 + size > len(b):
+            size, = struct.unpack("<I", at(i, 4))
+            if i + 4 + size > end:
                 break
-            k, eq, v = b[i + 4:i + 4 + size].partition(b"=")
+            if size <= room:
+                k, eq, v = at(i + 4, size).partition(b"=")
+                if eq and k and v and k.upper() != b"METADATA_BLOCK_PICTURE":
+                    room -= size
+                    dict_set(out, idx, k, v, True)
             i += 4 + size
-            if eq and k and v:
-                dict_set(out, idx, k, v, True)
     except struct.error:
         pass
     return out
@@ -392,7 +401,7 @@ def _flac_tags(at):
             break
         size = int.from_bytes(h[1:], "big")
         if h[0] & 127 == 4:
-            return _vorbis_comments(at(i + 4, size))
+            return _vorbis_comments(lambda a, n: at(i + 4 + a, n), size)
         if h[0] & 128:
             break
         i += 4 + size
@@ -400,26 +409,43 @@ def _flac_tags(at):
 
 
 def _ogg_tags(at, skip):
-    # the second packet is the comment header
-    packets, cur, i = [], bytearray(), 0
+    # the second packet is the comment header. its pages are found from their headers and the bytes are
+    # read when a tag asks for them, so a big cover is never held
+    packet, spans, i, size = 0, [], 0, 0
     for _ in range(MAX_STEPS):
         h = at(i, 27)
         if h[:4] != b"OggS" or len(h) < 27:
-            break
+            return []
         lacing = at(i + 27, h[26])
-        body = at(i + 27 + h[26], sum(lacing))
-        i += 27 + h[26] + sum(lacing)
-        j = 0
-        for size in lacing:
-            cur += body[j:j + size]
-            j += size
-            if size < 255:
-                packets.append(bytes(cur))
-                cur = bytearray()
-        if len(packets) > 1:
-            return _vorbis_comments(packets[1][skip:])
-        if len(cur) > LIMIT:
-            break
+        body = i + 27 + h[26]
+        i = body + sum(lacing)
+        j = take = 0
+        for v in lacing:
+            if packet == 0:
+                j += v
+            elif packet == 1:
+                take += v
+            packet += v < 255
+            if packet == 2:
+                break
+        if take:
+            spans.append((size, body + j, take))
+            size += take
+        if packet == 2:
+            starts = [x[0] for x in spans]
+
+            def read(a, n):
+                out, k, n = [], bisect_right(starts, a) - 1, min(n, size - a)
+                while n > 0:
+                    off, pos, length = spans[k]
+                    part = at(pos + a - off, min(n, off + length - a))
+                    if not part:
+                        break
+                    out.append(part)
+                    a, n, k = a + len(part), n - len(part), k + 1
+                return b"".join(out)
+
+            return _vorbis_comments(lambda a, n: read(skip + a, n), size - skip)
     return []
 
 
@@ -533,15 +559,20 @@ def _open(filepath):
         return None, None
 
 
-def _has_prober():
-    return which(get_prober_name())
+def _has_prober(converter=None):
+    return which(get_prober_name(converter))
 
 
-def mediainfo_json(filepath, read_ahead_limit=-1):
+def pcm_bits(name):
+    m = re.match(r"pcm_[suf](\d+)", name)
+    return int(m[1]) if m else 8 if name in ("pcm_mulaw", "pcm_alaw") else 4 if name.startswith("adpcm_") else 0
+
+
+def mediainfo_json(filepath, read_ahead_limit=-1, converter=None):
     """Return json dictionary with media info(codec, duration, size, bitrate...) from filepath
     """
-    if _has_prober():
-        info, stderr = _run_prober(filepath, read_ahead_limit)
+    if _has_prober(converter):
+        info, stderr = _run_prober(filepath, read_ahead_limit, converter)
         if not info:
             return info
         extra_info = get_extra_info(stderr)
@@ -561,12 +592,15 @@ def mediainfo_json(filepath, read_ahead_limit=-1):
         else:
             from . import _ffmpeg
             from .audio_segment import AudioSegment
-            exe = AudioSegment.converter
+            exe = converter or AudioSegment.converter
             args, data = source(filepath, exe=_ffmpeg.find(exe))
             extra_info = get_extra_info(_ffmpeg.run(exe, args, data, "this file").stderr.decode("utf-8", "ignore"))
-            info = {"streams": [
-                {"index": i, "codec_type": "audio", "codec_name": t[t.index("Audio") + 1].split()[0],
-                 "bits_per_sample": 0} for i, t in extra_info.items() if "Audio" in t[:2]]}
+            info = {"streams": []}
+            for i, t in extra_info.items():
+                if "Audio" in t[:2]:
+                    name = t[t.index("Audio") + 1].split()[0]
+                    info["streams"].append({"index": i, "codec_type": "audio", "codec_name": name,
+                                            "bits_per_sample": pcm_bits(name)})
 
     audio_streams = [x for x in info.get('streams', []) if x.get('codec_type') == 'audio']
     if len(audio_streams) == 0:
@@ -601,10 +635,10 @@ def mediainfo_json(filepath, read_ahead_limit=-1):
     return info
 
 
-def mediainfo(filepath):
+def mediainfo(filepath, converter=None):
     """Return dictionary with media info(codec, duration, size, bitrate...) from filepath
     """
-    if not _has_prober():
+    if not _has_prober(converter):
         f, src = _open(filepath)
         native = None
         if f is not None:
@@ -614,10 +648,10 @@ def mediainfo(filepath):
             stream, fmt = native
             tags = {**stream.pop("tags", {}), **fmt.pop("tags", {})}
             return {**stream, **fmt, **({"TAG": tags} if tags else {})}
-        streams = mediainfo_json(filepath).get("streams", [])
+        streams = mediainfo_json(filepath, converter=converter).get("streams", [])
         return {k: str(v) for k, v in streams[0].items()} if streams else {}
 
-    prober = get_prober_name()
+    prober = get_prober_name(converter)
     source_args, data = source(filepath, exe=prober)
     command_args = ["-v", "quiet", "-show_format", "-show_streams"] + source_args
 
@@ -667,11 +701,15 @@ def cache_codecs(function):
     return wrapper
 
 
-@cache_codecs
-def get_supported_codecs():
-    from . import _ffmpeg
+def get_supported_codecs(converter=None):
     from .audio_segment import AudioSegment
-    encoder = _ffmpeg.find(AudioSegment.converter) or get_encoder_name()
+    return _codecs(os.fspath(converter or AudioSegment.converter))
+
+
+@lru_cache(None)
+def _codecs(converter):
+    from . import _ffmpeg
+    encoder = _ffmpeg.find(converter) or get_encoder_name(converter)
     command = [encoder, "-codecs"]
     try:
         res = run(command)
@@ -703,12 +741,12 @@ def get_supported_codecs():
     return (decoders, encoders)
 
 
-def get_supported_decoders():
-    return get_supported_codecs()[0]
+def get_supported_decoders(converter=None):
+    return get_supported_codecs(converter)[0]
 
 
-def get_supported_encoders():
-    return get_supported_codecs()[1]
+def get_supported_encoders(converter=None):
+    return get_supported_codecs(converter)[1]
 
 
 def stereo_to_ms(audio_segment):
