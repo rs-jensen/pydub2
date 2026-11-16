@@ -1,4 +1,5 @@
 import array
+import io
 import math
 import os
 import random
@@ -140,6 +141,36 @@ def test_opus_rate(tmp_path):
 def test_garbage(junk):
     with pytest.raises(RuntimeError):
         _pydub2.decode(junk)
+
+
+def wav_file(fmt, *chunks):
+    body = b"WAVEfmt " + struct.pack("<I", len(fmt)) + fmt + b"".join(chunks)
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
+def data_chunk(pcm, size=None):
+    return b"data" + struct.pack("<I", len(pcm) if size is None else size) + pcm + b"\0" * (len(pcm) % 2)
+
+
+# pydub reads these wavs itself from a path and through ffmpeg from a file object, each its own way
+def test_wav_odd_headers_like_pydub(tmp_path):
+    pcm = struct.pack("<%dh" % len(SAMPLES), *(int(x * 30000) for x in SAMPLES))
+    f16 = struct.pack("<HHIIHH", 1, 2, RATE, RATE * 4, 4, 16)
+    files = [wav_file(f16, data_chunk(pcm, 0)), wav_file(f16, data_chunk(pcm[:4000]), data_chunk(pcm[4000:8000])),
+             wav_file(f16, data_chunk(pcm))[:-3], wav_file(f16, data_chunk(pcm + b"\1", len(pcm) + 1)),
+             wav_file(struct.pack("<HHIIHH", 3, 1, RATE, RATE * 8, 8, 64), data_chunk(struct.pack("<%dd" % len(SAMPLES), *SAMPLES)))]
+    for i, raw in enumerate(files):
+        path = str(tmp_path / ("%d.wav" % i))
+        with open(path, "wb") as f:
+            f.write(raw)
+        for src in (lambda: path, lambda: io.BytesIO(raw)):
+            for kw in ({}, {"start_second": 0.1}):
+                try:
+                    want = AudioSegment.from_file(src(), **kw)
+                except Exception:
+                    continue
+                got = pydub2.AudioSegment.from_file(src(), **kw)
+                assert (got.sample_width, got.raw_data) == (want.sample_width, want.raw_data)
 
 
 def test_wav_lies_about_size():
