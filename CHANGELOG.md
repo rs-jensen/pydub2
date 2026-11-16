@@ -4,6 +4,18 @@ What changed in each release.
 
 ## [Unreleased]
 
+### Fixed
+
+- The Windows wheels no longer need the Visual C++ redistributable. `import pydub2` failed with "DLL load failed" on a machine without it.
+- pydub2 no longer starts an `ffmpeg`, `ffprobe` or `ffplay` from the current folder when none is found on PATH. It says ffmpeg is not found.
+- On Windows, Ctrl-C reaches ffmpeg again when you run from a console, and ffmpeg is stopped when a call is interrupted or times out.
+- `export` no longer fails on Windows when a virus scanner still holds the temporary file ffmpeg wrote.
+- `import pydub` with pydub2-compat no longer fails under `pythonw` when pydub2 cannot be imported.
+- A converter path in another case, like `C:\ffmpeg\bin\FFMPEG.EXE`, is found on Windows.
+- `AudioSegment.stream` lets go of the file when the generator ends or is closed, so it can be deleted on Windows.
+- A tag too long for the Windows command line raises `CouldntEncodeError` and not a raw `OSError`.
+- `effects.normalize(seg, target_lufs=...)` no longer clips a quiet file with high peaks. The gain stops at full scale minus `headroom`.
+
 ## [0.0.1] - 2026-11-16
 
 The first release.

@@ -93,6 +93,8 @@ from pydub2 import effects
 effects.normalize(seg, target_lufs=-16)
 ```
 
+The gain is held back when the loudest sample would pass full scale minus `headroom` (0.1 dB by default), so a quiet file with sharp peaks ends up below the target and does not clip.
+
 Resample with libsamplerate, which sounds better than the default ratecv:
 
 ```python
