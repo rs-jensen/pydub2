@@ -327,6 +327,7 @@ def test_current_directory_is_not_searched(tmp_path, monkeypatch):
     empty = tmp_path / "empty"
     empty.mkdir()
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(AudioSegment, "converter", "ffmpeg")
     monkeypatch.setenv("PATH", str(empty) + os.pathsep)
     assert utils.which("ffmpeg") is None
     assert _ffmpeg.find("ffmpeg") is None
