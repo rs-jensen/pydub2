@@ -42,7 +42,9 @@ WIN_PEAK = "import ctypes\nfrom ctypes import wintypes as w\n" \
     "c = C(cb=ctypes.sizeof(C))\nk = ctypes.WinDLL('kernel32')\nk.GetCurrentProcess.restype = w.HANDLE\n" \
     "p = ctypes.WinDLL('psapi')\np.GetProcessMemoryInfo.argtypes = [w.HANDLE, ctypes.c_void_p, w.DWORD]\n" \
     "p.GetProcessMemoryInfo(k.GetCurrentProcess(), ctypes.byref(c), c.cb)\nprint(c.h / 1e6)"
-UNIX_PEAK = "import resource, sys\nprint(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1e6 if sys.platform == 'darwin' else 1e3))"
+# linux keeps the high water mark of the parent over exec, so ru_maxrss would be the pytest process
+UNIX_PEAK = "import sys\nif sys.platform == 'linux':\n print(int([l for l in open('/proc/self/status') if l.startswith('VmHWM')][0].split()[1]) / 1e3)\n" \
+    "else:\n import resource\n print(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6)"
 
 
 def peak_mb(code):
