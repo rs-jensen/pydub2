@@ -30,6 +30,8 @@ class MallocStats(ctypes.Structure):
 
 
 def malloc_in_use():
+    if sys.platform == "win32":
+        return None
     libc = ctypes.CDLL(None)
     if sys.platform == "darwin":
         s = MallocStats()
