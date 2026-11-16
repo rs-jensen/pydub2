@@ -1,0 +1,12 @@
+# clang -fsanitize=address,undefined -fsanitize-ignorelist=tests/sanitizer.ignore, only third party code is listed
+
+# libvorbis shifts a negative int left, and reads one float past a row of 17 where the weight is 0
+fun:_vp_psy_init
+# libvorbis shifts a negative int left
+fun:floor1_encode
+# libogg adds 0 to a null buffer pointer while the sync buffer is still empty
+fun:ogg_sync_pageseek
+# libsamplerate compares data_out plus 0 with a null data_in
+fun:src_process
+# stb_vorbis puts a byte into the top of an int when it reads a page header
+fun:vorbis_search_for_page_pushdata

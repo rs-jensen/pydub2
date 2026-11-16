@@ -8,7 +8,7 @@
 
 namespace pydub2 {
 
-static int64_t sample(const char *p, int width) {
+static int64_t sample(const char *p, size_t width) {
     if (width == 1) {
         return (int8_t)p[0];
     }
@@ -45,7 +45,7 @@ Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh
     }
 
     // python round, same as nearbyint
-    size_t fw = (size_t)a.channels * a.width;
+    size_t fw = a.channels * a.width;
     double frames = (double)(a.data.size() / fw);
     double ms = std::nearbyint(1000.0 * (frames / a.rate));
     if (ms > INT_MAX) {
@@ -69,7 +69,7 @@ Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh
     double per_ms = a.rate / 1000.0;
     size_t total = a.data.size() / a.width;
     const char *p = a.data.data();
-    int w = a.width;
+    size_t w = a.width;
     uint64_t h = 0, l = 0;
     size_t front = 0, back = 0;
 

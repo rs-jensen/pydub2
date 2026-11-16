@@ -97,6 +97,11 @@ find_package(nanobind CONFIG REQUIRED)
 nanobind_add_module(_pydub2 NB_STATIC FREE_THREADED
     src/bind.cpp src/pcm.cpp src/silence.cpp src/decode.cpp src/encode.cpp
     src/resample.cpp src/loudness.cpp src/vad.cpp src/third_party/stb_vorbis.c)
+if(MSVC)
+    target_compile_options(_pydub2 PRIVATE /W4)
+else()
+    target_compile_options(_pydub2 PRIVATE -Wall -Wextra)
+endif()
 target_link_libraries(_pydub2 PRIVATE FLAC::FLAC vorbisenc vorbis opusfile opusenc
     SampleRate::samplerate ebur128)
 # the vad loops only vectorise well at -O3
