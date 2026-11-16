@@ -45,6 +45,8 @@ Two vendored files have a small change so that opening files from several thread
 - after such a frame the bit reservoir is the end of its data
 - scfsi copies the scalefactors of the last granule 0 that was decoded, which `src/decode.cpp` can mark as zeroed
   (the new fields `zeroed` and `scf0` in `drmp3dec`)
+- a frame cut short at the end of the file is decoded up to the cut (the new fields `missing` and `have`), a granule
+  that starts in the bit reservoir reads zeros past it like ffmpeg
 
 The mp3 encoder is not part of this package. It is in the separate package pydub2-mp3 (LAME 3.100,
 LGPL-2.0-or-later) and is loaded at runtime. It is its own shared library, built from the unmodified

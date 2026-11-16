@@ -512,7 +512,9 @@ struct Mp3 : Dec {
             fail();
         }
         size_t got = in_read(&in, b, f.n);
+        // ffmpeg reads zeros past the cut and stops the huffman data there
         memset(b + got, 0, f.n - got);
+        dec.missing = (int)(f.n - got);
         if (f.bad) {
             dec.reserv = std::min(511, f.n - 4);
             memcpy(dec.reserv_buf, b + f.n - dec.reserv, dec.reserv);

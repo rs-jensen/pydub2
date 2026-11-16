@@ -267,7 +267,15 @@ def test_mp3_end(tmp_path):
         for tail in tags:
             same_as_ffmpeg(tmp_path, "tag.mp3", m[:starts[k]] + tail)
         for cut in (4, 40, 200):
-            same_as_ffmpeg(tmp_path, "cut.mp3", m[:starts[k] + cut], 328)
+            same_as_ffmpeg(tmp_path, "cut.mp3", m[:starts[k] + cut])
+
+
+# ffmpeg stops the huffman data at the cut, past it a granule that starts in the bit reservoir reads zeros
+def test_mp3_cut_inside_a_granule(tmp_path):
+    m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k", samples=CLICKS), "rb").read()
+    starts = mp3_frames(m)
+    for cut in (40, 60, 100, 150):
+        same_as_ffmpeg(tmp_path, "cut.mp3", m[:starts[10] + cut])
 
 
 # some encoders set scfsi on a long granule after a short one, ffmpeg copies the scalefactors then
