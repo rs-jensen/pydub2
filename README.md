@@ -121,6 +121,14 @@ it runs, so it needs ffmpeg.
 There are a few deliberate differences, for example `from_file` decodes a file straight from disk and
 mp3 and opus samples can differ slightly from what ffmpeg gives. They are listed in [docs/differences.md](https://github.com/rs-jensen/pydub2/blob/main/docs/differences.md).
 
+## More
+
+How pydub2 compares with soundfile, PyAV, pedalboard and the others: [docs/comparison.md](https://github.com/rs-jensen/pydub2/blob/main/docs/comparison.md).
+
+Moving a project from pydub: [docs/migrating.md](https://github.com/rs-jensen/pydub2/blob/main/docs/migrating.md).
+
+What the releases contain: [CHANGELOG.md](https://github.com/rs-jensen/pydub2/blob/main/CHANGELOG.md).
+
 ## Use it as pydub
 
 Packages that write `import pydub` can use pydub2 without changing their code. Install the
