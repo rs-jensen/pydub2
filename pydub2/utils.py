@@ -328,6 +328,95 @@ def _run_prober(filepath, read_ahead_limit):
     return json.loads(output), stderr
 
 
+def dict_set(items, k, v, join=False):
+    # av_dict_set: keys match without case, the old entry is swapped out for the last one and the new goes
+    # at the end, an empty value deletes
+    for i, (k2, v2) in enumerate(items):
+        if k2.lower() == k.lower():
+            items[i] = items[-1]
+            items.pop()
+            if join:
+                v = v2 + b";" + v
+            break
+    if v:
+        items.append((k, v))
+
+
+def _vorbis_comments(b):
+    out = []
+    try:
+        i = 4 + struct.unpack_from("<I", b)[0]
+        n, = struct.unpack_from("<I", b, i)
+        i += 4
+        while n > 0 and i + 4 <= len(b):
+            size, = struct.unpack_from("<I", b, i)
+            k, eq, v = b[i + 4:i + 4 + size].partition(b"=")
+            if i + 4 + size > len(b):
+                break
+            i += 4 + size
+            n -= 1
+            if eq and k and v:
+                dict_set(out, k, v, True)
+    except struct.error:
+        pass
+    return out
+
+
+def _convert(items, names):
+    out = []
+    for k, v in items:
+        dict_set(out, names.get(k.lower(), k), v)
+    return {k.decode(errors="replace"): v.decode(errors="replace") for k, v in out}
+
+
+_vorbis_names = {b"albumartist": b"album_artist", b"tracknumber": b"track", b"discnumber": b"disc",
+                 b"description": b"comment"}
+
+
+def _flac_tags(head):
+    i = 4
+    while i + 4 <= len(head):
+        size = int.from_bytes(head[i + 1:i + 4], "big")
+        if head[i] & 127 == 4:
+            return _vorbis_comments(head[i + 4:i + 4 + size])
+        if head[i] & 128:
+            break
+        i += 4 + size
+    return []
+
+
+def _ogg_tags(head, skip):
+    # the second packet is the comment header
+    packets, cur, i = [], b"", 0
+    while i + 27 <= len(head) and len(packets) < 2:
+        n = head[i + 26]
+        i += 27 + n
+        for size in head[i - n:i]:
+            cur += head[i:i + size]
+            i += size
+            if size < 255:
+                packets.append(cur)
+                cur = b""
+    if len(packets) < 2:
+        return []
+    return _vorbis_comments(packets[1][skip:])
+
+
+def _wav_tags(data):
+    out = []
+    i = 12
+    while i + 8 <= len(data):
+        size, = struct.unpack_from("<I", data, i + 4)
+        if data[i:i + 4] == b"LIST" and data[i + 8:i + 12] == b"INFO":
+            j = i + 12
+            while j + 8 <= min(i + 8 + size, len(data)):
+                n, = struct.unpack_from("<I", data, j + 4)
+                dict_set(out, data[j:j + 4], data[j + 8:j + 8 + n].split(b"\0")[0])
+                j += 8 + n + n % 2
+        i += 8 + size + size % 2
+    return out
+
+
 def _native_info(data):
     try:
         d = _pydub2.Decoder(data)
@@ -340,6 +429,7 @@ def _native_info(data):
     raw = "N/A"
     bits = "0"
     tag = 0
+    tags, in_stream = {}, False
     if data[:4] in (b"RIFF", b"RF64"):
         i = 12
         while data[i:i + 4] != b"fmt ":
@@ -357,12 +447,19 @@ def _native_info(data):
         if tag == 1 and bits in (24, 32):
             raw = str(bits)
         bits = str(bits)
+        tags = _convert(_wav_tags(data), {
+            b"iart": b"artist", b"icmt": b"comment", b"icop": b"copyright", b"icrd": b"date", b"ignr": b"genre",
+            b"ilng": b"language", b"inam": b"title", b"iprd": b"album", b"iprt": b"track", b"isft": b"encoder",
+            b"ismp": b"timecode", b"itch": b"encoded_by"})
     elif head[:4] == b"fLaC":
         raw = str((((head[20] & 1) << 4) | (head[21] >> 4)) + 1)
         name, fmt, format_name = "flac", "s16" if int(raw) <= 16 else "s32", "flac"
+        tags = _convert(_flac_tags(head), _vorbis_names)
     elif head[:4] == b"OggS":
         name = "opus" if b"OpusHead" in head[:200] else "vorbis"
         fmt, format_name = "fltp", "ogg"
+        tags = _convert(_ogg_tags(head, 8 if name == "opus" else 7), _vorbis_names)
+        in_stream = True
     else:
         name, fmt, format_name = "mp3", "fltp", "mp3"
     stream = {
@@ -372,7 +469,10 @@ def _native_info(data):
         "bits_per_sample": bits, "bits_per_raw_sample": raw,
         "duration": "%.6f" % (frames / rate),
     }
-    return stream, {"nb_streams": "1", "format_name": format_name, "size": str(len(data))}
+    fmt = {"nb_streams": "1", "format_name": format_name, "size": str(len(data))}
+    if tags:
+        (stream if in_stream else fmt)["tags"] = tags
+    return stream, fmt
 
 
 def _read_all(filepath):
@@ -457,7 +557,9 @@ def mediainfo(filepath):
         data = _read_all(filepath)
         native = data and _native_info(data)
         if native:
-            return {**native[0], **native[1]}
+            stream, fmt = native
+            tags = {**stream.pop("tags", {}), **fmt.pop("tags", {})}
+            return {**stream, **fmt, **({"TAG": tags} if tags else {})}
 
     prober = get_prober_name()
     source_args, data = source(filepath, exe=prober)

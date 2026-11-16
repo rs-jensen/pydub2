@@ -43,7 +43,8 @@ louder.fade_out(500).export("intro.flac", format="flac")
 | mp3 | built in | `pydub2-mp3` package, or ffmpeg |
 | m4a/aac, wma, video files | ffmpeg | ffmpeg |
 
-The ffmpeg rows only work if ffmpeg is installed. Everything marked built in works without it.
+The ffmpeg rows only work if ffmpeg is installed. Everything marked built in works without it,
+including `tags=` for flac, ogg and opus and reading them back with `mediainfo` (mp3 tags need ffprobe).
 mp3 writing needs no ffmpeg once you install the small `pydub2-mp3` package, which carries the
 LAME encoder:
 
