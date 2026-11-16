@@ -32,7 +32,7 @@ The Silero weights in `src/silero_weights.h` come from `src/silero_vad/data/sile
 github.com/snakers4/silero-vad at tag v6.2 (first shipped in the PyPI wheel silero-vad 6.2.0),
 sha256 `1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3`. Running
 `tools/silero_weights.py` on that file gives the header in the repo byte for byte. The license at
-that tag is MIT, Copyright (c) 2020-present Silero Team. The comment in the header says v5, which is old.
+that tag is MIT, Copyright (c) 2020-present Silero Team.
 
 The mp3 encoder is not part of this package. It is in the separate package pydub2-mp3 (LAME 3.100,
 LGPL-2.0-or-later) and is loaded at runtime. It is its own shared library, built from the unmodified
