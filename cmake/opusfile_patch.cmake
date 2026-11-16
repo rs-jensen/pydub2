@@ -9,7 +9,7 @@ string(REPLACE
     "    buffer=ogg_sync_buffer(&_of->oy,(long)_initial_bytes);\n    if(OP_UNLIKELY(buffer==NULL))return OP_EFAULT;\n"
     text "${text}")
 file(WRITE src/opusfile.c "${text}")
-file(SHA256 src/opusfile.c got)
+string(SHA256 got "${text}") # file(WRITE) makes CRLF on windows, so hash the text
 if(NOT got STREQUAL 8e0e4653af41b664b47820dd01465f5c4c5b7e5f3fa57bb4e62baa3388addee2)
     message(FATAL_ERROR "opusfile.c is not what the patch expects")
 endif()
