@@ -10,7 +10,7 @@ I checked everything on 2026-11-16. Versions and dates come from PyPI that day. 
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | License | MIT | MIT | MIT | MIT | BSD-3 (libsndfile inside is LGPL) | BSD-3 (FFmpeg inside has its own license) | MIT | GPLv3 | BSD-3 | ISC | MIT |
 | Latest release | not on PyPI yet, 0.1.0 in the repo | 0.25.1, 2021-03-10 | 0.26.0.post5, 2026-11-15 | 0.2.0, 2025-03-13 | 0.14.0, 2026-06-06 | 19.0.2, 2026-10-21 | 1.73, 2026-11-10 | 0.9.26, 2026-10-07 | 0.17.0, 2026-09-30 | 1.0.1, 2026-11-12 | 3.1.0, 2025-10-26 |
-| Wheel size | 3 MB | 32 KB | 43 KB | 37 KB | 1.1 to 1.3 MB | 19 to 38 MB | 0.3 to 0.7 MB | 2.5 to 5 MB | 4 to 10 MB, without FFmpeg and without torch | 0.3 MB, but it pulls in numba, scipy, scikit-learn and more | 23 KB |
+| Wheel size | 3 MB | 32 KB | 43 KB | 37 KB | 1.1 to 1.3 MB | 19 to 46 MB | 0.3 to 0.7 MB | 2.5 to 6.1 MB | 4 to 10 MB, without FFmpeg and without torch | 0.3 MB, but it pulls in numba, scipy, scikit-learn and more | 23 KB |
 | Needs ffmpeg installed | for m4a/aac, wma, aiff and video, and for mp3 writing unless you add `pydub2-mp3` | for everything except wav, plus ffprobe | same as pydub | same as pydub | no | no, FFmpeg is in the wheel | no | no | yes, the shared FFmpeg libraries, for all decoding and encoding | no | one of several backends, ffmpeg is one of them |
 | AudioSegment API | yes, pydub's own test suite runs against it | it is the original | yes, a fork | yes, a fork | no | no | no | no | no | no | no |
 | Read with nothing else installed | wav, flac, ogg, opus, mp3 | wav | wav | wav | wav, flac, ogg, opus, mp3, aiff and more | wav, flac, ogg, opus, mp3, m4a, aiff, mp4 | wav, flac, vorbis, mp3 | wav, flac, ogg, opus, mp3, aiff, m4a (m4a through the system codecs on macOS) | none, needs FFmpeg | what soundfile reads | wave, aifc and sunau from the standard library, Core Audio on macOS |
@@ -60,7 +60,7 @@ There is no pitch shift and no tempo change that keeps the pitch. `speedup` is p
 
 `play()` is pydub's. It waits until the audio is done and needs simpleaudio, PyAudio or ffplay. You cannot stop it from another thread.
 
-Tags of mp3 files and the stream info of formats pydub2 does not read itself need ffprobe. Tags of wav, flac, ogg and opus files work without it.
+The stream info of formats pydub2 does not read itself needs ffprobe. Tags of wav, flac, ogg, opus and mp3 files work without it.
 
 ## Links
 
