@@ -26,6 +26,9 @@ jobs:
         run: choco install ffmpeg -y --no-progress
       - if: runner.os == 'macOS'
         run: brew install ffmpeg
+      - if: runner.os != 'Linux'
+        shell: bash
+        run: ffmpeg -version | head -n 1
       - if: inputs.only != ''
         shell: bash
         run: echo "CIBW_BUILD=$ONLY" >> "$GITHUB_ENV"

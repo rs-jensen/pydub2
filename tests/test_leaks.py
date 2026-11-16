@@ -3,6 +3,7 @@ import io
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import tracemalloc
@@ -21,7 +22,25 @@ SLACK = (1 if N >= 2000 else 16) << 20
 FF = shutil.which("ffmpeg")
 
 
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+
+    k32, psapi = ctypes.WinDLL("kernel32"), ctypes.WinDLL("psapi")
+    k32.GetCurrentProcess.restype = wintypes.HANDLE
+    k32.GetProcessHandleCount.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD]
+
+    class Counters(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("faults", wintypes.DWORD)] + [(n, ctypes.c_size_t) for n in (
+            "peak_ws", "ws", "peak_paged", "paged", "peak_nonpaged", "nonpaged", "pagefile", "peak_pagefile")]
+
+
 def rss():
+    if sys.platform == "win32":
+        c = Counters(cb=ctypes.sizeof(Counters))
+        psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb)
+        return c.pagefile
     try:
         with open("/proc/self/statm") as f:
             return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
@@ -30,6 +49,10 @@ def rss():
 
 
 def fds():
+    if sys.platform == "win32":
+        n = wintypes.DWORD()
+        k32.GetProcessHandleCount(k32.GetCurrentProcess(), ctypes.byref(n))
+        return n.value
     return len(os.listdir("/dev/fd"))
 
 

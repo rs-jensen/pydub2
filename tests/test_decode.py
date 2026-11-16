@@ -252,6 +252,7 @@ SETUP_BOMB = bytes.fromhex(
     "d85a8c3594d2622929b5904a6cadb5585b6c35a696626cb1d558528b")
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="no resource module")
 def test_vorbis_setup_bomb():
     code = "import resource, sys, _pydub2\ntry:\n    _pydub2.decode(bytes.fromhex(sys.argv[1]))\nexcept RuntimeError:\n    pass\n" \
            "print(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)"
