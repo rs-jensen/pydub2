@@ -46,6 +46,11 @@ static void put(char *out, const float *f, size_t n, int width) {
     }
 }
 
+// ffmpeg hands 3 to 8 vorbis channels out in wav order, out[i] is vorbis channel order[n - 1][i]
+static const uint8_t order[8][8] = {
+    {0}, {0, 1}, {0, 2, 1}, {0, 1, 2, 3}, {0, 2, 1, 3, 4}, {0, 2, 1, 5, 3, 4}, {0, 2, 1, 6, 5, 3, 4}, {0, 2, 1, 7, 5, 6, 3, 4},
+};
+
 // a file or a piece of memory. base hides bytes at the start from the decoder, tail goes after the end
 // and fix replaces the bytes at fix_at
 struct Input {
@@ -605,6 +610,10 @@ static int64_t vorbis_len(Input &in, std::vector<Page> &pages) {
             break;
         }
         const uint8_t *buf = (const uint8_t *)pg.data();
+        // ffmpeg drops a page cut off by the end of the file and ends there
+        if (r < 0 && in.pos == in.len) {
+            break;
+        }
         if (r < 0) {
             return -1;
         }
@@ -711,8 +720,7 @@ static int64_t vorbis_len(Input &in, std::vector<Page> &pages) {
         return total;
     }
     if (pk[0].eos) {
-        // one page: the parser starts from the block size left over by the length scan
-        prev = bs[flag[mode(pk.back().b)]];
+        prev = bs[0];
         for (Packet &x : pk) {
             skip += dur(prev, x.b);
         }
@@ -838,7 +846,7 @@ struct Vorbis : Dec {
             left.resize(k * c);
             for (int i = 0; i < k; i++) {
                 for (size_t j = 0; j < c; j++) {
-                    left[i * c + j] = o[j][i];
+                    left[i * c + j] = o[c <= 8 ? order[c - 1][j] : j][i];
                 }
             }
             lpos = pos < target ? (size_t)std::min<uint64_t>(k, target - pos) : 0;
@@ -922,7 +930,8 @@ struct Opus : Dec {
     void init() {
         OpusFileCallbacks cb = {op_read, op_seek, op_tell, NULL};
         of = op_open_callbacks(&in, &cb, NULL, 0, NULL);
-        if (!of) {
+        // libopus starts each link fresh, ffmpeg keeps decoding across, so chains go to ffmpeg like vorbis ones
+        if (!of || op_link_count(of) > 1) {
             fail();
         }
         rate = 48000;
@@ -940,9 +949,17 @@ struct Opus : Dec {
         size_t c = channels, done = 0;
         int k, link;
         while (!end && done < n && (k = op_read_float(of, tmp, (int)std::min<size_t>(n - done, 5760 * 2 / c) * c, &link)) != 0) {
-            // a chained file can change channel count, k is sized for the new one
-            if (k < 0 || op_channel_count(of, link) != channels) {
+            if (k < 0) {
                 fail();
+            }
+            if (c > 2 && op_head(of, link)->mapping_family == 1) {
+                float f[8];
+                for (int i = 0; i < k; i++) {
+                    for (size_t j = 0; j < c; j++) {
+                        f[j] = tmp[i * c + order[c - 1][j]];
+                    }
+                    memcpy(&tmp[i * c], f, c * sizeof(float));
+                }
             }
             put(out + done * c * 4, tmp, k * c, 4);
             done += k;

@@ -677,12 +677,16 @@ class AudioSegment(object):
         # a name goes to the decoder as it is, so the file never sits in memory
         data = None if close_file else bytes(file.read())
         # pydub reads pcm wav itself, without codec or parameters, and cuts it in python
-        own = wav and _pydub_wav(file.read(65536) if data is None else data[:65536])
+        head = file.read(65536) if data is None else data[:65536]
+        own = wav and _pydub_wav(head)
         if close_file:
             file.close()
+        # ffmpeg cuts vorbis by packet times that drift from the sample count, only ffmpeg lands on the same sample
+        cut = (start_second is not None or duration is not None) and head[:4] == b"OggS" and len(head) > 27 and \
+            head[27 + head[26]:][:7] == b"\x01vorbis" and _ffmpeg.find(cls.converter)
 
         tried = False
-        if own or (codec is None and parameters is None):
+        if (own or (codec is None and parameters is None)) and not cut:
             tried = True
             try:
                 d = _pydub2.Decoder(filename if data is None else data)
