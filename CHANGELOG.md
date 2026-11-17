@@ -29,6 +29,7 @@ What changed in each release.
 - `rms`, `dBFS`, `detect_silence`, `compress_dynamic_range` and `normalize` of 32 bit audio now match the audioop you have. The first call asks that audioop, so macOS arm64 and the Pythons that fuse the sum give pydub's numbers where they were off by 1 (`rms`) or 1e-8 dB (`dBFS`).
 - A wav export of 8 or 24 bit audio with an odd number of bytes is what the `wave` module of the running Python writes, so there is no pad byte before Python 3.15.
 - A damaged flac file whose header says the maximum block size is 0 no longer makes the seek compute an infinite byte offset, which is undefined in C.
+- A damaged ogg vorbis file whose last granule position is close to the 64 bit limits no longer overflows a signed integer when its length is worked out, which is undefined in C++.
 - The Windows wheels no longer need the Visual C++ redistributable. `import pydub2` failed with "DLL load failed" on a machine without it.
 - On Windows, Ctrl-C reaches ffmpeg again when you run from a console, and ffmpeg is stopped when a call is interrupted or times out.
 - `export` no longer fails on Windows when a virus scanner still holds the temporary file ffmpeg wrote.
@@ -51,6 +52,8 @@ What changed in each release.
 ### Security
 
 - pydub2 no longer starts an `ffmpeg`, `ffprobe` or `ffplay` from the current folder when none is found on PATH. It says ffmpeg is not found. The ffmpeg extra does not look in the current folder either.
+- A float wav whose block align is smaller than its channels and sample size say no longer makes the decoder count a frame per block align and set aside up to 1024 times the decoded size, 1 GB for a 1 MB file with 256 channels.
+- Writing opus from audio at a rate over 768 kHz raises `CouldntEncodeError`. The rate comes from the file header, an ogg vorbis file can say 1 GHz, and libopusenc took minutes per channel to resample from that.
 - `pydub2.max_bytes` limits the size of the decoded audio, off by default. `max_duration` alone does not bound memory, a 301 kB flac that says 8 channels at 192 kHz asked for 22 GB under a limit of an hour. Both limits now hold for raw and pcm input, in strict mode and in `stream`, are checked from the header before anything is read where it gives the length, and take `inf`. They are read once at the start of a load. A file object is still read into memory whole before it is decoded, except for raw and pcm input.
 
 ## [0.0.1] - 2026-11-16

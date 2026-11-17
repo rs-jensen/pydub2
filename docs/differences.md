@@ -70,6 +70,7 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - Sizes are within a few percent of ffmpeg's. opus at 16 kHz is within 7%. flac is within 3 percent for speech, music and noise, sometimes smaller and sometimes larger. Pure sine tones differ more: one test file came out 15 percent smaller and another 33 percent larger. We write no padding block, ffmpeg writes 8 kB.
 - opus: the OpusHead input rate is the real rate, where ffmpeg writes the rate it resampled to (48000 for 44100). The tags name libopusenc where ffmpeg's say Lavf and Lavc.
 - opus below 100 Hz raises `CouldntEncodeError`, because libopusenc corrupts memory when it resamples up from so low. ffmpeg encodes down to 1 Hz.
+- opus above 768 kHz raises `CouldntEncodeError`, because libopusenc's resampler takes minutes at such rates. ffmpeg encodes any rate.
 - vorbis tags name libVorbis. A vorbis file has more, smaller ogg pages than ffmpeg's. The last granule is the input length. ffmpeg's own decoder can read vorbis a few ms too long.
 - mp3 written by `pydub2_mp3` always starts with an Info frame carrying the encoder delay and padding, so the file reads back at the length it was written with. That includes low constant bitrates, where lame has no room for its own and ffmpeg uses a bigger frame. The crc fields of that frame are left 0 when lame did not write it.
 - mp3 written by `pydub2_mp3` without `tags` has no ID3 tag, so it starts with the Info frame and not `ID3`. ffmpeg always writes an ID3v2.4 tag that only names its own version (`TSSE=Lavf...`).

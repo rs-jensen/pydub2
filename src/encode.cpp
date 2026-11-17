@@ -365,8 +365,8 @@ void encode(const Audio &a, const std::string &format, int bitrate, const Tags &
         return copy(ogg(a, bitrate, tags, cancel), alloc);
     }
     if (format == "opus") {
-        // libopusenc corrupts the heap when it resamples up from below about 90 hz
-        if (a.rate < 100) {
+        // libopusenc corrupts the heap when it resamples up from below about 90 hz, and down from 1 GHz takes minutes
+        if (a.rate < 100 || a.rate > 768000) {
             throw std::runtime_error("cant encode this");
         }
         return copy(opus(a, bitrate, tags, cancel), alloc);
