@@ -90,6 +90,18 @@ from pydub2 import utils
 utils.mediainfo("song.wav")["sample_rate"]
 ```
 
+Play in the background and stop it. `playback.play` still blocks, as in pydub. `play_async`
+returns a handle with `stop()`, `wait(timeout=None)` (True when the sound has ended) and
+`is_playing()`, and leaving a `with` block stops the sound. Keep the handle, the sound also stops
+when the handle is dropped or the interpreter exits. It uses simpleaudio, pyaudio or ffplay,
+in the order `play` does. The ffplay temp file is removed once the process has exited, also on Windows.
+
+```python
+from pydub2 import playback
+with playback.play_async(seg) as handle:
+    handle.wait(2)  # stopped after two seconds if it is still playing
+```
+
 Integrated loudness in LUFS (EBU R128):
 
 ```python
