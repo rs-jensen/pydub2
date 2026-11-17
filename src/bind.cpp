@@ -127,17 +127,32 @@ static nb::list ranges(const Ranges &r) {
 
 struct Stream {
     nb::bytes keep; // what the decoder reads from, if it is memory
-    std::unique_ptr<Decoder> d;
-    std::mutex lock{}; // seek and read from two threads
+    std::unique_ptr<Decoder> d; // empty after close, only touched under the lock
+    // copied at open, so they can be read after close and while another thread closes
+    int rate;
+    size_t channels, width;
+    uint64_t frames;
+    bool chained, exact;
+    std::mutex lock{}; // seek, read and close from two threads
+
+    Stream(nb::bytes keep, std::unique_ptr<Decoder> dec)
+        : keep(std::move(keep)), d(std::move(dec)), rate(d->rate), channels(d->channels), width(d->width), frames(d->frames),
+          chained(d->chained), exact(d->exact) {}
+
+    Decoder &open() {
+        if (!d) {
+            throw nb::value_error("the decoder is closed");
+        }
+        return *d;
+    }
 };
 
 // n frames or all that is left, decoded straight into the bytes python gets
 // the header can lie about frames, so unless d.exact it is only used for n frames and the whole file comes in pieces
 static nb::bytes take(Stream &s, int64_t n) {
-    Decoder &d = *s.d;
-    size_t fw = d.channels * d.width;
+    size_t fw = s.channels * s.width;
     uint64_t left = n >= 0 ? (uint64_t)n : UINT64_MAX;
-    size_t room = (n < 0 ? (d.exact ? d.frames : 0) : std::min<uint64_t>(left, d.exact ? d.frames : ((size_t)64 << 20) / fw)) * fw, got = 0;
+    size_t room = (n < 0 ? (s.exact ? s.frames : 0) : std::min<uint64_t>(left, s.exact ? s.frames : ((size_t)64 << 20) / fw)) * fw, got = 0;
     nb::object out = blank(room);
     std::vector<std::string> rest; // pieces, one string that grows would copy itself and hold twice the memory
     size_t more = 0;
@@ -146,6 +161,7 @@ static nb::bytes take(Stream &s, int64_t n) {
         Cancel cancel = interrupt();
         nb::gil_scoped_release g;
         std::lock_guard<std::mutex> hold(s.lock);
+        Decoder &d = s.open();
         size_t step = std::max<size_t>(1, ((size_t)16 << 20) / fw);
         while (got < room) {
             cancel();
@@ -198,7 +214,7 @@ NB_MODULE(_pydub2, m) {
                 nb::gil_scoped_release g;
                 d = open(buf, len);
             }
-            new (s) Stream{data, std::move(d)};
+            new (s) Stream(data, std::move(d));
         })
         .def("__init__", [](Stream *s, std::filesystem::path path) {
             std::unique_ptr<Decoder> d;
@@ -206,17 +222,26 @@ NB_MODULE(_pydub2, m) {
                 nb::gil_scoped_release g;
                 d = open(path);
             }
-            new (s) Stream{nb::bytes(), std::move(d)};
+            new (s) Stream(nb::bytes(), std::move(d));
         })
-        .def_prop_ro("rate", [](Stream &s) { return s.d->rate; })
-        .def_prop_ro("channels", [](Stream &s) { return s.d->channels; })
-        .def_prop_ro("width", [](Stream &s) { return s.d->width; })
-        .def_prop_ro("frames", [](Stream &s) { return s.d->frames; })
-        .def_prop_ro("chained", [](Stream &s) { return s.d->chained; })
+        .def_prop_ro("rate", [](Stream &s) { return s.rate; })
+        .def_prop_ro("channels", [](Stream &s) { return s.channels; })
+        .def_prop_ro("width", [](Stream &s) { return s.width; })
+        .def_prop_ro("frames", [](Stream &s) { return s.frames; })
+        .def_prop_ro("chained", [](Stream &s) { return s.chained; })
         .def("seek", [](Stream &s, uint64_t frame) {
             nb::gil_scoped_release g;
             std::lock_guard<std::mutex> hold(s.lock);
-            s.d->seek(frame);
+            s.open().seek(frame);
+        })
+        // lets go of the file now and not when python frees the object. reads and seeks raise ValueError after it
+        .def("close", [](Stream &s) {
+            std::unique_ptr<Decoder> d;
+            {
+                nb::gil_scoped_release g;
+                std::lock_guard<std::mutex> hold(s.lock);
+                d = std::move(s.d);
+            }
         })
         .def("read", &take, nb::arg("n") = -1);
 
@@ -228,8 +253,8 @@ NB_MODULE(_pydub2, m) {
             nb::gil_scoped_release g;
             d = open(buf, len);
         }
-        Stream s{data, std::move(d)};
-        return nb::make_tuple(take(s, -1), s.d->rate, s.d->channels, s.d->width);
+        Stream s(data, std::move(d));
+        return nb::make_tuple(take(s, -1), s.rate, s.channels, s.width);
     });
 
     m.def("encode", [](nb::bytes data, int rate, int channels, int width, std::string format, int bitrate,

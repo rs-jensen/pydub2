@@ -7,10 +7,13 @@ import re
 import struct
 import subprocess
 import sys
+import threading
 
 import pytest
 
-from pydub2 import AudioSegment
+import _pydub2
+import pydub2
+from pydub2 import AudioSegment, utils
 from pydub2.exceptions import CouldntDecodeError
 
 ff = "/opt/homebrew/bin/ffmpeg"
@@ -162,36 +165,121 @@ t = [threading.Thread(target=work, args=(k,)) for k in range(4)]
     assert r.returncode == 0, r.stderr[-300:]
 
 
-def open_files():
-    out = 0
-    for fd in range(256):
+def held(path):
+    # counting the open files is disturbed by other threads, so look for this one file
+    if sys.platform == "win32":
+        # a file the C runtime has open cant be renamed there
         try:
-            os.fstat(fd)
-            out += 1
+            os.rename(path, path + ".x")
+        except PermissionError:
+            return True
+        os.rename(path + ".x", path)
+        return False
+    want = os.stat(path)
+    for fd in range(4096):
+        try:
+            st = os.fstat(fd)
         except OSError:
-            pass
-    return out
+            continue
+        if (st.st_dev, st.st_ino) == (want.st_dev, want.st_ino):
+            return True
+    return False
 
 
-@pytest.mark.parametrize("how", ["unstarted", "partly", "all", "dropped", "unstarted dropped", "all closed"])
-def test_the_file_is_let_go_with_the_generator(tmp_path, how):
-    path = tmp_path / "a.wav"
-    AudioSegment.silent(3000, 8000).export(str(path), "wav")
-    before = open_files()
-    # the file has to go when the last reference does, not when the cycle collector gets to it
+@pytest.fixture
+def wav(tmp_path):
+    # the file has to go when the code says so, not when the cycle collector gets to it
+    path = str(tmp_path / "a.wav")
+    AudioSegment.silent(3000, 8000).export(path, "wav").close()
+    was = gc.isenabled()
     gc.disable()
-    try:
-        gen = AudioSegment.stream(str(path), chunk_ms=500)
-        if not how.startswith("unstarted"):
-            next(gen)
-        if how.startswith("all"):
-            assert len(list(gen)) == 5
-        if how.endswith("dropped"):
-            gen = None
-        elif how != "all":
-            gen.close()
-        assert open_files() == before
-    finally:
+    yield path
+    if was:
         gc.enable()
     # on windows a file that is still open cant be removed
     os.remove(path)
+
+
+def test_held_sees_an_open_file(wav):
+    d = _pydub2.Decoder(wav)
+    assert held(wav)
+    del d
+    assert not held(wav)
+
+
+@pytest.mark.parametrize("how", ["unstarted", "partly", "all", "dropped", "unstarted dropped", "all closed"])
+def test_the_file_is_let_go_with_the_generator(wav, how):
+    gen = AudioSegment.stream(wav, chunk_ms=500)
+    assert held(wav)
+    if not how.startswith("unstarted"):
+        next(gen)
+    if how.startswith("all"):
+        assert len(list(gen)) == 5
+    if how.endswith("dropped"):
+        gen = None
+    elif how != "all":
+        gen.close()
+    assert not held(wav)
+
+
+def test_the_file_is_let_go_when_the_caller_keeps_the_error(wav, monkeypatch):
+    # the traceback holds the frames and all they opened
+    with pytest.raises(ValueError) as at_call:
+        AudioSegment.stream(wav, start_second=-1)
+    assert not held(wav)
+    gen = AudioSegment.stream(wav, chunk_ms=500)
+    with pytest.raises(RuntimeError) as thrown:
+        gen.throw(RuntimeError("stop"))
+    assert not held(wav)
+    monkeypatch.setattr(pydub2, "max_duration", 1)
+    gen = AudioSegment.stream(wav, chunk_ms=500)
+    with pytest.raises(CouldntDecodeError) as in_stream:
+        list(gen)
+    assert not held(wav)
+    with pytest.raises(CouldntDecodeError) as in_load:
+        AudioSegment.from_file(wav)
+    assert in_load.value.reason == "too_long"
+    assert not held(wav)
+    monkeypatch.setattr(utils, "read_capped", lambda d, n: 1 / 0)
+    empty = wav + ".empty.wav"
+    AudioSegment.empty().export(empty, "wav").close()
+    with pytest.raises(ZeroDivisionError) as in_info:
+        utils._native_info(io.BytesIO(), empty)
+    assert not held(empty)
+    os.remove(empty)
+    del at_call, thrown, in_stream, in_load, in_info
+
+
+def test_decoder_close(wav):
+    d = _pydub2.Decoder(wav)
+    assert len(d.read(100)) == 200
+    d.close()
+    assert not held(wav)
+    d.close()
+    for f in (d.read, lambda: d.read(10), lambda: d.seek(0)):
+        with pytest.raises(ValueError, match="closed"):
+            f()
+    assert (d.rate, d.channels, d.width, d.frames, d.chained) == (8000, 1, 2, 24000, False)
+    with open(wav, "rb") as f:
+        d = _pydub2.Decoder(f.read())
+    d.close()
+    with pytest.raises(ValueError, match="closed"):
+        d.read()
+
+
+def test_close_while_another_thread_reads(wav):
+    d = _pydub2.Decoder(wav)
+    out = []
+
+    def work():
+        try:
+            while True:
+                d.seek(0)
+                d.read(2000)
+        except ValueError as e:
+            out.append(str(e))
+    t = [threading.Thread(target=work) for _ in range(4)]
+    [x.start() for x in t]
+    d.close()
+    [x.join() for x in t]
+    assert out == ["the decoder is closed"] * 4 and not held(wav)

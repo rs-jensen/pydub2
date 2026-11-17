@@ -141,7 +141,10 @@ def check_file(path):
     try:
         try:
             d = _pydub2.Decoder(path)
-            got = len(utils.read_capped(d, -1)) // (d.channels * d.width)
+            try:
+                got = len(utils.read_capped(d, -1)) // (d.channels * d.width)
+            finally:
+                d.close()
             native = not pydub2.strict and not (d.chained and _ffmpeg.find(AudioSegment.converter))
         except RuntimeError:
             pass

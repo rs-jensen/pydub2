@@ -777,6 +777,7 @@ class AudioSegment(object):
         tried = False
         if not pydub2.strict and (own or (codec is None and parameters is None)) and not cut:
             tried = True
+            d = None
             try:
                 d = _pydub2.Decoder(filename if data is None else data)
                 if d.chained and _ffmpeg.find(cls.converter):
@@ -793,7 +794,9 @@ class AudioSegment(object):
                     try:
                         cut_at, stray = _own_wav(head, len(data) if data is not None else os.path.getsize(filename), read_at)
                         if cut_at is not None:
-                            d = _pydub2.Decoder(read_at(0, cut_at))
+                            part = _pydub2.Decoder(read_at(0, cut_at))
+                            d.close()
+                            d = part
                     finally:
                         if fh is not None:
                             fh.close()
@@ -816,6 +819,10 @@ class AudioSegment(object):
                     return obj[start_second*1000:(start_second+duration)*1000]
             except RuntimeError:
                 pass
+            finally:
+                # an error the caller holds on to keeps this frame, the file must not stay open with it
+                if d is not None:
+                    d.close()
 
         if tried and _ffmpeg.find(cls.converter) is None and any(is_format(f) for f in ("wav", "flac", "mp3", "ogg", "opus")):
             raise tagged(CouldntDecodeError("cant read this file"), sniff(head), "cant_decode")
@@ -858,22 +865,27 @@ class AudioSegment(object):
                 return f(*args)
             except RuntimeError:
                 raise CouldntDecodeError("cant read this file")
-        own = False
-        if filename is not None and filename.lower().endswith(".wav"):
-            with open(filename, "rb") as f:
-                own = _pydub_wav(f.read(65536))
-        span = _span(d, own, start_second, duration)
-        if not span:
-            raise ValueError("start_second and duration have to be plain numbers, 0 or more")
-        start, n, final = span
-        fw = d.channels * d.width
-        step = int(chunk_ms * (d.rate / 1000.0))
-        if step < 1:
-            raise ValueError("chunk_ms is too small")
-        if start:
-            run(d.seek, start)
+        try:
+            own = False
+            if filename is not None and filename.lower().endswith(".wav"):
+                with open(filename, "rb") as f:
+                    own = _pydub_wav(f.read(65536))
+            span = _span(d, own, start_second, duration)
+            if not span:
+                raise ValueError("start_second and duration have to be plain numbers, 0 or more")
+            start, n, final = span
+            fw = d.channels * d.width
+            step = int(chunk_ms * (d.rate / 1000.0))
+            if step < 1:
+                raise ValueError("chunk_ms is too small")
+            if start:
+                run(d.seek, start)
+        except BaseException:
+            d.close()
+            raise
 
-        def chunks(d):
+        def chunks():
+            # the file is closed here and not left to the garbage collector, an error the caller keeps holds this frame
             try:
                 yield  # primed below, see there
                 prev = run(d.read, step if n < 0 else min(step, n))
@@ -895,11 +907,10 @@ class AudioSegment(object):
                 for i in range(0, len(tail), step * fw):
                     yield cls._segment(d, tail[i:i + step * fw])
             finally:
-                # early python 3.12 releases close a generator outside a try without clearing its locals
-                del d
+                d.close()
 
-        # a generator closed before it starts never runs the finally, and python 3.12 then keeps the file open
-        gen = chunks(d)
+        # python 3.12 does not run or clear a generator that is closed before it starts, so it starts here
+        gen = chunks()
         next(gen)
         return gen
 

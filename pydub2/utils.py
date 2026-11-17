@@ -805,9 +805,14 @@ def _mp3_tags(f, size):
 def _native_info(f, source):
     try:
         d = _pydub2.Decoder(source)
+    except RuntimeError:
+        return None
+    try:
         frames = d.frames or len(read_capped(d, -1)) // (d.channels * d.width)
     except RuntimeError:
         return None
+    finally:
+        d.close()
     rate, channels = d.rate, d.channels
     f.seek(0, 2)
     size = f.tell()
