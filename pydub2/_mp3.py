@@ -92,6 +92,8 @@ def encode(data, rate, channels, width, bitrate=None, tags=None, id3v2_version="
         return None
     # ffmpeg picks the nearest rate lame can do
     out_rate = min(RATES, key=lambda r: abs(r - out_rate))
+    if out_rate > 256 * rate:
+        return None
 
     # ffmpeg mixes and resamples before lame too, so do the same here
     if out_channels == 1 and channels == 2:

@@ -774,8 +774,10 @@ class AudioSegment(object):
         cut = (start_second is not None or duration is not None) and head[:4] == b"OggS" and len(head) > 27 and \
             head[27 + head[26]:][:7] == b"\x01vorbis" and _ffmpeg.find(cls.converter)
 
+        # pydub hands anything else to ffmpeg
+        plain = all(v is None or type(v) in (int, float) for v in (start_second, duration))
         tried = False
-        if not pydub2.strict and (own or (codec is None and parameters is None)) and not cut:
+        if not pydub2.strict and (own or (codec is None and parameters is None)) and not cut and plain:
             tried = True
             try:
                 d = _pydub2.Decoder(filename if data is None else data)
@@ -990,15 +992,20 @@ class AudioSegment(object):
             out_f.seek(0)
             return out_f
 
+        # a partial last frame is dropped, the encoders take whole frames only
+        fw = self.channels * self.sample_width
+        pcm = self._data[:len(self._data) // fw * fw]
+
         # wav ignores tags and bitrate in pydub too
         if codec is None and parameters is None and (
-                format == "wav" or (format in ("flac", "ogg", "opus") and cover is None and not pydub2.strict)):
+                format == "wav" or (format in ("flac", "ogg", "opus") and cover is None and not pydub2.strict)) and \
+                not (format == "opus" and self.frame_rate < 100):
             rate = 0
             if bitrate and format in ("ogg", "opus"):
-                bitrate = str(bitrate).lower()
+                bitrate = str(bitrate).strip().lower()
                 unit = {"k": 1000, "m": 1000000}.get(bitrate[-1])
                 rate = int(float(bitrate[:-1]) * unit) if unit else int(bitrate)
-            data, width = self._data, self.sample_width
+            data, width = pcm, self.sample_width
             if format == "flac" and width == 4:
                 # ffmpeg writes 32 bit audio as 24 bit flac
                 data, width = _pydub2.lin2lin(data, 4, 3), 3
@@ -1034,7 +1041,7 @@ class AudioSegment(object):
 
         if format == "mp3" and codec is None and cover is None and not pydub2.strict:
             if _mp3.available():
-                mp3 = _mp3.encode(self._data, self.frame_rate, self.channels, self.sample_width,
+                mp3 = _mp3.encode(pcm, self.frame_rate, self.channels, self.sample_width,
                                   bitrate, tags, id3v2_version, parameters, self.converter)
                 if mp3 is not None:
                     out_f.write(mp3)
@@ -1044,7 +1051,7 @@ class AudioSegment(object):
                 raise tagged(FileNotFoundError("ffmpeg not found, pip install pydub2-mp3 to write mp3 without it"),
                              "mp3", "needs_ffmpeg", 'pip install "pydub2[mp3]"')
 
-        wav = _encode(self._data, self.frame_rate, self.channels, self.sample_width, "wav")
+        wav = _encode(pcm, self.frame_rate, self.channels, self.sample_width, "wav")
         out_f.write(_ffmpeg.from_wav(self.converter, wav, format, codec, bitrate, parameters, tags,
                                      id3v2_version, cover))
         out_f.seek(0)
