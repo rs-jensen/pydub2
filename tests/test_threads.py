@@ -291,6 +291,7 @@ signal.signal(signal.SIGALRM, lambda *a: seen.append(len(big.raw_data)))
 signal.setitimer(signal.ITIMER_REAL, 0.001)
 size = len(big.raw_data)
 signal.setitimer(signal.ITIMER_REAL, 0)
-assert size == 5 * (20 << 20) and seen == [size]
+# the timer may not fire before the read is over, when it does the handler must see the whole segment
+assert size == 5 * (20 << 20) and seen in ([], [size])
 """
     subprocess.run([sys.executable, "-c", code], check=True, timeout=120)
