@@ -67,6 +67,7 @@ This page lists where pydub2 does something other than pydub 0.25.1. The short v
 - Exported ogg, opus and flac files never match ffmpeg byte for byte, but they use its settings. opus is unconstrained vbr at 64k per stream plus 32k per coupled pair (96k stereo). vorbis is q3, or ABR without slow rate management when a bitrate is given. flac is level 5 with ffmpeg's block size.
 - Sizes are within a few percent of ffmpeg's. opus at 16 kHz is within 7%. flac is about 8 kB smaller because we write no padding block.
 - opus: the OpusHead input rate is the real rate, where ffmpeg writes the rate it resampled to (48000 for 44100). The tags name libopusenc where ffmpeg's say Lavf and Lavc.
+- opus below 100 Hz raises `CouldntEncodeError`, because libopusenc corrupts memory when it resamples up from so low. ffmpeg encodes down to 1 Hz.
 - vorbis tags name libVorbis. A vorbis file has more, smaller ogg pages than ffmpeg's. The last granule is the input length. ffmpeg's own decoder can read vorbis a few ms too long.
 - mp3 written by `pydub2_mp3` always starts with an Info frame carrying the encoder delay and padding, so the file reads back at the length it was written with. That includes low constant bitrates, where lame has no room for its own and ffmpeg uses a bigger frame. The crc fields of that frame are left 0 when lame did not write it.
 - With `pydub2_mp3` and `tags`, the id3 tag is version 2.3 when `id3v2_version="3"` is asked for or ffmpeg is missing. Otherwise ffmpeg writes the default 2.4.
