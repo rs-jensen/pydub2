@@ -1,4 +1,5 @@
 import array
+import gc
 import io
 import os
 import pathlib
@@ -172,20 +173,25 @@ def open_files():
     return out
 
 
-@pytest.mark.parametrize("how", ["unstarted", "partly", "all", "dropped"])
+@pytest.mark.parametrize("how", ["unstarted", "partly", "all", "dropped", "unstarted dropped", "all closed"])
 def test_the_file_is_let_go_with_the_generator(tmp_path, how):
     path = tmp_path / "a.wav"
     AudioSegment.silent(3000, 8000).export(str(path), "wav")
     before = open_files()
-    gen = AudioSegment.stream(str(path), chunk_ms=500)
-    if how != "unstarted":
-        next(gen)
-    if how == "all":
-        assert len(list(gen)) == 5
-    elif how == "dropped":
-        gen = None
-    else:
-        gen.close()
-    assert open_files() == before
+    # the file has to go when the last reference does, not when the cycle collector gets to it
+    gc.disable()
+    try:
+        gen = AudioSegment.stream(str(path), chunk_ms=500)
+        if not how.startswith("unstarted"):
+            next(gen)
+        if how.startswith("all"):
+            assert len(list(gen)) == 5
+        if how.endswith("dropped"):
+            gen = None
+        elif how != "all":
+            gen.close()
+        assert open_files() == before
+    finally:
+        gc.enable()
     # on windows a file that is still open cant be removed
     os.remove(path)
