@@ -2,27 +2,23 @@
 
 What changed in each release.
 
-## [Unreleased]
-
-### Added
-
-- `python -m pydub2 doctor` prints the pydub2 version, the formats that work without ffmpeg, which ffmpeg and ffprobe are used and where they come from, strict mode, whether `import pydub` gives pydub2 or the real pydub, and the command that fixes each missing piece. It exits with 1 when the basics do not work. `--json` prints the same as JSON.
-- `python -m pydub2 doctor FILE...` says what each file is from its first bytes, whether it loads built in or through ffmpeg, and why it does not when it fails (no ffmpeg, a playlist, not audio, longer than `max_duration`). It notices a truncated file and an mp3 with junk in front.
-- `python -m pydub2 doctor --scan DIR` reads the Python files under DIR with `ast`, without running them, and lists what behaves differently in pydub2, with file and line.
-- `CouldntDecodeError`, `CouldntEncodeError` and the `FileNotFoundError` for a missing ffmpeg have the attributes `format`, `reason` and `hint` for tools. The messages are the same as before.
-
 ## [0.0.2] - 2026-11-17
 
 ### Added
 
+- `python -m pydub2 doctor` prints the pydub2 version, the formats that work without ffmpeg, which ffmpeg and ffprobe are used and where they come from, strict mode, whether `import pydub` gives pydub2 or the real pydub, and the command that fixes each missing piece. It exits with 1 when the basics do not work. `--json` prints the same as JSON.
+- `python -m pydub2 doctor FILE...` says what each file is from its first bytes, whether it loads built in or through ffmpeg, and why it does not when it fails (no ffmpeg, damaged, empty, text, a playlist, longer than `max_duration`, not a regular file). It notices a truncated wav, flac, ogg and opus file, a truncated mp3 that has a Xing or Info header, and an mp3 with junk in front.
+- `python -m pydub2 doctor --scan DIR` reads the Python files under DIR with `ast`, without running them, and lists what behaves differently in pydub2, with file and line. Files it cannot read or parse are listed, and a path that does not exist is an error.
+- `CouldntDecodeError`, `CouldntEncodeError` and the `FileNotFoundError` for a missing ffmpeg have the attributes `format`, `reason` and `hint` for tools. The messages are the same as before.
+- `playback.play_async` returns a handle with `stop()`, `wait()` and `is_playing()`. Sounds still playing are stopped when the handle is dropped or the interpreter exits. `playback.play` is unchanged.
 - `pydub2.strict = True`, or `PYDUB2_STRICT=1` in the environment, makes loads, partial loads, `mediainfo` and exports use ffmpeg and ffprobe like pydub, so the samples and the exported bytes are the same as pydub 0.25.1 gives. It needs ffmpeg, and raises pydub's error with a note when it is missing. The limits for untrusted files (no URLs or playlists, `max_duration`, `ffmpeg_timeout`) stay on. It is off by default.
 - `pip install "pydub2[ffmpeg]"` pulls an ffmpeg binary from the `imageio-ffmpeg` package. pydub2 uses it for m4a, aac, wma and video files when `AudioSegment.converter` is not set and no ffmpeg is on `PATH`.
 
 ### Changed
 
-- Loading ogg vorbis, opus and flac needs about half the memory it did: the peak is now close to the size of the decoded audio. 10 minutes of ogg went from 454 to 234 MiB and of flac from 244 to 126 MiB. This also holds with `pydub2.max_duration` set.
+- Loading ogg vorbis, opus and flac needs about half the memory it did: the peak is now close to the size of the decoded audio. 10 minutes of ogg now peak at 237 MiB and of flac at 133 MiB, about half of before. This also holds with `pydub2.max_duration` set.
 - `detect_speech` needs a fixed amount of extra memory, not 3 times the audio. On 40 minutes it went from 1.3 GB to 19 MB. The ranges are the same.
-- Writing opus from 44.1 kHz audio on arm64 is about 40 percent faster. 10 minutes took 9.2 s and now take 5.3 s.
+- Writing opus from 44.1 kHz audio on arm64 is about 40 percent faster. 10 minutes now take about 6.2 s.
 - `overlay` is 3 times faster and `normalize` and `apply_gain` are 1.9 times faster on 60 s of audio.
 - The `FileNotFoundError` for a missing ffmpeg says what it looked for, and suggests the `ffmpeg` extra only when `AudioSegment.converter` is not set.
 - `normalize(seg, target_lufs=...)` stops the gain at full scale minus `headroom`, so a quiet file with high peaks ends below the target and does not clip.
@@ -39,6 +35,7 @@ What changed in each release.
 - A converter path in another case, like `C:\ffmpeg\bin\FFMPEG.EXE`, is found on Windows.
 - `AudioSegment.stream` lets go of the file when the generator ends or is closed, so it can be deleted on Windows.
 - A tag too long for the Windows command line raises `CouldntEncodeError` and not a raw `OSError`.
+- `AudioSegment.stream` now closes the file when the generator is closed before the first chunk, which left it open on Python 3.12.
 
 ### Security
 
@@ -62,7 +59,7 @@ The first release.
 
 ### New functions
 
-- `AudioSegment.stream(path, chunk_ms=10000)` reads a long wav, flac, mp3, ogg or opus file in pieces and holds only the current piece in memory.
+- `AudioSegment.stream(file, chunk_ms=10000, start_second=None, duration=None)` reads a long wav, flac, mp3, ogg or opus file in pieces and holds only the current piece in memory.
 - `AudioSegment.from_numpy(array, frame_rate)` and `to_numpy()` move audio to and from numpy. Arrays are int8, int16 or int32, or floats between -1 and 1.
 - `seg.loudness()` gives integrated loudness in LUFS (EBU R128), and `effects.normalize(seg, target_lufs=-16)` normalizes to a target.
 - `silence.detect_speech` and `silence.split_on_speech` find speech with the Silero VAD model, which is built into the extension. They need no onnxruntime and no torch.
@@ -74,7 +71,7 @@ The first release.
 
 - The Python API is pydub 0.25.1's. `raw_data`, `dBFS`, slicing, `len` and `get_array_of_samples()` give the same numbers. Samples are kept as integer pcm, like in pydub.
 - A copy of pydub's own test suite runs against pydub2.
-- Python 3.13 and newer work without `audioop`. pydub2 does not use it.
+- Python 3.13 and newer work without `audioop`. pydub2 does not need it.
 - The optional `pydub2-compat` package makes `import pydub` load pydub2, even when pydub is installed. `PYDUB2_COMPAT=0` turns it off.
 - ffmpeg, ffprobe and ffplay are looked up on `PATH`, never in the current directory. ffprobe and ffplay are also found next to `AudioSegment.converter`. `AudioSegment.converter` still works.
 - No warning at import when ffmpeg is missing.
@@ -97,6 +94,6 @@ The first release.
 ### Packaging
 
 - One wheel of about 3 MB per platform and Python version, built from C++17 with nanobind. The codec libraries are built in and listed in [THIRD_PARTY.md](THIRD_PARTY.md).
-- Wheels are built for Python 3.9 to 3.14 and the free threaded 3.14 build, on 64 bit Linux, macOS and Windows.
+- Wheels are built for Python 3.9 to 3.14 (Windows arm64 from 3.11) and the free threaded 3.14 build, on 64 bit Linux, macOS and Windows.
 - pydub2 is MIT. LAME is LGPL, so it is in the separate `pydub2-mp3` package and loaded at runtime. See [docs/licensing.md](docs/licensing.md).
 - numpy is not required to install pydub2. You only need it for `to_numpy` and `from_numpy`.
