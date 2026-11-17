@@ -1,5 +1,15 @@
-libFuzzer harness for src/decode.cpp. Needs clang with libFuzzer (linux, or homebrew llvm) and opus, opusfile, ogg built with -fsanitize=fuzzer-no-link,address,undefined.
-Build: clang -c -O1 -g -fsanitize=fuzzer-no-link,address,undefined -Isrc src/third_party/stb_vorbis.c -o stb.o && clang++ -std=c++17 -O1 -g -fsanitize=fuzzer,address,undefined -Isrc tests/fuzz/fuzz_decode.cpp src/decode.cpp stb.o -lopusfile -lopus -logg
-Run: mkdir corpus && cp tests/pydub_suite/data/* corpus/ && ./a.out corpus -max_len=100000 -timeout=10 -rss_limit_mb=2048 -malloc_limit_mb=1024 -jobs=8 -workers=8
+libFuzzer harness for the decoders in src/decode.cpp, and for the writers and the resampler on what they decode, called the way bind.cpp calls them: decode, Decoder read and seek in odd sizes, a load of part of the file, encode with odd settings and resample to odd rates.
+Codec libraries with the sanitizers, from the top folder with a python that has nanobind: F="-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined"
+  cmake -S . -B fz -G Ninja -DCMAKE_BUILD_TYPE=Fuzz -DPython_EXECUTABLE=$(which python3) "-DCMAKE_C_FLAGS=$F" "-DCMAKE_CXX_FLAGS=$F" && ninja -C fz FLAC vorbisenc opusfile opusenc samplerate
+  D=fz/_deps; I="-Isrc -I$D/ogg-build/include $(printf -- "-I$D/%s-src/include " flac vorbis ogg opus opusfile opusenc samplerate)"
+  L="fz/libopusfile.a fz/libopusenc.a $D/flac-build/src/libFLAC/libFLAC.a $D/vorbis-build/lib/libvorbisenc.a $D/vorbis-build/lib/libvorbis.a $D/opus-build/libopus.a $D/ogg-build/libogg.a $D/samplerate-build/src/libsamplerate.a -lm"
+clang with libFuzzer (put fuzzer-no-link into F for the libraries too): clang -c $F -fsanitize=fuzzer-no-link -Isrc src/third_party/stb_vorbis.c -o stb.o && clang++ -std=c++17 $F -fsanitize=fuzzer $I tests/fuzz/fuzz_decode.cpp src/decode.cpp src/encode.cpp src/resample.cpp stb.o $L
+Run: mkdir corpus && cp your wav, flac, ogg, opus and mp3 files corpus/ && ./a.out corpus -max_len=262144 -timeout=20 -rss_limit_mb=2048 -malloc_limit_mb=160 -jobs=8 -workers=8
 A dictionary with RIFF RF64 ds64 "fmt " data LIST fLaC OggS OpusHead OpusTags vorbis ID3 Xing Info LAME Lavf helps, pass it with -dict=.
-Each input is opened from memory and from a file in /dev/shm, read in odd chunk sizes, then seeked and read again. Any report is a bug in src/decode.cpp or in a codec it calls.
+Each input is opened from memory and from a file in /dev/shm, read in odd chunk sizes, then seeked and read again. Any report is a bug in src/ or in a codec it calls.
+gcc has no libFuzzer, fuzz_run.cpp is a small mutating driver for it with edge coverage from -fsanitize-coverage=trace-pc. It fixes the ogg and flac checksums after a mutation, logs its seed, and saves what crashes, hangs, leaks or allocates more than -alloc_mb:
+  C="$F -fsanitize-coverage=trace-pc -D_GLIBCXX_SANITIZE_VECTOR"; gcc -c $C -Isrc src/third_party/stb_vorbis.c -o stb.o && g++ -std=c++17 $C $I -c tests/fuzz/fuzz_decode.cpp src/decode.cpp src/encode.cpp src/resample.cpp
+  g++ -std=c++17 $F -D_GLIBCXX_SANITIZE_VECTOR tests/fuzz/fuzz_run.cpp fuzz_decode.o decode.o encode.o resample.o stb.o $L -o fuzz_run
+  ASAN_OPTIONS=abort_on_error=1:allocator_may_return_null=1:handle_abort=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1:suppressions=tests/fuzz/ubsan.supp LSAN_OPTIONS=suppressions=tests/fuzz/lsan.supp ./fuzz_run -seed 1 -time 1200 -out out corpus
+  ./fuzz_run out/crash-1-4711 runs one input again. ubsan.supp is tests/sanitizer.ignore for gcc, which has no ignore list, lsan.supp a leak in libvorbis 1.3.7 when it sets up some encoders. The libraries can take the coverage flag as well, cmake then needs an empty __sanitizer_cov_trace_pc in CMAKE_EXE_LINKER_FLAGS for its checks.
+regressions/ holds inputs that once failed, tests/test_untrusted.py loads them.

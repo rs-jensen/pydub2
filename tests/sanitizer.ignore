@@ -10,3 +10,6 @@ fun:ogg_sync_pageseek
 fun:src_process
 # stb_vorbis puts a byte into the top of an int when it reads a page header
 fun:vorbis_search_for_page_pushdata
+# dr_flac adds the residual to the prediction in an int, a stream made for it overflows
+[signed-integer-overflow]
+src:*/dr_flac.h
