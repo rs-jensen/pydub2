@@ -4,6 +4,10 @@ What changed in each release.
 
 ## [Unreleased]
 
+### Added
+
+- `pydub2.strict = True`, or `PYDUB2_STRICT=1` in the environment, makes loads, partial loads, `mediainfo` and exports use ffmpeg and ffprobe like pydub, so the samples and the exported bytes are the same as pydub 0.25.1 gives. It needs ffmpeg, and raises pydub's error with a note when it is missing. It is off by default.
+
 ### Faster and lighter
 
 - Loading ogg vorbis, opus and flac needs about half the memory it did: the peak is now close to the size of the decoded audio. 10 minutes of ogg went from 454 to 234 MiB and of flac from 244 to 126 MiB.

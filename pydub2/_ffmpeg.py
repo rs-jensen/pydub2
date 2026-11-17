@@ -25,8 +25,9 @@ def find(converter):
 def run(converter, args, data, what):
     exe = find(converter)
     if exe is None:
-        raise FileNotFoundError("ffmpeg not found, pydub2 needs it for " + what
-                                + ', or pip install "pydub2[ffmpeg]"')
+        raise FileNotFoundError("ffmpeg not found, pydub2 needs it for " + what +
+                                (". strict mode needs ffmpeg" if pydub2.strict else "") +
+                                ', or pip install "pydub2[ffmpeg]"')
     cmd = [exe, "-y", "-nostdin"] + args
     log_conversion(cmd)
     return run_command(cmd, data)
@@ -55,7 +56,7 @@ def _to_wav(converter, path, data, format, codec, parameters, start_second, dura
             # ffprobe says fltp for these even when they are not
             if stream.get("sample_fmt") == "fltp" and stream.get("codec_name") in ["mp3", "mp4", "aac", "webm", "ogg"]:
                 bits = 16
-            if bits not in (8, 16, 24, 32):
+            if bits not in (8, 16, 24, 32) and not pydub2.strict:
                 bits = 16
             out = ["-acodec", "pcm_u8" if bits == 8 else "pcm_s%dle" % bits] + out
     if start_second is not None:
@@ -66,7 +67,8 @@ def _to_wav(converter, path, data, format, codec, parameters, start_second, dura
         duration = limit + 1 if duration is None else min(duration, limit + 1)
     if duration is not None:
         out += ["-t", str(duration)]
-    out += (parameters or []) + ["-"]
+    # pydub puts them after the output, where ffmpeg ignores them
+    out += ["-"] + (parameters or []) if pydub2.strict else (parameters or []) + ["-"]
     p = run(converter, opts + inp + out, None if path is not None else data, format or "this file")
     if p.returncode != 0 or not p.stdout:
         lines = [x.strip() for x in p.stderr.decode(errors="ignore").splitlines() if x.strip()]
@@ -91,7 +93,7 @@ def _to_wav(converter, path, data, format, codec, parameters, start_second, dura
 def from_wav(converter, wav, format, codec=None, bitrate=None, parameters=None, tags=None,
              id3v2_version="4", cover=None):
     codec = codec or {"ogg": "libvorbis"}.get(format)
-    muxer = {"m4a": "ipod", "aac": "adts", "wma": "asf"}.get(format, format)
+    muxer = format if pydub2.strict else {"m4a": "ipod", "aac": "adts", "wma": "asf"}.get(format, format)
     args = ["-f", "wav", "-i", "pipe:0"]
     if cover is not None:
         cover = os.fspath(cover)

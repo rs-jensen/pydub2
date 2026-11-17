@@ -1240,6 +1240,10 @@ class NoConverterTests(unittest.TestCase):
 
     def test_opening_mp3_file_needs_no_ffmpeg(self):
         # pydub raises OSError here, mp3 is built in
+        import pydub2
+        if pydub2.strict:
+            self.assertRaises(OSError, AudioSegment.from_mp3, self.mp3_file)
+            return
         for seg in (AudioSegment.from_mp3(self.mp3_file), AudioSegment.from_file(self.mp3_file),
                     AudioSegment.from_file(self.mp3_file, "mp3"), AudioSegment.from_file(self.mp3_file, format="mp3")):
             self.assertTrue(len(seg) > 1000)

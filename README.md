@@ -129,6 +129,12 @@ it runs, so it needs ffmpeg.
 There are a few deliberate differences. For example `from_file` decodes a file straight from disk, and mp3 and opus
 samples can differ slightly from what ffmpeg gives. They are listed in [docs/differences.md](https://github.com/rs-jensen/pydub2/blob/main/docs/differences.md).
 
+## Exactly like pydub
+
+Set `pydub2.strict = True`, or start Python with `PYDUB2_STRICT=1`, and every load and export that pydub sends to ffmpeg goes to ffmpeg here too, with the command line pydub builds. `raw_data`, `frame_rate`, `channels` and `sample_width` are then the same bytes as pydub 0.25.1 gives, and exported files are the same bytes as pydub writes on the same machine. A wav that pydub reads itself is read the way pydub reads it.
+
+It needs ffmpeg and ffprobe. Without them the call raises the error pydub raises, with a note that strict mode needs ffmpeg. Those calls lose the speed and memory gains. Effects, resampling and everything else that works on samples stay as fast as before. See [docs/migrating.md](https://github.com/rs-jensen/pydub2/blob/main/docs/migrating.md) for when to use it.
+
 ## More
 
 How pydub2 compares with soundfile, PyAV, pedalboard and the others: [docs/comparison.md](https://github.com/rs-jensen/pydub2/blob/main/docs/comparison.md), including timings and memory use measured with the scripts in [bench/](https://github.com/rs-jensen/pydub2/tree/main/bench).

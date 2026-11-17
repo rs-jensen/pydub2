@@ -238,7 +238,7 @@ def source(filepath, read_ahead_limit=-1, exe=None):
         head = b""
     if head.lstrip(b"\xef\xbb\xbf \t\r\n").startswith((b"ffconcat", b"#EXTM3U", b"<MPD", b"<?xml")):
         raise CouldntDecodeError("cant decode this file")
-    return ["-protocol_whitelist", "file"] + allow + ["-i", "file:" + path], None
+    return ["-protocol_whitelist", "file"] + allow + ["-i", path if pydub2.strict else "file:" + path], None
 
 
 # the converter of the class a call was made on, the public lookups take no arguments like pydub's
@@ -854,7 +854,10 @@ def _open(filepath):
 
 
 def _has_prober():
-    return which(get_prober_name())
+    path = which(get_prober_name())
+    if path is None and pydub2.strict:
+        raise FileNotFoundError("%s not found, pydub2 needs it for this. strict mode needs ffmpeg" % get_prober_name())
+    return path
 
 
 def _pcm_bits(name):
