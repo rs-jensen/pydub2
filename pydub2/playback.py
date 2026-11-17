@@ -9,7 +9,6 @@ import atexit
 import os
 import subprocess
 import threading
-import weakref
 from tempfile import NamedTemporaryFile
 from .utils import _using, get_player_name, make_chunks, NOWINDOW, which
 
@@ -90,7 +89,7 @@ def play(audio_segment):
     _play_with_ffplay(audio_segment)
 
 
-_live = weakref.WeakSet()
+_live = set()
 
 
 def _stop_all():
@@ -109,13 +108,14 @@ def _stop_all():
 class PlayHandle:
     """
     Sound that is playing in the background. `stop()` ends it, `wait()` blocks until it
-    has ended, and leaving a `with` block stops it. A handle that is dropped stops too,
-    and so does every sound that is still playing when the interpreter exits.
+    has ended, and leaving a `with` block stops it. A handle that is dropped lets the sound
+    play to its end, and every sound that is still playing when the interpreter exits is stopped.
     """
 
     def __init__(self, halt, done):
         self._halt = halt
         self._done = done
+        _live.difference_update([h for h in _live if h._done.is_set()])
         _live.add(self)
         atexit.unregister(_stop_all)
         atexit.register(_stop_all)
@@ -136,12 +136,6 @@ class PlayHandle:
 
     def __exit__(self, *exc):
         self.stop()
-
-    def __del__(self):
-        try:
-            self._halt()
-        except Exception:
-            pass
 
 
 def _async_simpleaudio(seg):

@@ -92,8 +92,8 @@ utils.mediainfo("song.wav")["sample_rate"]
 
 Play in the background and stop it. `playback.play` still blocks, as in pydub. `play_async`
 returns a handle with `stop()`, `wait(timeout=None)` (True when the sound has ended) and
-`is_playing()`, and leaving a `with` block stops the sound. Keep the handle, the sound also stops
-when the handle is dropped or the interpreter exits. It uses simpleaudio, pyaudio or ffplay,
+`is_playing()`, and leaving a `with` block stops the sound. A dropped handle lets the sound play
+to its end, and the interpreter stops what still plays when it exits. It uses simpleaudio, pyaudio or ffplay,
 in the order `play` does. The ffplay temp file is removed once the process has exited, also on Windows.
 
 ```python
