@@ -222,11 +222,29 @@ def damaged(f, head, fmt):
     # the built in decoder takes this file by its start and still failed, ffmpeg is no fix for that
     if fmt is None or native_format(head) != fmt:
         return False
+    if fmt in ("ogg", "opus"):
+        return not ogg_chained(f)
     if fmt != "wav":
         return True
     tag = next((data[:2] if data[:2] != b"\xfe\xff" else data[24:26] for _, cid, n, data in chunks(f) if cid == b"fmt "), b"")
     # no fmt chunk, or pcm or float which pydub2 reads itself
     return len(tag) < 2 or struct.unpack("<H", tag)[0] in (1, 3)
+
+
+def ogg_chained(f):
+    # a second start page means chained streams, which the built in decoder leaves to ffmpeg
+    at, first = 0, True
+    size = os.fstat(f.fileno()).st_size
+    while at + 27 <= size:
+        f.seek(at)
+        h = f.read(27)
+        if h[:4] != b"OggS":
+            return False
+        if h[5] & 2 and not first:
+            return True
+        first = False
+        at += 27 + h[26] + sum(f.read(h[26]))
+    return False
 
 
 def mp3_missing(f, size, got, rate):
@@ -278,7 +296,8 @@ def missing(f, path, size, fmt, seg):
             if cid == b"fmt " and len(data) >= 12:
                 rate = struct.unpack("<I", data[8:12])[0]
             # shortcut: rf64 keeps the size in ds64, its truncation is not seen, read ds64 if it matters
-            if cid == b"data" and n not in (0, 0xffffffff) and at + 8 + n > size:
+            # ffmpeg and streaming writers leave 0, 0xffffffff or 0x7ffff000 and up when the length is not known, so does a size far past the end
+            if cid == b"data" and n and n < 0x7ffff000 and n <= 100 * size and at + 8 + n > size:
                 return (at + 8 + n - size) / rate if rate else 0
     elif fmt == "flac":
         try:
@@ -308,6 +327,9 @@ def check_file(path):
         size = os.fstat(f.fileno()).st_size
         r["format"] = fmt = what(f, head)
         # ask whether from_file ran ffmpeg, the list is seen by this thread only and nothing is patched
+        if os.path.splitext(path)[1].lower() in (".raw", ".pcm"):
+            r.update(reason="cant_decode", note="raw audio has no header, loading it needs sample_width, frame_rate and channels")
+            return r
         used = []
         token = _ffmpeg._seen.set(used)
         try:
