@@ -56,6 +56,7 @@ if sys.version_info >= (3, 0):
     StringIO = BytesIO
 
 
+# a subclass that has its own version of one of these builds its sums like pydub, through _spawn
 _SPAWN_HOOKS = ("__new__", "__init__", "__setattr__", "__getattr__", "_spawn")
 
 
@@ -450,6 +451,7 @@ class AudioSegment(object):
         return data
 
     def __reduce_ex__(self, protocol):
+        # a copy or a pickle holds the bytes like in pydub, not the parts
         self._data
         return super(AudioSegment, self).__reduce_ex__(protocol)
 
@@ -1400,7 +1402,9 @@ class AudioSegment(object):
                 return seg1._spawn(seg1._data + seg2._data)
             # joined on first read of _data, so seg += chunk in a loop stays linear
             d = seg1.__dict__
-            parts = ("_data" not in d and d.get("_parts")) or [seg1._data]
+            parts = None if "_data" in d else d.get("_parts")
+            if not parts:
+                parts = [seg1._data]
             out = cls.__new__(cls)
             out.__dict__.update(sample_width=seg1.sample_width, frame_rate=seg1.frame_rate, channels=seg1.channels,
                                 _parts=parts + [seg2._data], frame_width=seg1.frame_width)
