@@ -738,16 +738,27 @@ class AudioSegment(object):
 
         if pydub2.strict and wav:
             # what pydub does, it reads any wav it can parse itself
+            obj = None
             try:
                 obj = cls._from_safe_wav(file)
-                if start_second is not None or duration is not None:
-                    obj = obj[None if start_second is None else start_second * 1000:
-                              None if duration is None else ((start_second or 0) + duration) * 1000]
-                if close_file:
-                    file.close()
-                return obj
             except Exception:
                 pass
+            if obj is not None:
+                try:
+                    check_duration(obj.frame_count(), obj.frame_rate)
+                except CouldntDecodeError:
+                    if close_file:
+                        file.close()
+                    raise
+                try:
+                    if start_second is not None or duration is not None:
+                        obj = obj[None if start_second is None else start_second * 1000:
+                                  None if duration is None else ((start_second or 0) + duration) * 1000]
+                    if close_file:
+                        file.close()
+                    return obj
+                except Exception:
+                    pass
         if wav:
             # pydub rewinds a wav
             file.seek(0)

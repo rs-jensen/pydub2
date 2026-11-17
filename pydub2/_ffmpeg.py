@@ -37,7 +37,7 @@ def to_wav(converter, path=None, data=None, format=None, codec=None, parameters=
            start_second=None, duration=None):
     try:
         return _to_wav(converter, path, data, format, codec, parameters, start_second, duration)
-    except (KeyError, ValueError, TimeoutError, struct.error) as e:
+    except (KeyError, TypeError, ValueError, TimeoutError, struct.error) as e:
         raise CouldntDecodeError("cant decode this file: " + str(e))
 
 
