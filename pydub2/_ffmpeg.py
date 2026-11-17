@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import shutil
@@ -10,7 +11,7 @@ from io import BytesIO
 import pydub2
 from .exceptions import CouldntDecodeError, CouldntEncodeError, tagged
 from .logging_utils import log_conversion
-from .utils import _using, check_duration, extra_ffmpeg, limits, mediainfo_json, source, which
+from .utils import _using, check_duration, extra_ffmpeg, limits, mediainfo_json, source, timeout, which
 from .utils import run as run_command
 
 
@@ -47,8 +48,11 @@ def run(converter, args, data, what):
 def to_wav(converter, path=None, data=None, format=None, codec=None, parameters=None,
            start_second=None, duration=None, lim=None):
     lim = lim or limits()
+    timeout()
     try:
         return _to_wav(converter, path, data, format, codec, parameters, start_second, duration, lim)
+    except json.JSONDecodeError:
+        raise tagged(CouldntDecodeError("cant decode this file: ffprobe gave no usable answer"), format, "cant_decode")
     except (KeyError, TypeError, ValueError, TimeoutError, struct.error) as e:
         raise tagged(CouldntDecodeError("cant decode this file: " + str(e)), format,
                      "timeout" if isinstance(e, TimeoutError) else "cant_decode")
@@ -88,11 +92,13 @@ def _to_wav(converter, path, data, format, codec, parameters, start_second, dura
     out += ["-"] + (parameters or []) if pydub2.strict else (parameters or []) + ["-"]
     p = run(converter, opts + inp + out, None if path is not None else data, format or "this file")
     if p.returncode != 0 or not p.stdout:
-        lines = [x.strip() for x in p.stderr.decode(errors="ignore").splitlines() if x.strip()]
+        err = p.stderr.decode(errors="ignore")
+        lines = [x.strip() for x in err.splitlines() if x.strip()]
         # drop the [mp3 @ 0x...] prefix, the address changes every run
         last = re.sub(r"^\[[^\]]*\] ", "", lines[-1]) if lines else "no output"
-        raise tagged(CouldntDecodeError("Decoding failed. ffmpeg returned error code: %d\n\nformat: %s\nffmpeg said: %s"
-                                        % (p.returncode, format or "unknown", last)), format, "cant_decode")
+        # pydub's text, then the last line alone, which doctor shows
+        raise tagged(CouldntDecodeError("Decoding failed. ffmpeg returned error code: %d\n\nOutput from ffmpeg/avlib:\n\n%s"
+                                        "\nffmpeg said: %s" % (p.returncode, err, last)), format, "cant_decode")
     wav = bytearray(p.stdout)
     i = 12
     while wav[i:i + 4] != b"data":
@@ -144,8 +150,9 @@ def from_wav(converter, wav, format, codec=None, bitrate=None, parameters=None, 
             raise tagged(CouldntEncodeError("cant start ffmpeg (%s), tags that are too long for the command line can cause this" % e),
                          format, "cant_start")
         if p.returncode != 0:
-            raise tagged(CouldntEncodeError("cant encode this file: " + p.stderr.decode(errors="ignore")[-500:]),
-                         format, "cant_encode")
+            raise tagged(CouldntEncodeError(
+                "Encoding failed. ffmpeg/avlib returned error code: {0}\n\nCommand:{1}\n\nOutput from ffmpeg/avlib:\n\n{2}"
+                .format(p.returncode, p.args, p.stderr.decode(errors="ignore"))), format, "cant_encode")
         with open(name, "rb") as f:
             return f.read()
     finally:

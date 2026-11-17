@@ -159,6 +159,25 @@ def test_vorbis_cut_off(tmp_path):
         same_as_ffmpeg(tmp_path, "cut.ogg", whole[:cut], 1024)
 
 
+# ffmpeg cannot open a vorbis file cut before the first audio page ends, so pydub raises
+def test_vorbis_cut_in_first_page(tmp_path):
+    path = str(tmp_path / "a.ogg")
+    subprocess.run([ff, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "anoisesrc=a=0.3:d=5", "-c:a", "libvorbis",
+                    path], check=True)
+    with open(path, "rb") as f:
+        whole = f.read()
+    pages = [i for i in range(len(whole)) if whole.startswith(b"OggS", i)]
+    first = next(p for p in pages if struct.unpack("<q", whole[p + 6:p + 14])[0] > 0)
+    for cut in (first, first + 30, pages[pages.index(first) + 1] - 10):
+        path = str(tmp_path / "cut.ogg")
+        with open(path, "wb") as f:
+            f.write(whole[:cut])
+        with pytest.raises(Exception, match="Decoding failed"):
+            AudioSegment.from_file(path)
+        with pytest.raises(pydub2.exceptions.CouldntDecodeError):
+            pydub2.AudioSegment.from_file(path)
+
+
 # ffmpeg uses its own opus decoder, not libopus, so this is only close
 @pytest.mark.parametrize("channels", [1, 2])
 def test_opus(tmp_path, channels):

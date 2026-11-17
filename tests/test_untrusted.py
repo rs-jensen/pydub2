@@ -2,6 +2,7 @@ import io
 import json
 import os
 import shutil
+import signal
 import socket
 import struct
 import subprocess
@@ -800,3 +801,33 @@ def test_odd_limits(tmp_path, monkeypatch):
             assert len(AudioSegment.from_file(path)) == len(AudioSegment.from_file(**raw)) == 1000
             assert sum(len(c) for c in AudioSegment.stream(path)) == 1000
         monkeypatch.setattr(pydub2, name, None)
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    try:
+        with open("/proc/%d/stat" % pid) as f:
+            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except OSError:
+        return True
+
+
+# snap, conda and docker put ffmpeg behind a shell script
+@posix
+def test_timeout_stops_what_a_wrapper_started(tmp_path, monkeypatch):
+    monkeypatch.setattr(pydub2, "ffmpeg_timeout", 0.5)
+    pidfile = tmp_path / "pid"
+    with pytest.raises(TimeoutError):
+        utils.run(["/bin/sh", "-c", 'PATH=/bin:/usr/bin:$PATH; sleep 60 & echo $! > "$0"; wait', str(pidfile)])
+    pid = int(pidfile.read_text())
+    try:
+        end = time.time() + 5
+        while alive(pid) and time.time() < end:
+            time.sleep(0.05)
+        assert not alive(pid)
+    finally:
+        if alive(pid):
+            os.kill(pid, signal.SIGKILL)
