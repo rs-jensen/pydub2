@@ -454,9 +454,10 @@ def test_chained_stream_is_not_damaged(noffmpeg, tmp_path, format):
     chain.write_bytes(one.read_bytes() * 2)
     r = check_file(str(chain))
     assert r["reason"] == "needs_ffmpeg"
-    # a cut stream is still caught
+    # a cut stream is still caught, when more than its first audio page is left
     cut = tmp_path / ("cut." + format)
-    cut.write_bytes(one.read_bytes()[:-100])
+    Sine(440).to_audio_segment(duration=10000).export(str(cut), format=format).close()
+    cut.write_bytes(cut.read_bytes()[:-100])
     assert check_file(str(cut))["reason"] == "truncated"
 
 
