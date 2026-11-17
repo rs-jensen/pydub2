@@ -109,10 +109,25 @@ def test_eq_channel_modes(mode):
     new, old = both(*noise(500, channels=2, seed=5))
     a = pydub2.scipy_effects.eq(new, 1000, 400, mode, "peak", 6)
     assert len(a) == len(new)
+    assert a.raw_data != new.raw_data
     if mode == "L+R":
         assert a.raw_data == pydub.scipy_effects.eq(old, 1000, 400, mode, "peak", 6).raw_data
     if mode == "L":
         assert a.split_to_mono()[1].raw_data == new.split_to_mono()[1].raw_data
+
+
+GAIN = {"L+R": (7.6, 0), "M+S": (10.6, 3), "L": (5.3, 0), "R": (5.3, 0), "M": (10.6, 3), "S": (3, 3)}
+
+
+@pytest.mark.parametrize("mode", GAIN)
+def test_eq_gain_at_the_centre_and_away(mode):
+    pytest.importorskip("scipy")
+    import pydub2.scipy_effects
+    from pydub2.generators import Sine
+    for freq, gain in zip((1000, 6000), GAIN[mode]):
+        seg = Sine(freq, sample_rate=44100).to_audio_segment(1000, volume=-20).set_channels(2)
+        out = pydub2.scipy_effects.eq(seg, 1000, 400, mode, "peak", 6)
+        assert abs((out.dBFS - seg.dBFS) - gain) < 0.3, (mode, freq)
 
 
 @needs_ff

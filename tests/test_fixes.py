@@ -23,10 +23,12 @@ def tone(ms=1000, channels=1, rate=8000):
 
 
 def test_mid_side():
-    seg = tone(200, 2)
+    seg = pydub2.AudioSegment(struct.pack("<8h", 1000, 300, -2000, 500, 3000, -3000, 0, 100) * 20,
+                              sample_width=2, frame_rate=8000, channels=2)
     ms = utils.stereo_to_ms(seg)
     assert ms.channels == 2 and len(ms) == len(seg)
-    assert utils.ms_to_stereo(ms).channels == 2
+    assert list(ms.get_array_of_samples())[:8] == [1300, 700, -1500, -2500, 0, 6000, 100, -100]
+    assert list(utils.ms_to_stereo(ms).get_array_of_samples())[:8] == [1415, 424, -2832, 707, 4247, -4248, 0, 141]
 
 
 @needs_ff

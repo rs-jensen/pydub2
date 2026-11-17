@@ -223,7 +223,7 @@ def test_cover_is_not_fetched():
 
 def test_detect_silence_memory():
     mb = peak_mb("_pydub2.detect_silence(bytes(50000), 1, 1, 1, 1000, -40, 1)")
-    assert mb < 150
+    assert mb < 50
 
 
 def test_detect_silence_too_long():
@@ -467,13 +467,13 @@ def test_wav_byte_rate_overflow():
 def test_flac_many_channels_does_not_allocate():
     with pytest.raises(RuntimeError):
         _pydub2.encode(b"", 44100, 65535, 2, "flac")
-    assert peak_mb("try:\n _pydub2.encode(b'', 44100, 65535, 2, 'flac')\nexcept RuntimeError: pass") < 400
+    assert peak_mb("try:\n _pydub2.encode(b'', 44100, 65535, 2, 'flac')\nexcept RuntimeError: pass") < 50
 
 
 def test_resample_checks_the_ratio_first():
     with pytest.raises(RuntimeError):
         _pydub2.resample(bytes(200000), 8000, 1, 2, 8000 * 1000)
-    assert peak_mb("try:\n _pydub2.resample(bytes(200000), 8000, 1, 2, 8000 * 1000)\nexcept RuntimeError: pass") < 150
+    assert peak_mb("try:\n _pydub2.resample(bytes(200000), 8000, 1, 2, 8000 * 1000)\nexcept RuntimeError: pass") < 50
 
 
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), -float("inf")])

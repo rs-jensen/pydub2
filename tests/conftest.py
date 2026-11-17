@@ -7,6 +7,7 @@ import pytest
 from pydub2.exceptions import CouldntDecodeError
 
 
+OPTIONAL = {"libmp3lame", "libvorbis", "libopus", "libfdk_aac", "libshine", "aac"}
 HAVE_FFMPEG = shutil.which("ffmpeg") is not None
 
 
@@ -24,12 +25,12 @@ def why(e):
     # pydub2 raises this when it cant decode natively and has no ffmpeg to fall back on
     if e.errisinstance(CouldntDecodeError) and "cant read this file" in msg and not HAVE_FFMPEG:
         return "no ffmpeg"
-    if "Encoder not found" in msg or "Unknown encoder" in msg:
-        return "ffmpeg lacks an encoder"
-    if e.errisinstance(subprocess.CalledProcessError) and isinstance(cmd, list) and "-c:a" in cmd[:-1]:
-        name = cmd[cmd.index("-c:a") + 1]
-        if name not in encoders(cmd[0]):
-            return "ffmpeg lacks " + name
+    if e.errisinstance(subprocess.CalledProcessError) and isinstance(cmd, list):
+        for flag in ("-acodec", "-c:a"):
+            if flag in cmd[:-1]:
+                name = cmd[cmd.index(flag) + 1]
+                if name in OPTIONAL and name not in encoders(cmd[0]):
+                    return "ffmpeg lacks " + name
 
 
 @pytest.hookimpl(hookwrapper=True)
