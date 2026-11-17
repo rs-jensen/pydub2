@@ -90,6 +90,7 @@ def play(audio_segment):
 
 
 _live = set()
+_live_lock = threading.Lock()
 
 
 def _stop_all():
@@ -116,8 +117,9 @@ class PlayHandle:
     def __init__(self, halt, done):
         self._halt = halt
         self._done = done
-        _live.difference_update([h for h in _live if h._done.is_set()])
-        _live.add(self)
+        with _live_lock:
+            _live.difference_update([h for h in _live if h._done.is_set()])
+            _live.add(self)
         # registered once, and last, so it runs before the other exit handlers
         atexit.unregister(_stop_all)
         atexit.register(_stop_all)
