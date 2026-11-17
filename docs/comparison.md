@@ -24,7 +24,7 @@ I checked everything on 2026-11-16. Versions and dates come from PyPI that day. 
 
 A few notes on cells that need one.
 
-The pydub2 wheel is 3.0 MB on macOS arm64 and 3.2 MB on Windows. The mp3 writer is a separate wheel of about 130 KB because LAME is LGPL.
+The pydub2 wheel is 3.0 MB on macOS arm64 and 3.2 MB on Windows. The mp3 writer is a separate wheel of 130 to 230 KB because LAME is LGPL.
 
 pydub2 reads aiff only through ffmpeg. That is the same as pydub.
 
@@ -34,7 +34,7 @@ Speech detection in pydub2 uses the Silero VAD model, which is built into the ex
 
 ## Speed and size
 
-I timed the libraries on an Apple M2 Pro (macOS 15.7.9, Python 3.13.1, ffmpeg 7.1.1) with pydub 0.25.1, pydub2 0.0.1 (some rows were measured again on later code, see bench/README.md), soundfile 0.14.0, PyAV 19.0.2 and miniaudio 1.73. pydub-lts is within a few percent of pydub in every row, so it is left out. The inputs are generated 44.1 kHz stereo files, speech-like and music-like. Each number is the median of at least 5 runs, each in a fresh process. The machine was not idle, so read differences under 15 percent as a tie. The method, the full table with CPU time for every case and the exact versions are in [bench/README.md](../bench/README.md).
+I timed the libraries on an Apple M2 Pro (macOS 15.7.9, Python 3.13.1, ffmpeg 7.1.1) with pydub 0.25.1, pydub2 0.0.1 (some rows were measured again on later code, see bench/README.md), soundfile 0.14.0, PyAV 19.0.2 and miniaudio 1.73. pydub-lts is left out. It is within a few percent of pydub in every row except reading 10 seconds out of a 10 minute flac, mp3 or ogg file, where it needs 0.14 to 0.15 seconds against 0.20 to 0.40 for pydub. The inputs are generated 44.1 kHz stereo files, speech-like and music-like. Each number is the median of at least 5 runs (3 for the pydub cells that take over a minute), each in a fresh process. The machine was not idle, so read differences under 15 percent as a tie. The method, the full table with CPU time for every case and the exact versions are in [bench/README.md](../bench/README.md).
 
 Seconds of wall time on a 10 minute speech file, lower is better. The music file gives the same picture for loading.
 
@@ -70,7 +70,7 @@ The editing functions only exist in the pydub family. Seconds on the 10 minute f
 | `detect_silence` | 70 | 0.14 |
 | `split_on_silence` | 70 | 0.15 |
 | `seg += chunk`, 1000 times, 60 s file | 1.05, peak 1175 MiB | 0.005, peak 30 MiB |
-| mp3 file to numpy, 60 s | 0.16 | 0.039 with `np.array(get_array_of_samples())`, 0.065 with `to_numpy()` |
+| mp3 file to numpy, 60 s | 0.16 | 0.039 with `np.array(get_array_of_samples())`, 0.037 with `to_numpy()` |
 | numpy to wav file | 0.025 | 0.026 |
 | numpy to mp3 file | 6.5 | 5.8 with `pydub2-mp3`, 6.5 without |
 | `detect_speech` | does not exist | 1.0, peak 106 MiB |
@@ -79,18 +79,19 @@ Where pydub2 is slower or heavier than something else in these runs:
 
 - `overlay` and `normalize` take as long as pydub, which uses the C `audioop`, or a little less. Both are under 0.1 seconds for 10 minutes.
 - Importing it takes 7.5 ms against 4.9 for pydub. soundfile, PyAV and miniaudio take longer than pydub2.
-- Taking 10 seconds out of an ogg file takes 0.50 seconds for a 10 minute file and 0.26 for a 1 minute file, because pydub2 decodes from the start. soundfile needs 0.05, miniaudio 0.06 and PyAV 0.12. pydub needs 0.39, so this is the one row where pydub2 reads slower than pydub. For mp3 and flac the 10 second read takes 0.04 to 0.05 seconds.
+- Taking 10 seconds out of an ogg file takes 0.50 seconds for a 10 minute file and 0.26 for a 1 minute file, because pydub2 decodes from the start. soundfile needs 0.05, miniaudio 0.06 and PyAV 0.12. pydub needs 0.39 and pydub-lts 0.15, so this is the one row where pydub2 reads slower than pydub. For mp3 and flac the 10 second read takes 0.04 to 0.05 seconds.
 - Opus export takes 6.2 seconds for 10 minutes, a little more than ffmpeg through pydub (4.9). It is faster than PyAV (20). This is measured on Apple silicon, where the resampler inside the opus encoder has a neon version.
 - mp3 export with `pydub2-mp3` is about 10 percent behind soundfile (5.8 against 5.2) and 3 percent behind PyAV.
-- Reading mp3 and ogg is a little slower than miniaudio (0.40 against 0.31 for mp3, 0.55 against 0.52 for ogg).
+- Reading mp3 and ogg is a little slower than miniaudio (0.40 against 0.31 for mp3, 0.54 against 0.52 for ogg).
 - Memory: decoding 10 minutes of ogg or opus peaks at 237 to 253 MiB for pydub2 against 131 to 140 for soundfile and 262 to 283 for PyAV. Flac is 133 against 131. Exporting 10 minutes of ogg or opus peaks at about 360 MiB against 164 for pydub.
-- `to_numpy()` is as fast as `np.array(seg.get_array_of_samples())` or faster (0.037 against 0.037 seconds for a 60 second mp3, 0.003 against 0.004 for wav). An earlier run looked slower because it timed the import of numpy.
+
+`to_numpy()` is as fast as `np.array(seg.get_array_of_samples())` or faster (0.037 against 0.037 seconds for a 60 second mp3 in a later run, 0.003 against 0.004 for wav). An earlier run looked slower because it timed the import of numpy.
 
 Size on macOS arm64 with Python 3.13, without numpy:
 
 | | wheel | installed | needs ffmpeg installed |
 |---|---|---|---|
-| pydub | 0.06 MB | 0.4 MB, with `audioop-lts` | for everything except wav |
+| pydub | 0.06 MB, with `audioop-lts` | 0.4 MB, with `audioop-lts` | for everything except wav |
 | pydub2 | 3.0 MB | 4.5 MB | for m4a, aac, wma, aiff and video, and for mp3 writing unless `pydub2-mp3` (0.13 MB more) is installed |
 | soundfile | 1.1 MB | 5.2 MB, 38 MB with the numpy it requires | no |
 | PyAV | 18.6 MB | 47 MB | no |
@@ -116,7 +117,7 @@ Use pydub 0.25.1, or one of its forks, if your code works today, you only touch 
 
 ## What pydub2 does not do yet
 
-I develop it on macOS arm64. The tests run on Linux for every push, and on Windows and macOS when I build the wheels. I have not tried it on a real Windows machine.
+I develop it on macOS arm64. The tests run on Linux, Windows and macOS for every push. I have not tried it on a real Windows machine.
 
 m4a and aac, wma, aiff and video files still go through ffmpeg. `pip install "pydub2[ffmpeg]"` pulls an ffmpeg binary from PyPI if you have none. pydub2 can export m4a and aac when ffmpeg is there. That fails in pydub 0.25.1.
 

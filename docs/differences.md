@@ -46,7 +46,7 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - The stream keys are `index`, `codec_name`, `codec_type`, `codec_tag_string`, `codec_tag`, `sample_fmt`, `sample_rate`, `channels`, `bits_per_sample`, `bits_per_raw_sample` and `duration`. The format keys are `nb_streams`, `format_name` and `size`, and `TAG` when there are tags.
 - Not there: `bit_rate`, `channel_layout`, `start_time`, `duration_ts`, `time_base`, `nb_frames`, `initial_padding`, `probe_score`, `codec_long_name`, `profile`, `disposition` and the rest.
 - All values are strings in `mediainfo`. `duration` is the decoded length. ffprobe's can be a bit longer for mp3 and opus.
-- Other files (m4a, wma, aiff and so on) use `ffmpeg -i`, the one from `AudioSegment.converter`. They only get `index`, `codec_type`, `codec_name`, `bits_per_sample` and `bits_per_raw_sample`. There are no tags, and no `channels`, `sample_rate`, `duration` or `size`.
+- Other files (m4a, wma, aiff and so on) use `ffmpeg -i`, the one from `AudioSegment.converter`. They only get `index`, `codec_type`, `codec_name`, `sample_fmt`, `bits_per_sample` and `bits_per_raw_sample`. There are no tags, and no `channels`, `sample_rate`, `duration` or `size`.
 - For those files the two sample size keys come from the sample format ffmpeg prints. A compressed file gets 32 where ffprobe says 0 and N/A.
 - With ffprobe installed you get all of its keys.
 - The tag reader leaves out `METADATA_BLOCK_PICTURE`, because ffprobe shows it as a video stream. It keeps up to 16 MiB of tag text and 65536 tags, and skips a single value that does not fit.
@@ -67,7 +67,7 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - 24 bit wav gets a plain PCM header, where ffmpeg writes WAVE_FORMAT_EXTENSIBLE and a LIST chunk.
 - flac export writes 8 bit audio as 16 bit and 32 bit audio as 24 bit (the low byte is dropped), like ffmpeg. A file read back has `sample_width` 2 and 4. Flac with `-sample_fmt s32` is 24 bit too.
 - Exported ogg, opus and flac files never match ffmpeg byte for byte, but they use its settings. opus is unconstrained vbr at 64k per stream plus 32k per coupled pair (96k stereo). vorbis is q3, or ABR without slow rate management when a bitrate is given. flac is level 5 with ffmpeg's block size.
-- Sizes are within a few percent of ffmpeg's. opus at 16 kHz is within 7%. flac is about 8 kB smaller because we write no padding block.
+- Sizes are within a few percent of ffmpeg's. opus at 16 kHz is within 7%. flac is within 3 percent for speech, music and noise, sometimes smaller and sometimes larger. Pure sine tones differ more: one test file came out 15 percent smaller and another 33 percent larger. We write no padding block, ffmpeg writes 8 kB.
 - opus: the OpusHead input rate is the real rate, where ffmpeg writes the rate it resampled to (48000 for 44100). The tags name libopusenc where ffmpeg's say Lavf and Lavc.
 - opus below 100 Hz raises `CouldntEncodeError`, because libopusenc corrupts memory when it resamples up from so low. ffmpeg encodes down to 1 Hz.
 - vorbis tags name libVorbis. A vorbis file has more, smaller ogg pages than ffmpeg's. The last granule is the input length. ffmpeg's own decoder can read vorbis a few ms too long.
@@ -81,7 +81,7 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 
 ## Errors
 
-- Where pydub raises `audioop.error` or `wave.Error`, pydub2 raises `ValueError`. That covers `set_sample_width(5)`, `set_frame_rate(0)`, a rate of 0 or below in an export and `get_dc_offset` on 3 channels.
+- Where pydub raises `audioop.error` or `wave.Error`, pydub2 raises `ValueError`. That covers `set_sample_width(5)`, `set_frame_rate(0)`, a rate of 0 or below in an export and `get_dc_offset` on 3 channels with an odd number of frames.
 - `remove_dc_offset` with an offset that does not fit the sample width raises `ValueError` where pydub raises `OverflowError`.
 - A negative width, channel count or rate goes the same way. `set_sample_width(-1)`, `set_frame_rate(-5)` and a wav export with width -1 are `ValueError`. `set_channels(0)` is `ValueError` in both.
 - On a new `AudioSegment` a width, channel count or rate of 0 or below raises the same class as pydub (`ZeroDivisionError`, or `ValueError` from `len`).
@@ -143,7 +143,7 @@ These give a result in pydub without an error, so pydub2 gives the same result.
 
 ## New functions and speed
 
-- `AudioSegment.stream(path, chunk_ms=10000, start_second=None, duration=None)` yields the file in pieces with constant memory. It only works for wav, flac, mp3, ogg and opus. The pieces joined are the same as `from_file` with the same arguments. The exception is `start_second` or `duration` on an ogg vorbis file when ffmpeg is installed: `from_file` then uses ffmpeg and `stream` cuts at the exact sample.
+- `AudioSegment.stream(file, chunk_ms=10000, start_second=None, duration=None)` yields the file in pieces with constant memory. It only works for wav, flac, mp3, ogg and opus. The pieces joined are the same as `from_file` with the same arguments. The exception is `start_second` or `duration` on an ogg vorbis file when ffmpeg is installed: `from_file` then uses ffmpeg and `stream` cuts at the exact sample.
 - `detect_speech` and `split_on_speech` in `pydub2.silence`.
 - `from_mono_audiosegments(..., fill_up=True)` pads shorter segments with silence.
 - `split_on_silence` and `split_on_speech` take `return_ranges=True` and return `(chunk, (start, end))` pairs.

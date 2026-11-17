@@ -54,7 +54,7 @@ This prints `True` with the compat package installed. The same goes for `pydub.u
 
 To turn it off for one run, set `PYDUB2_COMPAT=0` in the environment. The snippet above then prints `False` and the real pydub loads. To turn it off for good, run `pip uninstall pydub2-compat`. If pydub2 cannot be imported, the hook prints one line to stderr and the real pydub is used.
 
-Things to know. `pip list` and `importlib.metadata.version("pydub")` still report the real pydub. `pydub.pyaudioop` and `pydub.audioop` do not exist, because pydub2 has no audioop. The hook needs the `.pth` file to be read, so it does nothing under `python -S`. The full list is in [compat/README.md](../compat/README.md).
+Things to know. `pip list` and `importlib.metadata.version("pydub")` still report the real pydub. `pydub.pyaudioop` and `pydub.audioop` do not exist, because pydub2 does not need audioop. The hook needs the `.pth` file to be read, so it does nothing under `python -S`. The full list is in [compat/README.md](../compat/README.md).
 
 ## mp3
 
@@ -120,7 +120,7 @@ If the sample differences above worry you, turn on strict mode and change nothin
 
 or `pydub2.strict = True` in code. Loading, partial loading, `mediainfo` and exporting then go through ffmpeg and ffprobe like in pydub, with the same command line, so the decoded samples and the exported bytes are the same as pydub's. A wav that pydub reads itself is read the way pydub reads it, also where pydub reads it wrongly (float or a-law wav with an extensible header). When loading, `parameters` go after the output file like in pydub, where ffmpeg ignores them, and `export` without `format` writes mp3 whatever the file name says. `export(format="m4a")` and `"aac"` raise `CouldntEncodeError` as in pydub.
 
-It costs two things. ffmpeg and ffprobe have to be installed, and without them the call raises the error pydub raises, with one sentence added about strict mode. And those calls are as slow and as heavy on memory as in pydub. ffmpeg puts a random stream serial in ogg vorbis and opus files, so two exports of the same audio differ in a few bytes, in pydub as well.
+It costs two things. ffmpeg and ffprobe have to be installed, and without them the call raises `FileNotFoundError` like pydub, with one sentence added about strict mode. And those calls are as slow and as heavy on memory as in pydub. ffmpeg puts a random stream serial in ogg vorbis and opus files, so two exports of the same audio differ in a few bytes, in pydub as well.
 
 Turn it off when you have looked at the differences and are happy with them. A good order is to switch the import with strict on, run your tests, then turn strict off and run them again.
 
@@ -157,11 +157,11 @@ Give it a few files of each format you use. A different length is worth a bug re
 
 ## Troubleshooting
 
-`ModuleNotFoundError: No module named 'pyaudioop'` on Python 3.13 or newer. That is pydub 0.25.1, which needs the removed `audioop` module. pydub2 has no audioop at all, so there is nothing to install. `import pydub2` works on 3.13 and newer as it is.
+`ModuleNotFoundError: No module named 'pyaudioop'` on Python 3.13 or newer. That is pydub 0.25.1, which needs the removed `audioop` module. pydub2 does not need audioop, so there is nothing to install. `import pydub2` works on 3.13 and newer as it is.
 
-`RuntimeWarning: Couldn't find ffmpeg or avconv - defaulting to ffmpeg, but may not work` when you import pydub. pydub2 prints nothing at import. If a call really needs ffmpeg and cannot find it, you get `FileNotFoundError: ffmpeg not found, pydub2 needs it for ...` at that call, with no warning. Install ffmpeg, run `pip install "pydub2[ffmpeg]"` to get one with pip, or use a format pydub2 handles itself. The extra is only used when no ffmpeg is on `PATH` and `AudioSegment.converter` is not set. It has no wheel for Alpine Linux.
+`RuntimeWarning: Couldn't find ffmpeg or avconv - defaulting to ffmpeg, but may not work` when you import pydub. pydub2 prints nothing at import. If a call really needs ffmpeg and cannot find it, you get `FileNotFoundError: ffmpeg not found, pydub2 needs it for ...` at that call, with no warning. Install ffmpeg, run `pip install "pydub2[ffmpeg]"` to get one with pip, or use a format pydub2 handles itself. The extra is only used when no ffmpeg is on `PATH` and `AudioSegment.converter` is not set. `imageio-ffmpeg` has no wheel for Alpine Linux.
 
-`FileNotFoundError: [Errno 2] No such file or directory: 'ffprobe'`. In pydub this happens for every file that is not wav. pydub2 does not run ffprobe to read a file, so reading wav, flac, ogg, opus and mp3 works without it, and m4a and the like work with only ffmpeg installed. `utils.mediainfo` and `mediainfo_json` fall back to `ffmpeg -i` for formats pydub2 cannot read itself, and return only the codec, the stream index and the sample size keys.
+`FileNotFoundError: [Errno 2] No such file or directory: 'ffprobe'`. In pydub this happens for every file that is not wav. pydub2 does not run ffprobe to read a file, so reading wav, flac, ogg, opus and mp3 works without it, and m4a and the like work with only ffmpeg installed. `utils.mediainfo` and `mediainfo_json` fall back to `ffmpeg -i` for formats pydub2 cannot read itself, and return only the codec, the stream index, the sample format and the sample size keys.
 
 `FileNotFoundError` when exporting mp3 or m4a. For mp3, install `"pydub2[mp3]"` or ffmpeg. For m4a and aac you need ffmpeg. The error message says which one.
 

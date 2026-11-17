@@ -19,8 +19,8 @@ Things to know:
 - It needs the `.pth` file to be read, so it does not work with `python -S`. With `pip install --user`
   it does not work under `python -I`. Normal installs and venvs are fine.
 - `pip list` and `importlib.metadata.version("pydub")` still report the real pydub if it is installed.
-- `pydub.pyaudioop` and `pydub.audioop` do not exist and raise ImportError, pydub2 has no audioop.
-- `python -m pydub.something` stops with "No code object available".
+- `pydub.pyaudioop` and `pydub.audioop` do not exist and raise ImportError, because pydub2 does not need audioop.
+- `python -m pydub.utils` and the like stop with "No code object available".
 - Do not run tests that compare against pydub with this installed, they would test pydub2 against itself.
 
 MIT, see [LICENSE](https://github.com/rs-jensen/pydub2/blob/main/compat/LICENSE). The project is at [github.com/rs-jensen/pydub2](https://github.com/rs-jensen/pydub2).
