@@ -5,6 +5,7 @@ import socket
 import struct
 import subprocess
 import sys
+import threading
 import types
 
 import pytest
@@ -399,3 +400,27 @@ def test_scan_order(tmp_path, monkeypatch):
 
     monkeypatch.setattr(os, "scandir", Reversed)
     assert [f["file"] for f in scan(str(tmp_path))["findings"]] == [str(tmp_path / d / "x.py") for d in "abc"]
+
+
+def test_doctor_patches_nothing(tmp_path, monkeypatch):
+    # a load in another thread, or one that is interrupted, must never meet a wrapped _ffmpeg
+    flac, real, seen = tone(tmp_path / "a.flac"), _ffmpeg.to_wav, []
+    load = AudioSegment.from_file.__func__
+
+    def from_file(cls, *args, **kwargs):
+        seen.append(_ffmpeg.to_wav)
+        t = threading.Thread(target=lambda: seen.append(_ffmpeg._seen.get()))
+        t.start()
+        t.join()
+        return load(cls, *args, **kwargs)
+    monkeypatch.setattr(AudioSegment, "from_file", classmethod(from_file))
+    assert check_file(str(flac))["how"] == "natively"
+    assert seen == [real, None] and _ffmpeg._seen.get() is None
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_how_a_file_loads(tmp_path):
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=d=0.5", str(tmp_path / "a.au")], check=True)
+    assert check_file(str(tmp_path / "a.au"))["how"] == "through ffmpeg"
+    assert check_file(str(tone(tmp_path / "a.flac")))["how"] == "natively"
+    assert _ffmpeg._seen.get() is None
