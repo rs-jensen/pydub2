@@ -4,6 +4,7 @@ import shutil
 import struct
 import sys
 import tempfile
+from contextvars import ContextVar
 from io import BytesIO
 
 import pydub2
@@ -11,6 +12,10 @@ from .exceptions import CouldntDecodeError, CouldntEncodeError, tagged
 from .logging_utils import log_conversion
 from .utils import _using, check_duration, extra_ffmpeg, mediainfo_json, source, which
 from .utils import run as run_command
+
+
+# a list here gets every ffmpeg command of this thread, doctor asks this way whether a load used ffmpeg
+_seen = ContextVar("seen", default=None)
 
 
 def find(converter):
@@ -33,6 +38,8 @@ def run(converter, args, data, what):
                      'pip install "pydub2[ffmpeg]"' if name == "ffmpeg" else None)
     cmd = [exe, "-y", "-nostdin"] + args
     log_conversion(cmd)
+    if _seen.get() is not None:
+        _seen.get().append(cmd)
     return run_command(cmd, data)
 
 

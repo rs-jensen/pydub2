@@ -1,12 +1,18 @@
 import json
+import os
 import shutil
+import socket
+import struct
+import subprocess
 import sys
+import threading
+import types
 
 import pytest
 
 import pydub2
 from pydub2 import AudioSegment, _ffmpeg, _mp3, utils
-from pydub2.__main__ import main, scan
+from pydub2.__main__ import FFMPEG_FIX, check_file, main, scan
 from pydub2.exceptions import CouldntDecodeError
 from pydub2.generators import Sine
 
@@ -177,7 +183,7 @@ def test_scan(capsys, tmp_path):
     assert r["need_change"] == r["imports"] + 4 and r["imports"] == 3
     code, out = run(capsys, "--scan", str(tmp_path))
     assert code == 0 and "app.py:7: AudioSegment.ffprobe does nothing" in out
-    assert out.splitlines()[-3] == "1 of 4 python files use pydub"
+    assert out.splitlines()[-3] == "1 of 4 python files use pydub, 2 could not be read and are not counted"
     code, out = run(capsys, "--json", "--scan", str(tmp_path))
     assert json.loads(out)["need_change"] == r["need_change"]
 
@@ -191,3 +197,239 @@ def test_scan_no_pydub(capsys, tmp_path):
 def test_scan_and_files_do_not_mix(tmp_path):
     with pytest.raises(SystemExit):
         main(["doctor", "--scan", str(tmp_path), "a.wav"])
+
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(pydub2.__file__)))
+posix = pytest.mark.skipif(sys.platform == "win32", reason="no fifos or unix sockets")
+
+
+def cli(*args, **env):
+    # a new process with a timeout, so a doctor that blocks fails instead of hanging the tests
+    e = dict(os.environ, PYTHONPATH=ROOT, **env)
+    return subprocess.run([sys.executable, "-m", "pydub2", "doctor", *args], capture_output=True, timeout=60, env=e)
+
+
+def unix_socket(path):
+    s = socket.socket(socket.AF_UNIX)
+    # sun_path holds 104 bytes on macOS and a tmp_path is longer, so bind by a relative name
+    cwd = os.getcwd()
+    os.chdir(os.path.dirname(path))
+    try:
+        s.bind(os.path.basename(path))
+    finally:
+        os.chdir(cwd)
+    return s
+
+
+@posix
+def test_files_that_are_not_files(tmp_path):
+    os.mkfifo(tmp_path / "pipe.wav")
+    sock = unix_socket(tmp_path / "sock.wav")
+    try:
+        p = cli("--json", str(tmp_path / "pipe.wav"), str(tmp_path / "sock.wav"), str(tmp_path), os.devnull)
+    finally:
+        sock.close()
+    rs = json.loads(p.stdout)
+    assert p.returncode == 1 and [r["reason"] for r in rs] == ["not_a_file"] * 4
+    assert [r["note"] for r in rs] == ["is a fifo, not read", "is a socket, not read", "is a directory, not read",
+                                       "is a device, not read"]
+
+
+@posix
+def test_scan_skips_what_is_not_a_file(tmp_path):
+    (tmp_path / "a.py").write_text("import pydub\n")
+    os.mkfifo(tmp_path / "pipe.py")
+    sock = unix_socket(tmp_path / "sock.py")
+    try:
+        p = cli("--json", "--scan", str(tmp_path))
+    finally:
+        sock.close()
+    r = json.loads(p.stdout)
+    assert p.returncode == 0 and (r["files"], r["files_using_pydub"]) == (3, 1)
+    assert [(os.path.basename(u["file"]), u["why"]) for u in r["unreadable"]] == [
+        ("pipe.py", "is a fifo, not read"), ("sock.py", "is a socket, not read")]
+
+
+@pytest.fixture
+def broken_mp3(monkeypatch, tmp_path):
+    monkeypatch.setitem(sys.modules, "pydub2_mp3", types.SimpleNamespace(path=lambda: str(tmp_path / "none.so")))
+    _mp3.lib.cache_clear()
+    yield
+    _mp3.lib.cache_clear()
+
+
+def test_mp3_library_that_does_not_load(capsys, broken_mp3):
+    code, out = run(capsys, "--json")
+    r = json.loads(out)
+    assert code == 1 and not r["ok"] and r["pydub2_mp3"] is False and "mp3" not in r["write_natively"]
+    assert [f["run"] for f in r["fixes"]] == ["pip install --force-reinstall pydub2-mp3"]
+    code, out = run(capsys)
+    assert "(pydub2-mp3 broken)" in out and "missing, pydub2-mp3 is installed but does not load" in out
+
+
+def test_never_a_traceback(capsys, monkeypatch, tmp_path):
+    def boom(path):
+        raise RuntimeError("x")
+    monkeypatch.setattr(sys.modules["pydub2.__main__"], "check_file", boom)
+    code, out = run(capsys, "--json", "a.wav")
+    assert code == 2 and json.loads(out) == {"error": "RuntimeError: x"}
+    good = tone(tmp_path / "\xe9.flac")
+    p = cli(str(good), PYTHONIOENCODING="ascii")
+    assert p.returncode == 0 and p.stderr == b""
+    assert p.stdout.replace(b"\r\n", b"\n").endswith(b"?.flac: flac, loads natively, 1.00 s, 44100 Hz, 1 channel, 16 bit\n")
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_format_of_files_only_ffmpeg_reads(tmp_path):
+    names = ["ac3", "au", "caf", "w64", "wv", "mp2"]
+    for n in names:
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=d=0.5", str(tmp_path / ("a." + n))], check=True)
+    # a wav behind an id3 tag, and an mp2 named mp3
+    id3 = tmp_path / "id3.mp3"
+    id3.write_bytes(b"ID3\4\0\0\0\0\0\x0a" + b"\0" * 10 + tone(tmp_path / "t.wav", "wav").read_bytes())
+    mp2 = tmp_path / "mp2.mp3"
+    mp2.write_bytes((tmp_path / "a.mp2").read_bytes())
+    # newer ffmpeg builds (macOS) cannot read a wav behind an id3 tag, then there is nothing for doctor to report
+    id3_ok = subprocess.run(["ffmpeg", "-v", "error", "-i", str(id3), "-f", "null", "-"]).returncode == 0
+    files = [str(tmp_path / ("a." + n)) for n in names] + ([str(id3)] if id3_ok else []) + [str(mp2)]
+    rs = json.loads(cli("--json", *files).stdout)
+    assert [(r["format"], r["how"]) for r in rs] == [(n, "through ffmpeg") for n in names + ["wav"] * id3_ok + ["mp2"]]
+    unknown = tmp_path / "x.bin"
+    unknown.write_bytes(b"\x01\x02" * 100)
+    r = check_file(str(unknown))
+    assert r["format"] is None and not r["loads"]
+
+
+def wav_head(tag, size):
+    return struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", 36 + size, b"WAVE", b"fmt ", 16, tag, 1, 8000, 8000, 1, 8,
+                       b"data", size)
+
+
+def test_advice_matches_the_cause(capsys, noffmpeg, tmp_path):
+    empty = tmp_path / "empty.mp3"
+    empty.write_bytes(b"")
+    text = tmp_path / "notes.txt"
+    text.write_text("no audio here\n" * 20)
+    broken = tmp_path / "broken.bin"
+    broken.write_bytes(b"RIFF\0\0\0\0WAVEjunkjunk" + b"\1" * 100)
+    alaw = tmp_path / "alaw.wav"
+    alaw.write_bytes(wav_head(6, 8000) + b"\x55" * 8000)
+    code, out = run(capsys, "--json", str(empty), str(text), str(broken), str(alaw))
+    assert [(r["reason"], r["hint"], r["note"]) for r in json.loads(out)] == [
+        ("empty", None, "file is empty"),
+        ("not_audio", None, "file is text, not audio"),
+        ("cant_decode", None, "cant decode wav, the file is damaged"),
+        ("needs_ffmpeg", FFMPEG_FIX, "wav needs ffmpeg, none found: " + FFMPEG_FIX)]
+
+
+def test_strict_mode(capsys, noffmpeg, monkeypatch, tmp_path):
+    wav, flac = tone(tmp_path / "a.wav", "wav"), tone(tmp_path / "a.flac")
+    monkeypatch.setattr(pydub2, "strict", True)
+    r = check_file(str(wav))
+    assert r["loads"] and r["how"] == "natively"
+    assert check_file(str(flac))["reason"] == "needs_ffmpeg"
+    code, out = run(capsys, "--json")
+    r = json.loads(out)
+    assert r["read_natively"] == r["write_natively"] == ["wav"]
+
+
+@pytest.mark.parametrize("format", ["wav", "mp3", "ogg", "opus", "flac"])
+def test_truncated(tmp_path, format):
+    if format == "mp3" and not (_mp3.available() or shutil.which("ffmpeg")):
+        pytest.skip("no way to write mp3")
+    # opus pages hold about a second, a cut must leave whole ones
+    whole = tmp_path / ("a." + format)
+    Sine(440).to_audio_segment(duration=5000).export(str(whole), format=format).close()
+    data = whole.read_bytes()
+    cut = tmp_path / ("cut." + format)
+    cut.write_bytes(data[:len(data) * 2 // 3])
+    r = check_file(str(whole))
+    assert r["loads"] and r["reason"] is None and r["note"] is None
+    r = check_file(str(cut))
+    assert r["loads"] and r["reason"] == "truncated"
+    if format in ("wav", "mp3", "flac"):
+        assert abs(float(r["note"].split()[2]) - (5 - r["duration"])) < 0.01
+    else:
+        assert r["note"] == "truncated, the end is missing"
+
+
+def test_scan_lists_what_it_cant_read(capsys, tmp_path, monkeypatch):
+    (tmp_path / "old.py").write_text("import pydub\nprint 'hi'\n")
+    (tmp_path / "big.py").write_text("x = 1\n" * 400000)
+    code, out = run(capsys, "--scan", str(tmp_path))
+    assert code == 0 and out.splitlines()[:3] == [
+        "%s: larger than 2 MB" % (tmp_path / "big.py"),
+        "%s: cant parse line 2: Missing parentheses in call to 'print'. Did you mean print(...)?" % (tmp_path / "old.py"),
+        "0 of 2 python files use pydub, 2 could not be read and are not counted"]
+    # a single file works too
+    r = scan(str(tmp_path / "old.py"))
+    assert r["files"] == 1 and r["unreadable"][0]["file"] == str(tmp_path / "old.py")
+    # a directory it cant list
+    (tmp_path / "sub").mkdir()
+    real = os.scandir
+
+    def scandir(path="."):
+        if os.path.basename(path) == "sub":
+            raise PermissionError(13, "Permission denied", path)
+        return real(path)
+    monkeypatch.setattr(os, "scandir", scandir)
+    assert {"file": str(tmp_path / "sub"), "why": "cant list: Permission denied"} in scan(str(tmp_path))["unreadable"]
+
+
+def test_scan_missing_path(capsys, tmp_path):
+    code, out = run(capsys, "--json", "--scan", str(tmp_path / "nope"))
+    assert code == 2 and "no directory or file" in json.loads(out)["error"]
+    code, out = run(capsys, "--scan", str(tmp_path / "nope"))
+    assert code == 2 and out == ""
+
+
+def test_scan_order(tmp_path, monkeypatch):
+    for d in "abc":
+        (tmp_path / d).mkdir()
+        (tmp_path / d / "x.py").write_text("import pydub\n")
+    real = os.scandir
+
+    class Reversed:
+        # what os.walk needs from scandir: an iterator that is also a context manager
+        def __init__(self, path):
+            with real(path) as it:
+                self.it = iter(sorted(it, key=lambda e: e.name, reverse=True))
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return next(self.it)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+    monkeypatch.setattr(os, "scandir", Reversed)
+    assert [f["file"] for f in scan(str(tmp_path))["findings"]] == [str(tmp_path / d / "x.py") for d in "abc"]
+
+
+def test_doctor_patches_nothing(tmp_path, monkeypatch):
+    # a load in another thread, or one that is interrupted, must never meet a wrapped _ffmpeg
+    flac, real, seen = tone(tmp_path / "a.flac"), _ffmpeg.to_wav, []
+    load = AudioSegment.from_file.__func__
+
+    def from_file(cls, *args, **kwargs):
+        seen.append(_ffmpeg.to_wav)
+        t = threading.Thread(target=lambda: seen.append(_ffmpeg._seen.get()))
+        t.start()
+        t.join()
+        return load(cls, *args, **kwargs)
+    monkeypatch.setattr(AudioSegment, "from_file", classmethod(from_file))
+    assert check_file(str(flac))["how"] == "natively"
+    assert seen == [real, None] and _ffmpeg._seen.get() is None
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_how_a_file_loads(tmp_path):
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=d=0.5", str(tmp_path / "a.au")], check=True)
+    assert check_file(str(tmp_path / "a.au"))["how"] == "through ffmpeg"
+    assert check_file(str(tone(tmp_path / "a.flac")))["how"] == "natively"
+    assert _ffmpeg._seen.get() is None
