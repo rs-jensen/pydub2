@@ -40,6 +40,7 @@ What changed in each release.
 ### Security
 
 - pydub2 no longer starts an `ffmpeg`, `ffprobe` or `ffplay` from the current folder when none is found on PATH. It says ffmpeg is not found. The ffmpeg extra does not look in the current folder either.
+- `pydub2.max_bytes` limits the size of the decoded audio, off by default. `max_duration` alone does not bound memory, a 301 kB flac that says 8 channels at 192 kHz asked for 22 GB under a limit of an hour. Both limits now hold for raw and pcm input, are checked from the header before anything is read where it gives the length, and take `inf`. Strict mode no longer reads a whole wav before it checks them.
 
 ## [0.0.1] - 2026-11-16
 

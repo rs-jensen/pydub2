@@ -182,17 +182,20 @@ After that `import pydub` loads pydub2, even when the real pydub is installed. I
 
 ## Untrusted files
 
-If your service decodes uploads, set a limit on length and on how long ffmpeg may run. Both are off by default.
+If your service decodes uploads, set a limit on size, on length and on how long ffmpeg may run. All are off by default.
 
 ```python
 import pydub2
-pydub2.max_duration = 3600   # seconds, longer files raise CouldntDecodeError
-pydub2.ffmpeg_timeout = 60   # seconds for every ffmpeg and ffprobe call
+pydub2.max_bytes = 200 << 20  # decoded size, larger files raise CouldntDecodeError
+pydub2.max_duration = 3600    # seconds, longer files raise CouldntDecodeError
+pydub2.ffmpeg_timeout = 60    # seconds for every ffmpeg and ffprobe call
 seg = pydub2.AudioSegment.from_file(upload)
 ```
 
-`max_duration` is checked while the file is read, so a header that lies about the length does not
-get around it. `stream` checks it too.
+`max_bytes` is what bounds memory. `max_duration` alone does not: the file picks the rate, the channels
+and the sample width, so a 301 kB flac can ask for 22 GB within an hour. Both are checked from the header
+before anything is read where it gives the length, and again while the file is decoded, so a header that
+lies does not get around them. They hold for raw and pcm input, in strict mode and in `stream`.
 
 Never build `format`, `codec`, `parameters`, `cover` or `AudioSegment.converter` from user input, they
 go to ffmpeg as they are. Do not show exception text to end users, ffmpeg errors can hold paths on your

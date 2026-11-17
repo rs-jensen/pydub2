@@ -9,7 +9,7 @@ import sys
 import subprocess
 import zlib
 from subprocess import Popen, PIPE
-from math import log, ceil
+from math import log, ceil, inf
 from io import BytesIO
 from tempfile import TemporaryFile
 from warnings import warn
@@ -191,19 +191,34 @@ def extra_ffmpeg():
     return which(exe) if exe and os.path.isabs(exe) else None
 
 
-def check_duration(frames, rate):
+def check_duration(frames, rate, fw=None):
     limit = pydub2.max_duration
     if limit is not None and frames > limit * rate:
         raise tagged(CouldntDecodeError("this file is longer than max_duration"), reason="too_long")
+    if pydub2.max_bytes is not None and fw is not None and frames * fw > pydub2.max_bytes:
+        raise tagged(CouldntDecodeError("this file is larger than max_bytes"), reason="too_big")
+
+
+def frame_cap(rate, fw):
+    # one frame past the limits, so a file over them is seen and not just cut, -1 for no limit
+    n = inf
+    if pydub2.max_duration is not None:
+        n = pydub2.max_duration * rate
+    if pydub2.max_bytes is not None:
+        n = min(n, pydub2.max_bytes // fw)
+    return -1 if n >= 2 ** 62 else int(n) + 1
 
 
 def read_capped(d, n):
-    # a header can lie about the length, so read one frame past max_duration and look
-    if pydub2.max_duration is not None:
-        cap = int(pydub2.max_duration * d.rate) + 1
+    # a header can lie about the length, so read one frame past the limits and look
+    fw = d.channels * d.width
+    if n < 0 and d.exact:
+        check_duration(d.frames, d.rate, fw)
+    cap = frame_cap(d.rate, fw)
+    if cap >= 0:
         n = cap if n < 0 else min(n, cap)
     pcm = d.read(n)
-    check_duration(len(pcm) // (d.channels * d.width), d.rate)
+    check_duration(len(pcm) // fw, d.rate, fw)
     return pcm
 
 
