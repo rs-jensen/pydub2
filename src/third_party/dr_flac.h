@@ -6316,7 +6316,13 @@ static drflac_bool32 drflac__seek_to_pcm_frame__binary_search_internal(drflac* p
                             byteRangeHi = byteRangeLo;
                         }
 
-                        targetByte = lastSuccessfulSeekOffset + (drflac_uint64)(((drflac_int64)((pcmFrameIndex-pcmRangeLo) * pFlac->channels * pFlac->bitsPerSample)/8.0) * approxCompressionRatio);
+                        /* pydub2: nan or a huge value on a damaged file is not a valid cast to uint64, take the end of the range then */
+                        double approxBytes = ((drflac_int64)((pcmFrameIndex-pcmRangeLo) * pFlac->channels * pFlac->bitsPerSample)/8.0) * approxCompressionRatio;
+                        if (approxBytes >= 0 && approxBytes < 9.0e18) {
+                            targetByte = lastSuccessfulSeekOffset + (drflac_uint64)approxBytes;
+                        } else {
+                            targetByte = byteRangeHi;
+                        }
                         if (targetByte > byteRangeHi) {
                             targetByte = byteRangeHi;
                         }
