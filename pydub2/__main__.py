@@ -343,6 +343,8 @@ def failed(r, f, head, e):
         note = "file is a playlist (hls, dash or concat): refused"
     elif reason == "too_long":
         note = "longer than max_duration: refused"
+    elif reason == "too_big":
+        note = "larger than max_bytes: refused"
     elif not head:
         reason, hint, note = "empty", None, "file is empty"
     elif is_text(head):

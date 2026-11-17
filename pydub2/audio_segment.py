@@ -30,6 +30,7 @@ from .utils import (
     ratio_to_db,
     get_array_type,
     check_duration,
+    frame_cap,
     read_capped,
 )
 from .exceptions import (
@@ -728,29 +729,47 @@ class AudioSegment(object):
                 'channels': channels,
                 'frame_width': channels * sample_width
             }
+            fw = channels * sample_width
+            n = frame_cap(frame_rate, fw)
+            data = file.read(n * fw if n >= 0 else -1)
+            if n >= 0:
+                check_duration(len(data) // fw, frame_rate, fw)
             if start_second is None and duration is None:
-                return cls(data=file.read(), metadata=metadata)
+                return cls(data=data, metadata=metadata)
             elif start_second is not None and duration is None:
-                return cls(data=file.read(), metadata=metadata)[start_second*1000:]
+                return cls(data=data, metadata=metadata)[start_second*1000:]
             elif start_second is None and duration is not None:
-                return cls(data=file.read(), metadata=metadata)[:duration*1000]
+                return cls(data=data, metadata=metadata)[:duration*1000]
             else:
-                return cls(data=file.read(), metadata=metadata)[start_second*1000:(start_second+duration)*1000]
+                return cls(data=data, metadata=metadata)[start_second*1000:(start_second+duration)*1000]
 
         if pydub2.strict and wav:
             # what pydub does, it reads any wav it can parse itself
             obj = None
             try:
-                obj = cls._from_safe_wav(file)
+                file.seek(0)
+                head = file.read(65536)
+                h = extract_wav_headers(head)
+                w = read_wav_audio(head, h)
+                fw = w.channels * (4 if w.bits_per_sample == 24 else w.bits_per_sample // 8)
+                told = min(h[-1].size, file.seek(0, 2) - h[-1].position - 8) // fw, w.sample_rate, fw
             except Exception:
-                pass
-            if obj is not None:
+                told = None
+            try:
+                # the header gives the length, so a wav over the limits fails before it is read
+                if told:
+                    check_duration(*told)
                 try:
-                    check_duration(obj.frame_count(), obj.frame_rate)
-                except CouldntDecodeError:
-                    if close_file:
-                        file.close()
-                    raise
+                    obj = cls._from_safe_wav(file)
+                except Exception:
+                    pass
+                if obj is not None:
+                    check_duration(obj.frame_count(), obj.frame_rate, obj.frame_width)
+            except CouldntDecodeError:
+                if close_file:
+                    file.close()
+                raise
+            if obj is not None:
                 try:
                     if start_second is not None or duration is not None:
                         obj = obj[None if start_second is None else start_second * 1000:
@@ -880,14 +899,16 @@ class AudioSegment(object):
                 yield  # primed below, see there
                 prev = run(d.read, step if n < 0 else min(step, n))
                 got = len(prev) // fw
-                check_duration(got, d.rate)
+                check_duration(got, d.rate, fw)
                 while True:
                     k = step if n < 0 else min(step, n - got)
                     cur = run(d.read, k) if k > 0 else b""
                     got += len(cur) // fw
-                    if pydub2.max_duration is not None and got > pydub2.max_duration * d.rate:
+                    try:
+                        check_duration(got, d.rate, fw)
+                    except CouldntDecodeError:
                         yield cls._segment(d, prev)
-                        check_duration(got, d.rate)
+                        raise
                     if k <= 0 or len(cur) < k * fw:
                         break
                     yield cls._segment(d, prev)

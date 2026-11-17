@@ -73,11 +73,16 @@ def _to_wav(converter, path, data, format, codec, parameters, start_second, dura
     if start_second is not None:
         out += ["-ss", str(start_second)]
     limit = pydub2.max_duration
-    if limit is not None:
+    # a limit ffmpeg cant take, like inf, is no limit
+    if limit is not None and limit < 2 ** 31:
         # one second over, so a file past the limit is seen and not just cut
         duration = limit + 1 if duration is None else min(duration, limit + 1)
     if duration is not None:
         out += ["-t", str(duration)]
+    # room for the wav header, output that reaches it was cut and is over max_bytes
+    fs = None if pydub2.max_bytes is None or pydub2.max_bytes >= 2 ** 62 else int(pydub2.max_bytes) + 65536
+    if fs is not None:
+        out += ["-fs", str(fs)]
     # pydub puts them after the output, where ffmpeg ignores them
     out += ["-"] + (parameters or []) if pydub2.strict else (parameters or []) + ["-"]
     p = run(converter, opts + inp + out, None if path is not None else data, format or "this file")
@@ -95,9 +100,11 @@ def _to_wav(converter, path, data, format, codec, parameters, start_second, dura
     # ffmpeg cant seek back on a pipe so the sizes in the header are 0xffffffff
     wav[4:8] = struct.pack("<I", len(wav) - 8)
     wav[i + 4:i + 8] = struct.pack("<I", len(wav) - i - 8)
-    if limit is not None:
-        channels, rate, _, align = struct.unpack_from("<HIIH", wav, 22)
-        check_duration((len(wav) - i - 8) // align, rate)
+    if fs is not None and len(wav) >= fs:
+        raise tagged(CouldntDecodeError("this file is larger than max_bytes"), reason="too_big")
+    if limit is not None or fs is not None:
+        channels, rate, _, align, bits = struct.unpack_from("<HIIHH", wav, 22)
+        check_duration((len(wav) - i - 8) // align, rate, channels * (4 if bits == 24 else bits // 8))
     return bytes(wav)
 
 
