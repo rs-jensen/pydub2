@@ -1,5 +1,6 @@
 import argparse
 import ast
+import codecs
 import importlib.metadata
 import importlib.util
 import io
@@ -7,6 +8,8 @@ import json
 import os
 import platform
 import re
+import stat
+import struct
 import sys
 
 import _pydub2
@@ -20,6 +23,12 @@ SKIP_DIRS = {"venv", "node_modules", "build", "dist", "site-packages", "__pycach
 # formats pydub2 cant read or write by itself
 NEEDS_FFMPEG = {"m4a", "mp4", "aac", "wma", "aiff", "aif", "flv", "3gp", "webm", "mkv", "mov", "avi", "amr", "ac3", "wmv"}
 SAMPLES_DIFFER = {"mp3", "ogg", "opus"}
+# starts that utils.sniff does not know, only ffmpeg reads these
+MAGIC = [(b"\x0b\x77", "ac3"), (b".snd", "au"), (b"caff", "caf"), (b"riff\x2e\x91\xcf\x11", "w64"), (b"wvpk", "wv"),
+         (b"#!AMR", "amr"), (b"MAC ", "ape"), (b"TTA1", "tta"), (b"MPCK", "mpc"), (b"\x7f\xfe\x80\x01", "dts"),
+         (b"FLV", "flv"), (b"Creative Voice File", "voc"), (b"MThd", "midi")]
+KINDS = [(stat.S_ISDIR, "a directory"), (stat.S_ISFIFO, "a fifo"), (stat.S_ISSOCK, "a socket"),
+         (stat.S_ISCHR, "a device"), (stat.S_ISBLK, "a device"), (stat.S_ISLNK, "a symlink")]
 
 
 def tool(exe):
@@ -70,7 +79,11 @@ def report():
         except importlib.metadata.PackageNotFoundError:
             version = None
         pydub = {"resolves_to": "pydub", "version": version}
-    mp3 = _mp3.available()
+    try:
+        mp3, broken = _mp3.available(), None
+    except Exception as e:
+        # pydub2_mp3 imports but its library does not load, mp3 export raises the same
+        mp3, broken = False, str(e) or type(e).__name__
     fixes = []
     if ffmpeg is None:
         fixes.append({"for": "m4a, aac, wma and video files" + (", and strict mode" if pydub2.strict else ""),
@@ -79,14 +92,18 @@ def report():
         fixes.append({"for": "ffmpeg is older than %d.%d" % MIN_FFMPEG, "run": "install a newer ffmpeg"})
     if pydub2.strict and ffprobe is None:
         fixes.append({"for": "strict mode needs ffprobe", "run": "install ffmpeg with ffprobe"})
-    if not mp3:
+    if broken:
+        fixes.append({"for": "pydub2-mp3 is installed but does not load (%s)" % broken,
+                      "run": "pip install --force-reinstall pydub2-mp3"})
+    elif not mp3:
         fixes.append({"for": "mp3 export without ffmpeg", "run": 'pip install "pydub2[mp3]"'})
     return {
         "pydub2": pydub2.__version__,
         "python": platform.python_version(),
         "platform": platform.platform(),
-        "read_natively": ["wav", "flac", "ogg", "opus", "mp3"],
-        "write_natively": ["wav", "flac", "ogg", "opus"] + (["mp3"] if mp3 else []),
+        # strict mode reads and writes all but wav through ffmpeg
+        "read_natively": ["wav"] if pydub2.strict else ["wav", "flac", "ogg", "opus", "mp3"],
+        "write_natively": ["wav"] if pydub2.strict else ["wav", "flac", "ogg", "opus"] + (["mp3"] if mp3 else []),
         "pydub2_mp3": mp3,
         "ffmpeg": ffmpeg,
         "ffprobe": ffprobe,
@@ -94,7 +111,7 @@ def report():
         "pydub": pydub,
         "audioop": importlib.util.find_spec("audioop") is not None,
         "fixes": fixes,
-        "ok": selftest() and not (ffmpeg and not ffmpeg["ok"]) and not (pydub2.strict and (ffmpeg is None or ffprobe is None)),
+        "ok": selftest() and not broken and not (ffmpeg and not ffmpeg["ok"]) and not (pydub2.strict and (ffmpeg is None or ffprobe is None)),
     }
 
 
@@ -110,7 +127,8 @@ def print_report(r):
     print("python %s on %s" % (r["python"], r["platform"]))
     print("reads without ffmpeg:", " ".join(r["read_natively"]))
     print("writes without ffmpeg:", " ".join(r["write_natively"]), "(pydub2-mp3 %s)" %
-          ("installed" if r["pydub2_mp3"] else "not installed"))
+          ("installed" if r["pydub2_mp3"] else "broken" if any(f["for"].startswith("pydub2-mp3") for f in r["fixes"])
+           else "not installed"))
     print(show_tool("ffmpeg", r["ffmpeg"]))
     print(show_tool("ffprobe", r["ffprobe"]))
     print("strict mode:", "on" if r["strict"] else "off")
@@ -128,56 +146,228 @@ def clean(text):
     return "".join(c if c.isprintable() else "?" for c in text)
 
 
+class NotAFile(Exception):
+    pass
+
+
+def open_regular(path, follow=True):
+    # look before opening, opening a fifo blocks and opening a device can do things
+    mode = (os.stat if follow else os.lstat)(path).st_mode
+    if stat.S_ISREG(mode):
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
+        fd = os.open(path, flags | (0 if follow else getattr(os, "O_NOFOLLOW", 0)))
+        # it can have been swapped since the stat
+        mode = os.fstat(fd).st_mode
+        if stat.S_ISREG(mode):
+            return os.fdopen(fd, "rb")
+        os.close(fd)
+    raise NotAFile(next((name for test, name in KINDS if test(mode)), "an unknown kind of file"))
+
+
+def behind_id3(f, head):
+    # an id3 tag can sit in front of any format
+    at = 0
+    while head[:3] == b"ID3" and len(head) >= 10:
+        at += 10 + (head[6] << 21 | head[7] << 14 | head[8] << 7 | head[9]) + (10 if head[5] & 0x10 else 0)
+        f.seek(at)
+        head = f.read(4096)
+    return at, head
+
+
+def what(f, head):
+    # the format by its first bytes, None when not known
+    h = behind_id3(f, head)[1]
+    if h[:4] == b"RIFF" and h[8:12] == b"AVI ":
+        return "avi"
+    fmt = utils.sniff(h) or next((name for magic, name in MAGIC if h.startswith(magic)), None)
+    if fmt == "mp3" and h[:1] == b"\xff":
+        return {2: "mp3", 4: "mp2", 6: "mp1"}[h[1] & 6]
+    if fmt == "webm" and b"webm" not in h[:64]:
+        return "matroska"
+    return fmt
+
+
+def native_format(head):
+    # the choice detect() in src/decode.cpp makes, all else goes to the mp3 decoder
+    if head[:4] in (b"RIFF", b"RF64") and head[8:12] == b"WAVE":
+        return "wav"
+    if head[:4] == b"fLaC":
+        return "flac"
+    packet = head[27 + head[26]:] if head[:4] == b"OggS" and len(head) > 27 else b""
+    return "opus" if packet.startswith(b"OpusHead") else "ogg" if packet.startswith(b"\x01vorbis") else "mp3"
+
+
+def is_text(head):
+    try:
+        codecs.getincrementaldecoder("utf-8")().decode(head[:4096])
+    except UnicodeDecodeError:
+        return False
+    return b"\0" not in head[:4096]
+
+
+def chunks(f):
+    # the chunks of a riff file with the start of each, a thousand at most like the decoder
+    at = 12
+    for _ in range(1000):
+        f.seek(at)
+        h = f.read(34)
+        if len(h) < 8:
+            return
+        n = struct.unpack("<I", h[4:8])[0]
+        yield at, h[:4], n, h[8:]
+        at += 8 + n + (n & 1)
+
+
+def damaged(f, head, fmt):
+    # the built in decoder takes this file by its start and still failed, ffmpeg is no fix for that
+    if fmt is None or native_format(head) != fmt:
+        return False
+    if fmt != "wav":
+        return True
+    tag = next((data[:2] if data[:2] != b"\xfe\xff" else data[24:26] for _, cid, n, data in chunks(f) if cid == b"fmt "), b"")
+    # no fmt chunk, or pcm or float which pydub2 reads itself
+    return len(tag) < 2 or struct.unpack("<H", tag)[0] in (1, 3)
+
+
+def mp3_missing(f, size, got, rate):
+    # the xing or info frame that lame and ffmpeg write holds the length in bytes and frames
+    f.seek(0)
+    at, h = behind_id3(f, f.read(4096))
+    m = re.search(rb"\xff[\xe0-\xff]", h)
+    if m is None:
+        return None
+    s = m.start()
+    x = max(h.find(b"Xing", s, s + 64), h.find(b"Info", s, s + 64))
+    if x < 0 or len(h) < x + 144:
+        return None
+    flags, frames, length = struct.unpack(">III", h[x + 4:x + 16])
+    if flags & 3 != 3 or at + s + length <= size:
+        return None
+    total = frames * (1152 if h[s + 1] & 8 else 576)
+    if flags & 12 == 12 and h[x + 120:x + 124].isalnum():
+        # the lame tag, the decoder drops this delay and padding
+        g = h[x + 141:x + 144]
+        total -= (g[0] << 4 | g[1] >> 4) + ((g[1] & 15) << 8 | g[2])
+    return max(total - got, 0) / rate
+
+
+def ogg_cut(f, size):
+    # every page must be whole and the last one must end the stream
+    at = flags = 0
+    while at < size:
+        f.seek(at)
+        h = f.read(27)
+        if len(h) < 27:
+            return b"OggS".startswith(h[:4])
+        if h[:4] != b"OggS":
+            return False
+        lace = f.read(h[26])
+        at += 27 + h[26] + sum(lace)
+        flags = h[5]
+        if len(lace) < h[26]:
+            return True
+    return at > size or not flags & 4
+
+
+def missing(f, path, size, fmt, seg):
+    # seconds missing at the end, 0 when the length is not known, None when nothing is missing or there is no telling
+    got = int(seg.frame_count())
+    if fmt == "wav":
+        rate = None
+        for at, cid, n, data in chunks(f):
+            if cid == b"fmt " and len(data) >= 12:
+                rate = struct.unpack("<I", data[8:12])[0]
+            # shortcut: rf64 keeps the size in ds64, its truncation is not seen, read ds64 if it matters
+            if cid == b"data" and n not in (0, 0xffffffff) and at + 8 + n > size:
+                return (at + 8 + n - size) / rate if rate else 0
+    elif fmt == "flac":
+        try:
+            d = _pydub2.Decoder(path)
+        except RuntimeError:
+            return None
+        return (d.frames - got) / d.rate if d.frames > got else None
+    elif fmt == "mp3":
+        return mp3_missing(f, size, got, seg.frame_rate)
+    elif fmt in ("ogg", "opus") and ogg_cut(f, size):
+        return 0
+    return None
+
+
 def check_file(path):
     r = {"file": path, "format": None, "loads": False, "how": None, "reason": None, "hint": None, "note": None}
     try:
-        with open(path, "rb") as f:
-            head = f.read(65536)
+        f = open_regular(path)
+    except NotAFile as e:
+        r.update(reason="not_a_file", note="is %s, not read" % e)
+        return r
     except OSError as e:
         r.update(reason="cant_open", note="cant open: " + (e.strerror or "error"))
         return r
-    r["format"] = utils.sniff(head)
-    native = False
-    try:
+    with f:
+        head = f.read(65536)
+        size = os.fstat(f.fileno()).st_size
+        r["format"] = fmt = what(f, head)
+        # watch whether from_file calls ffmpeg, without changing what it does
+        used, real = [], _ffmpeg.to_wav
+
+        def spy(*args, **kwargs):
+            used.append(1)
+            return real(*args, **kwargs)
+        _ffmpeg.to_wav = spy
         try:
-            d = _pydub2.Decoder(path)
-            got = len(utils.read_capped(d, -1)) // (d.channels * d.width)
-            native = not pydub2.strict and not (d.chained and _ffmpeg.find(AudioSegment.converter))
-        except RuntimeError:
-            pass
-        seg = AudioSegment.from_file(path)
-    except Exception as e:
-        reason = "playlist_refused" if r["format"] == "playlist" else getattr(e, "reason", None) or "cant_decode"
-        r["reason"], r["hint"] = reason, getattr(e, "hint", None)
-        what = r["format"] or "this file"
-        if reason == "needs_ffmpeg" and r["hint"]:
-            r["note"] = "%s needs ffmpeg, none found: %s" % (what, r["hint"])
-        elif reason == "playlist_refused":
-            r["note"] = "file is a playlist (hls, dash or concat): refused"
-        elif reason == "too_long":
-            r["note"] = "longer than max_duration: refused"
-        else:
-            lines = str(e).splitlines() or [type(e).__name__]
-            r["note"] = ("cant decode %s: " % what if r["format"] else "not audio that anything here reads: ") + \
-                (lines[-1] if lines[-1].startswith("ffmpeg said") else lines[0])
-        return r
-    r.update(loads=True, how="natively" if native else "through ffmpeg", duration=seg.duration_seconds,
-             rate=seg.frame_rate, channels=seg.channels, sample_width=seg.sample_width)
-    notes = []
-    if native and r["format"] is None:
-        m = re.search(rb"ID3|\xff[\xe0-\xff]", head)
-        notes.append("mp3 starts with about %s of junk: ok" % ("%d bytes" % m.start() if m else "64 kB or more"))
-    if native and d.frames and got < d.frames:
-        r["reason"] = "truncated"
-        notes.append("truncated, last %.2f s missing" % ((d.frames - got) / d.rate))
+            seg = AudioSegment.from_file(path)
+        except Exception as e:
+            failed(r, f, head, e)
+            return r
+        finally:
+            _ffmpeg.to_wav = real
+        native = not used
+        if native:
+            r["format"] = fmt = native_format(head)
+        r.update(loads=True, how="natively" if native else "through ffmpeg", duration=seg.duration_seconds,
+                 rate=seg.frame_rate, channels=seg.channels, sample_width=seg.sample_width)
+        notes = []
+        if native and fmt == "mp3" and utils.sniff(head) is None:
+            m = re.search(rb"ID3|\xff[\xe0-\xff]", head)
+            notes.append("mp3 starts with about %s of junk: ok" % ("%d bytes" % m.start() if m else "64 kB or more"))
+        gone = missing(f, path, size, fmt, seg)
+        if gone is not None:
+            r["reason"] = "truncated"
+            notes.append("truncated, last %.2f s missing" % gone if gone else "truncated, the end is missing")
     r["note"] = ", ".join(notes) or None
     return r
+
+
+def failed(r, f, head, e):
+    fmt = r["format"]
+    reason = "playlist_refused" if fmt == "playlist" else getattr(e, "reason", None) or "cant_decode"
+    hint = getattr(e, "hint", None)
+    conv = os.fspath(AudioSegment.converter)
+    if reason == "playlist_refused":
+        note = "file is a playlist (hls, dash or concat): refused"
+    elif reason == "too_long":
+        note = "longer than max_duration: refused"
+    elif not head:
+        reason, hint, note = "empty", None, "file is empty"
+    elif is_text(head):
+        reason, hint, note = "not_audio", None, "file is text, not audio"
+    elif _ffmpeg.find(conv) is None and reason in ("needs_ffmpeg", "cant_decode"):
+        if not pydub2.strict and damaged(f, head, fmt):
+            reason, hint, note = "cant_decode", None, "cant decode %s, the file is damaged" % fmt
+        else:
+            reason, hint = "needs_ffmpeg", hint or (FFMPEG_FIX if conv == "ffmpeg" else "put ffmpeg at " + conv)
+            note = "%s needs ffmpeg, none found: %s" % (fmt or "this file", hint)
+    else:
+        lines = str(e).splitlines() or [type(e).__name__]
+        note = ("cant decode %s: " % fmt if fmt else "not audio that anything here reads: ") + \
+            (lines[-1] if lines[-1].startswith("ffmpeg said") else lines[0])
+    r.update(reason=reason, hint=hint, note=note)
 
 
 def print_file(r):
     if r["loads"]:
         line = "%s: %s, loads %s, %.2f s, %d Hz, %d channel%s, %d bit" % (
-            r["file"], r["format"] or "mp3", r["how"], r["duration"], r["rate"], r["channels"], "s"[:r["channels"] > 1],
+            r["file"], r["format"] or "unknown", r["how"], r["duration"], r["rate"], r["channels"], "s"[:r["channels"] > 1],
             r["sample_width"] * 8)
         print(clean(line + (", " + r["note"] if r["note"] else "")))
     else:
@@ -281,27 +471,48 @@ def skip(root, d):
 
 
 def scan(top):
-    files, using, findings = 0, 0, []
-    for root, dirs, names in os.walk(top):
-        dirs[:] = [d for d in dirs if not skip(root, d)]
+    files, using, findings, unread = 0, 0, [], []
+
+    def cant(path, why):
+        unread.append({"file": path, "why": why})
+
+    if os.path.isdir(top):
+        walk = os.walk(top, onerror=lambda e: cant(e.filename, "cant list: " + (e.strerror or "error")))
+    elif os.path.isfile(top):
+        walk = [(os.path.dirname(top), [], [os.path.basename(top)])]
+    else:
+        raise FileNotFoundError("no directory or file " + top)
+    for root, dirs, names in walk:
+        dirs[:] = sorted(d for d in dirs if not skip(root, d))
         for n in sorted(names):
             path = os.path.join(root, n)
             if not n.endswith(".py") or os.path.islink(path):
                 continue
             files += 1
             try:
-                if os.path.getsize(path) > 2 << 20:
+                if os.lstat(path).st_size > 2 << 20:
+                    cant(path, "larger than 2 MB")
                     continue
-                with open(path, "rb") as f:
+                with open_regular(path, follow=False) as f:
                     tree = ast.parse(f.read())
-            except (OSError, SyntaxError, ValueError, RecursionError, MemoryError):
+            except SyntaxError as e:
+                cant(path, "cant parse line %s: %s" % (e.lineno, e.msg))
+                continue
+            except NotAFile as e:
+                cant(path, "is %s, not read" % e)
+                continue
+            except OSError as e:
+                cant(path, "cant open: " + (e.strerror or "error"))
+                continue
+            except (ValueError, RecursionError, MemoryError) as e:
+                cant(path, "cant parse: " + (str(e) or type(e).__name__))
                 continue
             imports, found = look(tree)
             if imports:
                 using += 1
                 findings += [dict(f, file=path) for f in sorted(found, key=lambda f: f["line"])]
     kinds = [f["kind"] for f in findings]
-    return {"files": files, "files_using_pydub": using, "findings": findings,
+    return {"files": files, "files_using_pydub": using, "findings": findings, "unreadable": unread,
             "need_change": kinds.count("import") + kinds.count("change"), "imports": kinds.count("import"),
             "strict_covers": kinds.count("strict"), "notes": kinds.count("note") + kinds.count("ffmpeg")}
 
@@ -309,7 +520,10 @@ def scan(top):
 def print_scan(r):
     for f in r["findings"]:
         print(clean("%s:%d: %s" % (f["file"], f["line"], f["text"])))
-    print("%d of %d python files use pydub" % (r["files_using_pydub"], r["files"]))
+    for u in r["unreadable"]:
+        print(clean("%s: %s" % (u["file"], u["why"])))
+    print("%d of %d python files use pydub" % (r["files_using_pydub"], r["files"]) +
+          (", %d could not be read and are not counted" % len(r["unreadable"]) if r["unreadable"] else ""))
     print("need a change: %d, of which %d are imports that pydub2-compat covers" % (r["need_change"], r["imports"]))
     print("strict mode covers %d more, %d are notes or need ffmpeg as before" % (r["strict_covers"], r["notes"]))
 
@@ -324,6 +538,21 @@ def main(argv=None):
     a = p.parse_args(argv)
     if a.scan and a.files:
         p.error("use --scan or files, not both")
+    # a file name the terminal cant show must not end in a traceback
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
+    try:
+        return doctor(a)
+    except Exception as e:
+        error = "%s: %s" % (type(e).__name__, e)
+        if a.json:
+            print(json.dumps({"error": error}))
+        else:
+            print(clean("doctor: " + error), file=sys.stderr)
+        return 2
+
+
+def doctor(a):
     if a.scan:
         r = scan(a.scan)
         if a.json:
