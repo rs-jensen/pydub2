@@ -1,4 +1,5 @@
 import functools
+import re
 import shutil
 import subprocess
 
@@ -25,6 +26,9 @@ def why(e):
     # pydub2 raises this when it cant decode natively and has no ffmpeg to fall back on
     if e.errisinstance(CouldntDecodeError) and "cant read this file" in msg and not HAVE_FFMPEG:
         return "no ffmpeg"
+    m = re.search(r"Unknown encoder '([^']+)'", msg)
+    if m and HAVE_FFMPEG and m.group(1) in OPTIONAL and m.group(1) not in encoders(shutil.which("ffmpeg")):
+        return "ffmpeg lacks " + m.group(1)
     if e.errisinstance(subprocess.CalledProcessError) and isinstance(cmd, list):
         for flag in ("-acodec", "-c:a"):
             if flag in cmd[:-1]:
