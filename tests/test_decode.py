@@ -4,6 +4,7 @@ import math
 import os
 import platform
 import random
+import re
 import struct
 import subprocess
 import sys
@@ -23,6 +24,8 @@ except (OSError, subprocess.CalledProcessError):
     pytest.skip("no ffmpeg", allow_module_level=True)
 
 AudioSegment = pytest.importorskip("pydub").AudioSegment
+_v = re.search(rb"version n?(\d+)\.", subprocess.run([ff, "-version"], capture_output=True).stdout)
+FF_MAJOR = int(_v.group(1)) if _v else 0
 
 # the only ffmpeg for windows arm is x64, and its stereo mp3 comes out half a step higher than on arm, mac arm ffmpeg agrees with us
 X64_FF_ON_ARM = sys.platform == "win32" and platform.machine() == "ARM64"
@@ -60,7 +63,13 @@ def both(path):
 @pytest.mark.parametrize("channels", [1, 2])
 @pytest.mark.parametrize("codec", ["pcm_u8", "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le"])
 def test_wav(tmp_path, codec, channels):
-    mine, theirs, width = both(make(tmp_path, "a.wav", channels, "-c:a", codec))
+    path = make(tmp_path, "a.wav", channels, "-c:a", codec)
+    mine, theirs, width = both(path)
+    m = open(path, "rb").read()
+    at = m.find(b"fmt ") + 8
+    if m[at:at + 2] == b"\xfe\xff" and m[at + 24:at + 26] == b"\x03\x00":
+        # ffmpeg 6 writes float wav as WAVE_FORMAT_EXTENSIBLE, which pydub reads as integers, ffmpeg's own decode is the reference
+        theirs = subprocess.run([ff, "-v", "error", "-i", path, "-f", "s32le", "-"], capture_output=True, check=True).stdout
     assert mine == theirs
 
 
@@ -441,6 +450,8 @@ def test_flac_damaged_keeps_the_length(tmp_path):
     assert len(starts) > 15
     clean = _pydub2.decode(m)[0]
     one = blk * 8
+    # ffmpeg 6 drops the damaged frame and the two after it, later ffmpeg at most the damaged one
+    ff_lost = 3 * one if FF_MAJOR == 6 else one
     p = str(tmp_path / "bad.flac")
     for k in (3, 9):
         a, b = starts[k], starts[k + 1]
@@ -452,7 +463,7 @@ def test_flac_damaged_keeps_the_length(tmp_path):
             assert len(mine) == len(clean)
             assert mine[:(k * blk - 1) * 8] == clean[:(k * blk - 1) * 8]
             assert mine[(k + 2) * blk * 8:] == clean[(k + 2) * blk * 8:]
-            assert len(AudioSegment.from_file(p).raw_data) in (len(clean), len(clean) - one)
+            assert len(AudioSegment.from_file(p).raw_data) in (len(clean), len(clean) - ff_lost)
     rng = random.Random(3)
     for _ in range(40):
         d = bytearray(m)
@@ -460,7 +471,7 @@ def test_flac_damaged_keeps_the_length(tmp_path):
         open(p, "wb").write(d)
         # never stops early, at most the damaged frame and the next one are gone
         assert len(_pydub2.decode(bytes(d))[0]) >= len(clean) - 2 * one
-        assert abs(len(_pydub2.decode(bytes(d))[0]) - len(AudioSegment.from_file(p).raw_data)) <= 2 * one
+        assert abs(len(_pydub2.decode(bytes(d))[0]) - len(AudioSegment.from_file(p).raw_data)) <= ff_lost + one
 
 
 # a max block size of 0 puts every frame at sample 0, so the seek guessed an infinite byte offset (undefined in C)

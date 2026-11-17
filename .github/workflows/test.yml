@@ -13,19 +13,22 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # 26.04 ships a lame 3.101 beta, the mp3 tests compare with ffmpeg's lame 3.100
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - run: pip install . pytest pydub audioop-lts numpy
+      - run: pip install . ./mp3 pytest pydub audioop-lts numpy
       - run: pytest tests
 
   test-native:
     name: test ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -42,5 +45,5 @@ jobs:
           ffmpeg -version | head -n 1
       - if: runner.os == 'macOS'
         run: brew install ffmpeg
-      - run: pip install . pytest pydub audioop-lts numpy
+      - run: pip install . ./mp3 pytest pydub audioop-lts numpy
       - run: pytest -rs tests
