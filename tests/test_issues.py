@@ -443,3 +443,16 @@ def test_copy_of_summed_segment(dup):
     new, old = both(*noise(300))
     x, y = dup(sum([new, new, new])), dup(sum([old, old, old]))
     assert vars(x) == vars(y)
+
+
+# pydub empties the file first, pydub2 encodes before it opens the file
+@pytest.mark.parametrize("fmt, kw", [("ogg", dict(bitrate="k")), ("flac", dict(tags={"a": "b\0"})),
+                                     ("mp3", dict(codec="nonexistent_codec")), ("m4a", dict(parameters=["-nope"]))])
+def test_failed_export_keeps_the_old_file(fmt, kw, tmp_path):
+    if fmt in ("mp3", "m4a") and ff is None:
+        pytest.skip("no ffmpeg")
+    path = tmp_path / ("old." + fmt)
+    path.write_bytes(b"x" * 1000)
+    with pytest.raises(Exception):
+        pydub2.AudioSegment.silent(100).export(str(path), format=fmt, **kw)
+    assert path.read_bytes() == b"x" * 1000
