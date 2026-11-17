@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import shutil
@@ -6,13 +7,14 @@ import struct
 import subprocess
 import sys
 import threading
+import time
 import types
 
 import pytest
 
 import pydub2
 from pydub2 import AudioSegment, _ffmpeg, _mp3, utils
-from pydub2.__main__ import FFMPEG_FIX, check_file, main, scan
+from pydub2.__main__ import FFMPEG_FIX, check_file, check_files, check_safely, main, scan, what
 from pydub2.exceptions import CouldntDecodeError
 from pydub2.generators import Sine
 
@@ -22,6 +24,8 @@ def noffmpeg(monkeypatch, tmp_path):
     monkeypatch.setenv("PATH", str(tmp_path))
     monkeypatch.setattr(AudioSegment, "converter", "ffmpeg")
     monkeypatch.setitem(sys.modules, "imageio_ffmpeg", None)
+    # files are checked in another process, this hides the ffmpeg extra there too
+    monkeypatch.setenv("IMAGEIO_FFMPEG_EXE", "none")
 
 
 def run(capsys, *args):
@@ -262,10 +266,10 @@ def test_mp3_library_that_does_not_load(capsys, broken_mp3):
 
 
 def test_never_a_traceback(capsys, monkeypatch, tmp_path):
-    def boom(path):
+    def boom():
         raise RuntimeError("x")
-    monkeypatch.setattr(sys.modules["pydub2.__main__"], "check_file", boom)
-    code, out = run(capsys, "--json", "a.wav")
+    monkeypatch.setattr(sys.modules["pydub2.__main__"], "report", boom)
+    code, out = run(capsys, "--json")
     assert code == 2 and json.loads(out) == {"error": "RuntimeError: x"}
     good = tone(tmp_path / "\xe9.flac")
     p = cli(str(good), PYTHONIOENCODING="ascii")
@@ -424,3 +428,118 @@ def test_how_a_file_loads(tmp_path):
     assert check_file(str(tmp_path / "a.au"))["how"] == "through ffmpeg"
     assert check_file(str(tone(tmp_path / "a.flac")))["how"] == "natively"
     assert _ffmpeg._seen.get() is None
+
+
+def test_each_file_gets_its_own_result(capsys, monkeypatch, tmp_path):
+    good = str(tone(tmp_path / "a.flac"))
+    code, out = run(capsys, "--json", good, "a\0b.wav", good)
+    rs = json.loads(out)
+    assert code == 1 and [r["loads"] for r in rs] == [True, False, True]
+    assert rs[1]["reason"] == "cant_open" and "null" in rs[1]["note"]
+    # a fault in doctor itself stays with the file it happened on
+    monkeypatch.setattr(sys.modules["pydub2.__main__"], "open_regular", lambda path: 1 / 0)
+    r = check_safely(good)
+    assert (r["file"], r["loads"], r["reason"]) == (good, False, "doctor_failed") and "ZeroDivisionError" in r["note"]
+
+
+def fake_ffmpeg(tmp_path, monkeypatch, body):
+    exe = tmp_path / "ffmpeg"
+    exe.write_text("#!/bin/sh\n" + body)
+    exe.chmod(0o755)
+    monkeypatch.setattr(AudioSegment, "converter", str(exe))
+    m4a = tmp_path / "a.m4a"
+    m4a.write_bytes(b"\0\0\0\x18ftypM4A \0\0\0\0M4A isom" + b"\0" * 100)
+    return str(m4a)
+
+
+@posix
+def test_a_file_that_hangs(tmp_path, monkeypatch):
+    m4a = fake_ffmpeg(tmp_path, monkeypatch, "echo $$ > %s\nexec sleep 600\n" % (tmp_path / "pid"))
+    a, b = check_files([m4a, str(tone(tmp_path / "a.flac"))], timeout=5)
+    assert (a["loads"], a["reason"]) == (False, "timeout") and "5 s" in a["note"]
+    assert b["loads"] and b["how"] == "natively"
+    # the ffmpeg that hung is gone too
+    with pytest.raises(ProcessLookupError):
+        for _ in range(50):
+            os.kill(int((tmp_path / "pid").read_text()), 0)
+            time.sleep(0.1)
+
+
+@posix
+def test_a_file_that_kills_the_check(tmp_path, monkeypatch):
+    m4a = fake_ffmpeg(tmp_path, monkeypatch, "kill -9 $PPID\n")
+    a, b = check_files([m4a, str(tone(tmp_path / "a.flac"))])
+    assert (a["loads"], a["reason"], a["note"]) == (False, "doctor_failed", "the check of this file crashed")
+    assert b["loads"]
+
+
+def test_reader_that_leaves(tmp_path):
+    good = str(tone(tmp_path / "a.flac"))
+    e = dict(os.environ, PYTHONPATH=ROOT)
+    p = subprocess.Popen([sys.executable, "-m", "pydub2", "doctor", "--json"] + [good] * 600, stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, env=e)
+    p.stdout.read(1)
+    p.stdout.close()
+    assert p.stderr.read() == b"" and p.wait(timeout=60) == 0
+
+
+def test_command_line(capsys, tmp_path):
+    # an empty --scan is a path that is not there, not the install report
+    code, out = run(capsys, "--json", "--scan", "")
+    assert code == 2 and "no directory or file" in json.loads(out)["error"]
+    with pytest.raises(SystemExit) as e:
+        main(["doctor", "--timeout", "0", "a.wav"])
+    assert e.value.code == 2
+    with pytest.raises(SystemExit) as e:
+        main(["doctor", "--help"])
+    assert e.value.code == 0 and "exit codes:" in capsys.readouterr().out
+
+
+def named(data):
+    return what(io.BytesIO(data), data[:65536])
+
+
+def test_format_is_not_guessed_from_two_bytes(tmp_path):
+    assert named("no audio".encode("utf-16")) is None
+    assert named(b"\xff" * 5000) is None and named(b"\xff\xfb" + bytes(range(256)) * 20) is None
+    # a frame header with nothing behind it, and one with a second frame where it must be
+    one = b"\xff\xfb\x90\x00" + b"\0" * 413
+    assert named(one + b"\0" * 500) is None and named(one + one) == "mp3"
+    assert named(b"\xff\xfd\x90\x00" + b"\0" * 413 + b"\xff\xfd\x90\x00") == "mp2"
+    adts = b"\xff\xf1\x50\x80\x02\x1f\xfc" + b"\0" * 9
+    assert named(adts + b"\0" * 20) is None and named(adts + adts) == "aac"
+    assert named(b"\x0b\x77\0\0\0\x40" + b"\0" * 50) == "ac3" and named(b"\x0b\x77\0\0\0\x80" + b"\0" * 50) == "eac3"
+    assert named(b"\0\0\0\x14ftypqt  " + b"\0" * 50) == "mov" and named(b"\0\0\0\x14ftyp3gp4" + b"\0" * 50) == "3gp"
+    # tags without end are not followed without end
+    assert named(b"ID3\4\0\0\0\0\0\0" * 5000) is None
+
+
+def test_advice_without_ffmpeg(noffmpeg, tmp_path):
+    ogg = tone(tmp_path / "a.ogg", "ogg").read_bytes()
+    chain = tmp_path / "chain.ogg"
+    chain.write_bytes(ogg + ogg)
+    cut = tmp_path / "cut.ogg"
+    cut.write_bytes(ogg[:len(ogg) // 20])
+    midi = tmp_path / "a.mid"
+    midi.write_bytes(b"MThd" + struct.pack(">IHHH", 6, 0, 1, 96) + b"MTrk" + struct.pack(">I", 4) + b"\0\xff\x2f\0")
+    jpeg = tmp_path / "a.jpg"
+    jpeg.write_bytes(b"\xff\xd8\xff\xe0\0\x10JFIF\0" + bytes(range(256)) * 4)
+    a, b, c, d = [check_file(str(p)) for p in (chain, cut, midi, jpeg)]
+    # ffmpeg reads a chained file, so that is what is missing. nothing reads the cut one
+    assert (a["reason"], a["hint"]) == ("needs_ffmpeg", FFMPEG_FIX) and a["note"].startswith("ogg needs ffmpeg")
+    assert (b["reason"], b["hint"], b["note"]) == ("cant_decode", None, "cant decode ogg, the file is damaged")
+    assert (c["reason"], c["hint"]) == ("not_audio", None) and "midi" in c["note"]
+    assert d["format"] is None and d["reason"] == "needs_ffmpeg" and d["note"].startswith("format not known")
+
+
+def test_wav_size_off_by_less_than_a_frame(tmp_path):
+    data = bytearray(tone(tmp_path / "a.wav", "wav").read_bytes())
+    at = data.index(b"data") + 4
+    size = struct.unpack_from("<I", data, at)[0]
+    struct.pack_into("<I", data, at, size + 1)
+    (tmp_path / "plus1.wav").write_bytes(data)
+    r = check_file(str(tmp_path / "plus1.wav"))
+    assert r["loads"] and r["reason"] is None and r["note"] is None
+    struct.pack_into("<I", data, at, size + 2)
+    (tmp_path / "plus2.wav").write_bytes(data)
+    assert check_file(str(tmp_path / "plus2.wav"))["reason"] == "truncated"

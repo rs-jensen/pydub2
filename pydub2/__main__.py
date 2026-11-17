@@ -1,13 +1,16 @@
 import argparse
 import ast
 import codecs
+import contextlib
 import importlib.metadata
 import importlib.util
 import io
 import json
+import multiprocessing
 import os
 import platform
 import re
+import signal
 import stat
 import struct
 import sys
@@ -143,7 +146,7 @@ def print_report(r):
 
 
 def clean(text):
-    return "".join(c if c.isprintable() else "?" for c in text)
+    return text if text.isprintable() else "".join(c if c.isprintable() else "?" for c in text)
 
 
 class NotAFile(Exception):
@@ -167,11 +170,37 @@ def open_regular(path, follow=True):
 def behind_id3(f, head):
     # an id3 tag can sit in front of any format
     at = 0
-    while head[:3] == b"ID3" and len(head) >= 10:
+    for _ in range(16):
+        if head[:3] != b"ID3" or len(head) < 10:
+            break
         at += 10 + (head[6] << 21 | head[7] << 14 | head[8] << 7 | head[9]) + (10 if head[5] & 0x10 else 0)
         f.seek(at)
         head = f.read(4096)
     return at, head
+
+
+KBPS = [[0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
+        [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],
+        [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+        [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256],
+        [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160]]
+
+
+def frame(h):
+    # the length of the mpeg audio or adts frame that h starts with, 0 when it starts with none
+    if len(h) < 7 or h[0] != 0xff or h[1] & 0xe0 != 0xe0:
+        return 0
+    version, layer = h[1] >> 3 & 3, 4 - (h[1] >> 1 & 3)
+    if layer == 4:
+        return ((h[3] & 3) << 11 | h[4] << 3 | h[5] >> 5) if h[1] & 0xf0 == 0xf0 and (h[2] >> 2 & 15) < 13 else 0
+    if version == 1 or h[2] >> 4 == 15 or h[2] >> 2 & 3 == 3:
+        return 0
+    rate = [44100, 48000, 32000][h[2] >> 2 & 3] >> [2, 0, 1, 0][version]
+    kbps = KBPS[layer - 1 if version == 3 else 3 if layer == 1 else 4][h[2] >> 4]
+    pad = h[2] >> 1 & 1
+    if layer == 1:
+        return (12000 * kbps // rate + pad) * 4
+    return (144000 if version == 3 or layer == 2 else 72000) * kbps // rate + pad
 
 
 def what(f, head):
@@ -180,8 +209,18 @@ def what(f, head):
     if h[:4] == b"RIFF" and h[8:12] == b"AVI ":
         return "avi"
     fmt = utils.sniff(h) or next((name for magic, name in MAGIC if h.startswith(magic)), None)
-    if fmt == "mp3" and h[:1] == b"\xff":
-        return {2: "mp3", 4: "mp2", 6: "mp1"}[h[1] & 6]
+    if fmt in ("mp3", "aac") and h[:1] == b"\xff":
+        # two bytes are too little to go by, a second frame must follow the first
+        n = frame(h)
+        if n < 7 or len(h) < n + 2 or h[n] != 0xff or (h[n + 1] ^ h[1]) & 0xfe:
+            return None
+        return "aac" if fmt == "aac" else {2: "mp3", 4: "mp2", 6: "mp1"}[h[1] & 6]
+    if fmt == "mp4" and h[8:12] == b"qt  ":
+        return "mov"
+    if fmt == "mp4" and h[8:10] == b"3g":
+        return "3gp"
+    if fmt == "ac3" and len(h) > 5 and h[5] >> 3 > 10:
+        return "eac3"
     if fmt == "webm" and b"webm" not in h[:64]:
         return "matroska"
     return fmt
@@ -222,6 +261,9 @@ def damaged(f, head, fmt):
     # the built in decoder takes this file by its start and still failed, ffmpeg is no fix for that
     if fmt is None or native_format(head) != fmt:
         return False
+    if fmt in ("ogg", "opus"):
+        # ffmpeg joins the streams of a chained file, the built in decoder does not always
+        return not ogg_walk(f, os.fstat(f.fileno()).st_size)[1]
     if fmt != "wav":
         return True
     tag = next((data[:2] if data[:2] != b"\xfe\xff" else data[24:26] for _, cid, n, data in chunks(f) if cid == b"fmt "), b"")
@@ -251,34 +293,38 @@ def mp3_missing(f, size, got, rate):
     return max(total - got, 0) / rate
 
 
-def ogg_cut(f, size):
-    # every page must be whole and the last one must end the stream
+def ogg_walk(f, size):
+    # cut and chained. every page must be whole and the last one must end the stream,
+    # and a stream that starts after the first one has pages makes the file chained
     at = flags = 0
+    chained = False
     while at < size:
         f.seek(at)
         h = f.read(27)
         if len(h) < 27:
-            return b"OggS".startswith(h[:4])
+            return b"OggS".startswith(h[:4]), chained
         if h[:4] != b"OggS":
-            return False
+            return False, chained
         lace = f.read(h[26])
+        chained = chained or bool(at and h[5] & 2 and not flags & 2)
         at += 27 + h[26] + sum(lace)
         flags = h[5]
         if len(lace) < h[26]:
-            return True
-    return at > size or not flags & 4
+            return True, chained
+    return at > size or not flags & 4, chained
 
 
 def missing(f, path, size, fmt, seg):
     # seconds missing at the end, 0 when the length is not known, None when nothing is missing or there is no telling
     got = int(seg.frame_count())
     if fmt == "wav":
-        rate = None
+        rate, align = None, 1
         for at, cid, n, data in chunks(f):
-            if cid == b"fmt " and len(data) >= 12:
-                rate = struct.unpack("<I", data[8:12])[0]
+            if cid == b"fmt " and len(data) >= 14:
+                rate, align = struct.unpack("<IH", data[8:14])
             # shortcut: rf64 keeps the size in ds64, its truncation is not seen, read ds64 if it matters
-            if cid == b"data" and n not in (0, 0xffffffff) and at + 8 + n > size:
+            # a size that is less than a frame too large is a sloppy writer, no sound is missing
+            if cid == b"data" and n not in (0, 0xffffffff) and at + 8 + n - size >= max(align, 1):
                 return (at + 8 + n - size) / rate if rate else 0
     elif fmt == "flac":
         try:
@@ -288,20 +334,25 @@ def missing(f, path, size, fmt, seg):
         return (d.frames - got) / d.rate if d.frames > got else None
     elif fmt == "mp3":
         return mp3_missing(f, size, got, seg.frame_rate)
-    elif fmt in ("ogg", "opus") and ogg_cut(f, size):
+    elif fmt in ("ogg", "opus") and ogg_walk(f, size)[0]:
         return 0
     return None
 
 
+def result(path, **more):
+    return dict({"file": path, "format": None, "loads": False, "how": None, "reason": None, "hint": None, "note": None}, **more)
+
+
 def check_file(path):
-    r = {"file": path, "format": None, "loads": False, "how": None, "reason": None, "hint": None, "note": None}
+    r = result(path)
     try:
         f = open_regular(path)
     except NotAFile as e:
         r.update(reason="not_a_file", note="is %s, not read" % e)
         return r
-    except OSError as e:
-        r.update(reason="cant_open", note="cant open: " + (e.strerror or "error"))
+    except (OSError, ValueError) as e:
+        # a name with a nul in it is a ValueError
+        r.update(reason="cant_open", note="cant open: " + (getattr(e, "strerror", None) or str(e) or "error"))
         return r
     with f:
         head = f.read(65536)
@@ -347,12 +398,15 @@ def failed(r, f, head, e):
         reason, hint, note = "empty", None, "file is empty"
     elif is_text(head):
         reason, hint, note = "not_audio", None, "file is text, not audio"
+    elif fmt == "midi":
+        reason, hint, note = "not_audio", None, "midi holds notes and no sound, ffmpeg does not read it either"
     elif _ffmpeg.find(conv) is None and reason in ("needs_ffmpeg", "cant_decode"):
         if not pydub2.strict and damaged(f, head, fmt):
             reason, hint, note = "cant_decode", None, "cant decode %s, the file is damaged" % fmt
         else:
             reason, hint = "needs_ffmpeg", hint or (FFMPEG_FIX if conv == "ffmpeg" else "put ffmpeg at " + conv)
-            note = "%s needs ffmpeg, none found: %s" % (fmt or "this file", hint)
+            note = "%s needs ffmpeg, none found: %s" % (fmt, hint) if fmt else \
+                "format not known, pydub2 does not read it by itself and there is no ffmpeg to try it with: " + hint
     else:
         lines = str(e).splitlines() or [type(e).__name__]
         note = ("cant decode %s: " % fmt if fmt else "not audio that anything here reads: ") + \
@@ -492,7 +546,7 @@ def scan(top):
                 with open_regular(path, follow=False) as f:
                     tree = ast.parse(f.read())
             except SyntaxError as e:
-                cant(path, "cant parse line %s: %s" % (e.lineno, e.msg))
+                cant(path, "cant parse%s: %s" % (" line %d" % e.lineno if e.lineno else "", e.msg))
                 continue
             except NotAFile as e:
                 cant(path, "is %s, not read" % e)
@@ -524,32 +578,119 @@ def print_scan(r):
     print("strict mode covers %d more, %d are notes or need ffmpeg as before" % (r["strict_covers"], r["notes"]))
 
 
+def check_safely(path):
+    try:
+        return check_file(path)
+    except Exception as e:
+        return result(path, reason="doctor_failed", note="doctor failed on this file: %s: %s" % (type(e).__name__, e))
+
+
+def worker(conn, state):
+    pydub2.strict, pydub2.max_duration, pydub2.ffmpeg_timeout, AudioSegment.converter = state
+    if hasattr(os, "setsid"):
+        # its own group, so an ffmpeg it started dies with it
+        os.setsid()
+    try:
+        for path in iter(conn.recv, None):
+            conn.send(check_safely(path))
+    except (EOFError, OSError, KeyboardInterrupt):
+        pass
+
+
+def stop(p):
+    try:
+        os.killpg(p.pid, signal.SIGKILL)
+    except (AttributeError, OSError):
+        # shortcut: on windows an ffmpeg the worker started lives on until it is done, kill the tree if that matters
+        p.kill()
+    p.join()
+
+
+def check_files(paths, timeout=60):
+    # in another process, so a file that hangs or crashes the decoder costs its own line and not the run
+    # under python -m this module is called __main__, the new process finds the worker by its real name
+    from pydub2 import __main__ as here
+    ctx = multiprocessing.get_context("spawn")
+    state = (pydub2.strict, pydub2.max_duration, pydub2.ffmpeg_timeout, AudioSegment.converter)
+    p, rs = None, []
+    try:
+        for path in paths:
+            if p is None:
+                conn, there = ctx.Pipe()
+                p = ctx.Process(target=here.worker, args=(there, state), daemon=True)
+                p.start()
+                there.close()
+            try:
+                conn.send(path)
+                r = conn.recv() if conn.poll(timeout) else result(
+                    path, reason="timeout", note="not done after %g s, stopped. --timeout sets the limit" % timeout)
+            except (EOFError, OSError):
+                r = result(path, reason="doctor_failed", note="the check of this file crashed")
+            if r["reason"] in ("timeout", "doctor_failed"):
+                stop(p)
+                p = None
+            rs.append(r)
+    finally:
+        if p is not None:
+            stop(p)
+    return rs
+
+
+CODES = """exit codes:
+  0  the install works, or every file loads. --scan gives 0 whatever it finds
+  1  the install does not work, or a file does not load
+  2  doctor could not do its work, or was called wrongly
+"""
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="python -m pydub2")
     sub = p.add_subparsers(dest="cmd", required=True)
-    d = sub.add_parser("doctor", help="check this install, some files, or a project")
-    d.add_argument("files", nargs="*")
+    d = sub.add_parser("doctor", help="check this install, some files, or a project", epilog=CODES,
+                       formatter_class=argparse.RawDescriptionHelpFormatter)
+    d.add_argument("files", nargs="*", help="audio files to check, each gets its own line")
     d.add_argument("--scan", metavar="DIR", help="list what in the python files under DIR behaves differently in pydub2")
-    d.add_argument("--json", action="store_true")
+    d.add_argument("--json", action="store_true", help="print JSON")
+    d.add_argument("--timeout", metavar="SECONDS", type=float, default=60, help="give up on a file after this long, 60 by default")
     a = p.parse_args(argv)
-    if a.scan and a.files:
+    if a.scan is not None and a.files:
         p.error("use --scan or files, not both")
+    if not a.timeout > 0:
+        p.error("--timeout must be more than 0")
     # a file name the terminal cant show must not end in a traceback
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="replace")
+    out = io.StringIO()
     try:
-        return doctor(a)
+        with contextlib.redirect_stdout(out):
+            code = doctor(a)
+    except KeyboardInterrupt:
+        return 130
     except Exception as e:
         error = "%s: %s" % (type(e).__name__, e)
+        code, out = 2, io.StringIO()
         if a.json:
-            print(json.dumps({"error": error}))
+            print(json.dumps({"error": error}), file=out)
         else:
             print(clean("doctor: " + error), file=sys.stderr)
+    # all at once and flushed here, so a reader that left or a full disk is met here and not at exit
+    try:
+        if sys.stdout is not None:
+            sys.stdout.write(out.getvalue())
+            sys.stdout.flush()
+    except BrokenPipeError:
+        # head or a pager took what it wanted, python must not complain when it closes stdout
+        with contextlib.suppress(OSError, ValueError):
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    except (OSError, ValueError) as e:
+        with contextlib.suppress(Exception):
+            print(clean("doctor: cant write the result: %s" % e), file=sys.stderr)
         return 2
+    return code
 
 
 def doctor(a):
-    if a.scan:
+    if a.scan is not None:
         r = scan(a.scan)
         if a.json:
             print(json.dumps(r, indent=1))
@@ -557,7 +698,7 @@ def doctor(a):
             print_scan(r)
         return 0
     if a.files:
-        rs = [check_file(f) for f in a.files]
+        rs = check_files(a.files, a.timeout)
         if a.json:
             print(json.dumps(rs, indent=1))
         for r in rs:
