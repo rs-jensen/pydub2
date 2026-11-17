@@ -13,10 +13,10 @@ import _pydub2
 ff = shutil.which("ffmpeg") or "ffmpeg"
 
 
-def sine(amp, rate, channels, width, secs=3.0):
+def sine(amp, rate, channels, width, secs=3.0, freq=1000):
     top = 2 ** (8 * width - 1) - 1
     n = int(rate * secs)
-    vals = [int(amp * top * math.sin(2 * math.pi * 1000 * i / rate)) for i in range(n)]
+    vals = [int(amp * top * math.sin(2 * math.pi * freq * i / rate)) for i in range(n)]
     fmt = {1: "b", 2: "h", 4: "i"}[width]
     frame = [v for v in vals for _ in range(channels)]
     return struct.pack("<%d%s" % (len(frame), fmt), *frame)
@@ -41,6 +41,7 @@ def ffmpeg_lufs(tmp_path, raw, rate, channels, width):
 
 
 needs_ffmpeg = pytest.mark.skipif(shutil.which(ff) is None, reason="no ffmpeg")
+WEIGHTED = {100: -10.9, 10000: -5.7}
 
 
 @needs_ffmpeg
@@ -52,6 +53,26 @@ def test_matches_ffmpeg(tmp_path, amp, channels, width, rate):
     raw = sine(amp, rate, channels, width)
     assert abs(_pydub2.loudness(raw, rate, channels, width)
                - ffmpeg_lufs(tmp_path, raw, rate, channels, width)) < 0.1
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("freq", [100, 10000])
+def test_weighting_matches_ffmpeg(tmp_path, freq):
+    raw = sine(0.5, 48000, 1, 2, freq=freq)
+    got = _pydub2.loudness(raw, 48000, 1, 2)
+    assert abs(got - ffmpeg_lufs(tmp_path, raw, 48000, 1, 2)) < 0.1
+    assert abs(got - WEIGHTED[freq]) < 0.1
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("quiet", [b"\0", None])
+def test_gating_matches_ffmpeg(tmp_path, quiet):
+    loud = sine(0.5, 48000, 1, 2)
+    tail = b"\0" * len(loud) * 3 if quiet else sine(0.01, 48000, 1, 2, secs=9.0)
+    raw = loud + tail
+    got = _pydub2.loudness(raw, 48000, 1, 2)
+    assert abs(got - ffmpeg_lufs(tmp_path, raw, 48000, 1, 2)) < 0.1
+    assert abs(got + 9.3) < 0.1
 
 
 def test_silence_is_minus_inf():

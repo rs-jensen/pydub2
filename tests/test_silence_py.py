@@ -93,6 +93,15 @@ def test_split_on_speech():
     assert len(parts) == len(silence.detect_speech(seg))
 
 
+def test_split_on_speech_keep_silence():
+    seg = voice()
+    (a, ra), = silence.split_on_speech(seg, return_ranges=True)
+    (b, rb), = silence.split_on_speech(seg, keep_silence=500, return_ranges=True)
+    (c, rc), = silence.split_on_speech(seg, keep_silence=0, return_ranges=True)
+    assert (ra, rb, rc) == ((1916, 4100), (1516, 4500), (2016, 4000))
+    assert (len(a), len(b), len(c)) == (2184, 2984, 1984)
+
+
 @pytest.mark.parametrize("wrap", [bytearray, memoryview])
 def test_bytearray_and_memoryview_data(wrap):
     raw = b"\x01\x00\x02\x00" * 100
