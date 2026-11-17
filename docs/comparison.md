@@ -11,7 +11,7 @@ I checked everything on 2026-11-16. Versions and dates come from PyPI that day. 
 | License | MIT | MIT | MIT | MIT | BSD-3 (libsndfile inside is LGPL) | BSD-3 (FFmpeg inside has its own license) | MIT | GPLv3 | BSD-3 | ISC | MIT |
 | Latest release | 0.0.1 | 0.25.1, 2021-03-10 | 0.26.0.post5, 2026-11-15 | 0.2.0, 2025-03-13 | 0.14.0, 2026-06-06 | 19.0.2, 2026-10-21 | 1.73, 2026-11-10 | 0.9.26, 2026-10-07 | 0.17.0, 2026-09-30 | 1.0.1, 2026-11-12 | 3.1.0, 2025-10-26 |
 | Wheel size | 3 MB | 32 KB | 43 KB | 37 KB | 1.1 to 1.3 MB | 19 to 46 MB | 0.3 to 0.7 MB | 2.5 to 6.1 MB | 4 to 10 MB, without FFmpeg and without torch | 0.3 MB, but it pulls in numba, scipy, scikit-learn and more | 23 KB |
-| Needs ffmpeg installed | for m4a/aac, wma, aiff and video, and for mp3 writing unless you add `pydub2-mp3` | for everything except wav, plus ffprobe | same as pydub | same as pydub | no | no, FFmpeg is in the wheel | no | no | yes, the shared FFmpeg libraries, for all decoding and encoding | no | one of several backends, ffmpeg is one of them |
+| Needs ffmpeg installed | for m4a/aac, wma, aiff and video, and for mp3 writing unless you add `pydub2-mp3`; `pip install "pydub2[ffmpeg]"` gives you an ffmpeg binary | for everything except wav, plus ffprobe | same as pydub | same as pydub | no | no, FFmpeg is in the wheel | no | no | yes, the shared FFmpeg libraries, for all decoding and encoding | no | one of several backends, ffmpeg is one of them |
 | AudioSegment API | yes, pydub's own test suite runs against it | it is the original | yes, a fork | yes, a fork | no | no | no | no | no | no | no |
 | Read with nothing else installed | wav, flac, ogg, opus, mp3 | wav | wav | wav | wav, flac, ogg, opus, mp3, aiff and more | wav, flac, ogg, opus, mp3, m4a, aiff, mp4 | wav, flac, vorbis, mp3 | wav, flac, ogg, opus, mp3, aiff, m4a (m4a through the system codecs on macOS) | none, needs FFmpeg | what soundfile reads | wave, aifc and sunau from the standard library, Core Audio on macOS |
 | Write with nothing else installed | wav, flac, ogg, opus; mp3 after `pip install "pydub2[mp3]"` | wav | wav | wav | wav, flac, ogg, opus (8, 12, 16, 24 and 48 kHz only), mp3 | wav, flac, mp3, aac, opus; vorbis only with the experimental encoder | wav | wav, flac, ogg, mp3 | none, needs FFmpeg | nothing, it only reads | nothing, it only reads |
@@ -118,7 +118,7 @@ Use pydub 0.25.1, or one of its forks, if your code works today, you only touch 
 
 I develop it on macOS arm64. The tests run on Linux for every push, and on Windows and macOS when I build the wheels. I have not tried it on a real Windows machine.
 
-m4a and aac, wma, aiff and video files still go through ffmpeg. pydub2 can export m4a and aac when ffmpeg is there. That fails in pydub 0.25.1.
+m4a and aac, wma, aiff and video files still go through ffmpeg. `pip install "pydub2[ffmpeg]"` pulls an ffmpeg binary from PyPI if you have none. pydub2 can export m4a and aac when ffmpeg is there. That fails in pydub 0.25.1.
 
 Writing mp3 needs the `pydub2-mp3` package, or ffmpeg.
 

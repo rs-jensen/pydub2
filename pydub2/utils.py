@@ -173,6 +173,15 @@ def which(program):
             return program_path
 
 
+def extra_ffmpeg():
+    # the binary of pip install "pydub2[ffmpeg]", looked at only when nothing is on PATH
+    try:
+        import imageio_ffmpeg
+        return which(imageio_ffmpeg.get_ffmpeg_exe())
+    except (ImportError, RuntimeError):
+        return None
+
+
 def check_duration(frames, rate):
     limit = pydub2.max_duration
     if limit is not None and frames > limit * rate:
@@ -267,7 +276,7 @@ def get_encoder_name():
     """
     Return enconder default application for system, either avconv or ffmpeg
     """
-    path = _first(("ffmpeg", "avconv"))
+    path = _first(("ffmpeg", "avconv")) or extra_ffmpeg()
     if path:
         return path
     else:
