@@ -201,6 +201,7 @@ def test_no_thread_for_the_watcher_leaves_nothing(fake_ffplay, monkeypatch):
 
 def test_ffplay_missing_leaves_no_temp_file(fake_ffplay, tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path / "nonexistent"))
+    monkeypatch.setattr(type(seg), "converter", "ffmpeg")  # an earlier test may leave a full path here
     with pytest.warns(RuntimeWarning), pytest.raises(FileNotFoundError):
         playback.play_async(seg)
     assert fake_ffplay.temp_files() == [] and fake_ffplay.started == []
