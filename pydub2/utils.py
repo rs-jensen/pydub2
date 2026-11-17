@@ -5,6 +5,7 @@ import json
 import numbers
 import os
 import re
+import signal
 import struct
 import sys
 import subprocess
@@ -247,8 +248,21 @@ def timeout():
 def run(command, data=None, **kwargs):
     t = timeout()
     try:
-        return subprocess.run(command, input=data, capture_output=True, creationflags=NOWINDOW,
-                              timeout=t, **kwargs)
+        if os.name != "posix":
+            return subprocess.run(command, input=data, capture_output=True, creationflags=NOWINDOW,
+                                  timeout=t, **kwargs)
+        # a group of its own, so a timeout or Ctrl-C also stops what a wrapper script around ffmpeg started
+        with Popen(command, stdin=None if data is None else PIPE, stdout=PIPE, stderr=PIPE, start_new_session=True,
+                   **kwargs) as p:
+            try:
+                out, err = p.communicate(data, timeout=t)
+            except BaseException:
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                raise
+        return subprocess.CompletedProcess(command, p.returncode, out, err)
     except subprocess.TimeoutExpired:
         raise TimeoutError("ffmpeg took longer than ffmpeg_timeout")
 
