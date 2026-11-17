@@ -420,11 +420,19 @@ def test_doctor_patches_nothing(tmp_path, monkeypatch):
     flac, real, seen = tone(tmp_path / "a.flac"), _ffmpeg.to_wav, []
     load = AudioSegment.from_file.__func__
 
+    go, done = threading.Event(), threading.Event()
+
+    def other():
+        go.wait(60)
+        seen.append(_ffmpeg._seen.get())
+        done.set()
+    # started before doctor runs, a thread started inside it inherits the context on free threaded 3.14
+    threading.Thread(target=other, daemon=True).start()
+
     def from_file(cls, *args, **kwargs):
         seen.append(_ffmpeg.to_wav)
-        t = threading.Thread(target=lambda: seen.append(_ffmpeg._seen.get()))
-        t.start()
-        t.join()
+        go.set()
+        assert done.wait(60)
         return load(cls, *args, **kwargs)
     monkeypatch.setattr(AudioSegment, "from_file", classmethod(from_file))
     assert check_file(str(flac))["how"] == "natively"
