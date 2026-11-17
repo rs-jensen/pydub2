@@ -50,6 +50,7 @@ Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh
 
     // pydub compares the truncated rms, so rms <= thresh is about sum < (floor(thresh) + 1)^2 * n
     // audioop sums in a double that rounds, so close calls are decided by summing the slice like audioop
+    // below 2^50 that sum is exact and one step is bigger than the sqrt and division can round, so no close calls
     // rms is never above 2^31 so a bigger thresh means everything is silent
     bool all = thresh >= 2147483648.0;
     uint64_t lim = thresh >= 0 && !all ? (uint64_t)thresh + 1 : 0;
@@ -88,7 +89,7 @@ Ranges detect_silence(const Audio &a, int min_silence_len, double silence_thresh
             double sum = (double)h * 18446744073709551616.0 + (double)l;
             double top = (double)lim * (double)n;
             double slack = top * ((double)n + 16) * 0x1p-51;
-            if (sum < top - slack || sum > top + slack) {
+            if (top < 0x1p50 || sum < top - slack || sum > top + slack) {
                 quiet = sum < top;
             } else {
                 size_t from = std::min(s * a.channels, total), to = std::min(e * a.channels, total);

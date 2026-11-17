@@ -1,4 +1,3 @@
-import ctypes
 import functools
 import struct
 import threading
@@ -32,6 +31,7 @@ def lib():
         import pydub2_mp3
     except ImportError:
         return None
+    import ctypes
     lame = ctypes.CDLL(pydub2_mp3.path())
     lame.lame_init.restype = ctypes.c_void_p
     return lame
@@ -103,6 +103,7 @@ def encode(data, rate, channels, width, bitrate=None, tags=None, id3v2_version="
         data = _pydub2.resample(data, rate, channels, width, out_rate)
         rate = out_rate
 
+    import ctypes
     lame = lib()
     with setup:
         gfp = ctypes.c_void_p(lame.lame_init())

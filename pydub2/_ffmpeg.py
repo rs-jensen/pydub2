@@ -25,9 +25,10 @@ def find(converter):
 def run(converter, args, data, what):
     exe = find(converter)
     if exe is None:
-        raise FileNotFoundError("ffmpeg not found, pydub2 needs it for " + what +
-                                (". strict mode needs ffmpeg" if pydub2.strict else "") +
-                                ', or pip install "pydub2[ffmpeg]"')
+        name = os.fspath(converter)
+        raise FileNotFoundError(("ffmpeg not found" if name == "ffmpeg" else "no ffmpeg at " + name) +
+                                ", pydub2 needs it for " + what + (". strict mode needs ffmpeg" if pydub2.strict else "") +
+                                ('. install ffmpeg or pip install "pydub2[ffmpeg]"' if name == "ffmpeg" else ""))
     cmd = [exe, "-y", "-nostdin"] + args
     log_conversion(cmd)
     return run_command(cmd, data)

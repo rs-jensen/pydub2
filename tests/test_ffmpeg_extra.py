@@ -4,6 +4,7 @@ import os
 import struct
 import subprocess
 import sys
+import types
 import wave
 
 import pytest
@@ -50,10 +51,37 @@ def script(path, target, log=None):
 def test_missing(nopath, monkeypatch):
     monkeypatch.setitem(sys.modules, "imageio_ffmpeg", None)
     assert _ffmpeg.find("ffmpeg") is None
-    with pytest.raises(FileNotFoundError, match=r'ffmpeg not found, pydub2 needs it for mp3, or pip install "pydub2\[ffmpeg\]"$'):
+    with pytest.raises(FileNotFoundError, match=r'ffmpeg not found, pydub2 needs it for mp3. install ffmpeg or pip install "pydub2\[ffmpeg\]"$'):
         _ffmpeg.run("ffmpeg", [], None, "mp3")
+    with pytest.raises(FileNotFoundError, match=r"no ffmpeg at /nope/ffmpeg, pydub2 needs it for mp3$"):
+        _ffmpeg.run("/nope/ffmpeg", [], None, "mp3")
     with pytest.warns(RuntimeWarning, match="Couldn't find ffmpeg or avconv"):
         assert utils.get_encoder_name() == "ffmpeg"
+
+
+def fake_imageio(monkeypatch, tmp_path):
+    def probe():
+        raise AssertionError("get_ffmpeg_exe would run a bare ffmpeg")
+    pkg = tmp_path / "imageio_ffmpeg"
+    (pkg / "binaries").mkdir(parents=True)
+    fake = types.ModuleType("imageio_ffmpeg")
+    fake.__file__ = str(pkg / "__init__.py")
+    fake.get_ffmpeg_exe = probe
+    monkeypatch.setitem(sys.modules, "imageio_ffmpeg", fake)
+    return pkg / "binaries"
+
+
+def test_extra_never_probes(nopath, monkeypatch):
+    bins = fake_imageio(monkeypatch, nopath)
+    monkeypatch.delenv("IMAGEIO_FFMPEG_EXE", raising=False)
+    assert utils.extra_ffmpeg() is None
+    binary = bins / "ffmpeg-test"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    if sys.platform != "win32":
+        assert utils.extra_ffmpeg() == str(binary)
+    monkeypatch.setenv("IMAGEIO_FFMPEG_EXE", "ffmpeg")
+    assert utils.extra_ffmpeg() is None
 
 
 def test_extra_is_last(exe, tmp_path):

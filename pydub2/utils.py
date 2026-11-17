@@ -1,6 +1,6 @@
 from __future__ import division
 
-import ctypes
+import glob
 import json
 import os
 import re
@@ -27,7 +27,11 @@ if sys.version_info >= (3, 0):
     basestring = str
 
 # with a console the child shares it and gets Ctrl-C, without one it would open its own window
-NOWINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" and not ctypes.windll.kernel32.GetConsoleWindow() else 0
+NOWINDOW = 0
+if os.name == "nt":
+    import ctypes
+    if not ctypes.windll.kernel32.GetConsoleWindow():
+        NOWINDOW = subprocess.CREATE_NO_WINDOW
 
 FRAME_WIDTHS = {
     8: 1,
@@ -175,11 +179,16 @@ def which(program):
 
 def extra_ffmpeg():
     # the binary of pip install "pydub2[ffmpeg]", looked at only when nothing is on PATH
+    # imageio_ffmpeg.get_ffmpeg_exe would run a bare ffmpeg from the current folder on windows
     try:
         import imageio_ffmpeg
-        return which(imageio_ffmpeg.get_ffmpeg_exe())
-    except (ImportError, RuntimeError):
+    except ImportError:
         return None
+    exe = os.environ.get("IMAGEIO_FFMPEG_EXE")
+    if not exe:
+        found = glob.glob(os.path.join(os.path.dirname(imageio_ffmpeg.__file__), "binaries", "ffmpeg-*"))
+        exe = found[0] if found else None
+    return which(exe) if exe and os.path.isabs(exe) else None
 
 
 def check_duration(frames, rate):

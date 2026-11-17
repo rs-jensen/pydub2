@@ -34,7 +34,7 @@ Speech detection in pydub2 uses the Silero VAD model, which is built into the ex
 
 ## Speed and size
 
-I timed the libraries on an Apple M2 Pro (macOS 15.7.9, Python 3.13.1, ffmpeg 7.1.1) with pydub 0.25.1, pydub2 0.0.1, soundfile 0.14.0, PyAV 19.0.2 and miniaudio 1.73. pydub-lts is within a few percent of pydub in every row, so it is left out. The inputs are generated 44.1 kHz stereo files, speech-like and music-like. Each number is the median of at least 5 runs, each in a fresh process. The machine was not idle, so read differences under 15 percent as a tie. The method, the full table with CPU time for every case and the exact versions are in [bench/README.md](../bench/README.md).
+I timed the libraries on an Apple M2 Pro (macOS 15.7.9, Python 3.13.1, ffmpeg 7.1.1) with pydub 0.25.1, pydub2 0.0.1 (some rows were measured again on later code, see bench/README.md), soundfile 0.14.0, PyAV 19.0.2 and miniaudio 1.73. pydub-lts is within a few percent of pydub in every row, so it is left out. The inputs are generated 44.1 kHz stereo files, speech-like and music-like. Each number is the median of at least 5 runs, each in a fresh process. The machine was not idle, so read differences under 15 percent as a tie. The method, the full table with CPU time for every case and the exact versions are in [bench/README.md](../bench/README.md).
 
 Seconds of wall time on a 10 minute speech file, lower is better. The music file gives the same picture for loading.
 

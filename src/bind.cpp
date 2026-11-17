@@ -1,4 +1,6 @@
+#include <atomic>
 #include <chrono>
+#include <cstring>
 #include <mutex>
 #include <vector>
 
@@ -15,7 +17,46 @@ using namespace pydub2;
 
 // signals only reach the main thread, the others get a check that does nothing
 static unsigned long main_thread;
-static bool fused_rms = false;
+static std::atomic<int> fused_state{-1};
+
+// decided on first use by asking the audioop of the user, the platform is the guess when there is none
+static bool fused() {
+    int f = fused_state.load();
+    if (f >= 0) {
+        return f;
+    }
+    f = 0;
+#if defined(__aarch64__) && defined(__APPLE__)
+    f = 1;
+#elif defined(__aarch64__)
+    f = nb::cast<int>(nb::module_::import_("sys").attr("version_info")[1]) >= 13;
+#endif
+    try {
+        nb::dict d;
+        nb::module_::import_("builtins").attr("exec")(
+            "import warnings\n"
+            "def probe(d):\n"
+            "    with warnings.catch_warnings():\n"
+            "        warnings.simplefilter('ignore')\n"
+            "        import audioop\n"
+            "    return audioop.rms(d, 4)\n", d);
+        // these differ with and without the fused multiply add
+        std::string probe(28, 0);
+        for (int i = 0; i < 7; i++) {
+            int32_t v = 2122901605;
+            memcpy(&probe[i * 4], &v, 4);
+        }
+        long long got = nb::cast<long long>(d["probe"](nb::bytes(probe.data(), probe.size())));
+        if (got == rms(probe, 4, true)) {
+            f = 1;
+        } else if (got == rms(probe, 4, false)) {
+            f = 0;
+        }
+    } catch (nb::python_error &) {
+    }
+    fused_state = f;
+    return f;
+}
 
 // every 100 ms the long loops take the gil to let python run its signal handlers
 static Cancel interrupt() {
@@ -147,12 +188,6 @@ static nb::bytes take(Stream &s, int64_t n) {
 
 NB_MODULE(_pydub2, m) {
     main_thread = nb::cast<unsigned long>(nb::module_::import_("threading").attr("main_thread")().attr("ident"));
-    // the audioop of the user: fused on arm64 macOS, on arm64 linux only in the audioop-lts wheel of python 3.13 and up
-#if defined(__aarch64__) && defined(__APPLE__)
-    fused_rms = true;
-#elif defined(__aarch64__)
-    fused_rms = nb::cast<int>(nb::module_::import_("sys").attr("version_info")[1]) >= 13;
-#endif
 
     nb::class_<Stream>(m, "Decoder")
         .def("__init__", [](Stream *s, nb::bytes data) {
@@ -220,8 +255,9 @@ NB_MODULE(_pydub2, m) {
 
     m.def("rms", [](nb::bytes data, long long width) {
         std::string_view s = str(data);
+        bool f = fused();
         nb::gil_scoped_release g;
-        return rms(s, width, fused_rms);
+        return rms(s, width, f);
     });
 
     m.def("max", [](nb::bytes data, long long width) {
@@ -265,9 +301,10 @@ NB_MODULE(_pydub2, m) {
         std::string_view s = str(data);
         nb::object out;
         Cancel cancel = interrupt();
+        bool f = fused();
         try {
             nb::gil_scoped_release g;
-            compress(s, width, channels, thresh, ratio, attack_frames, release_frames, look, fused_rms, cancel, into(out));
+            compress(s, width, channels, thresh, ratio, attack_frames, release_frames, look, f, cancel, into(out));
         } catch (std::domain_error &e) {
             // pydub divides by a threshold of 0 in python
             PyErr_SetString(PyExc_ZeroDivisionError, e.what());
@@ -366,9 +403,10 @@ NB_MODULE(_pydub2, m) {
                                double silence_thresh, int seek_step) {
         Audio a = audio(data, rate, channels, width);
         Ranges r;
+        bool f = fused();
         {
             nb::gil_scoped_release g;
-            r = detect_silence(a, min_silence_len, silence_thresh, seek_step, fused_rms, interrupt());
+            r = detect_silence(a, min_silence_len, silence_thresh, seek_step, f, interrupt());
         }
         return ranges(r);
     });

@@ -1,6 +1,7 @@
 import array
 import math
 import random
+import time
 
 import pytest
 
@@ -142,3 +143,23 @@ def test_matches_naive_walk():
 def test_32_bit_sum_rounds_like_audioop():
     data = (-1520301996).to_bytes(4, "little", signed=True) * 25518
     assert ours(data, 85061, 2, 4, 90, -3, 1) == theirs(data, 85061, 2, 4, 90, -3, 1) == [[0, 150]]
+
+
+def best_time(data, width, thresh):
+    best = 1e9
+    for _ in range(3):
+        t = time.perf_counter()
+        _pydub2.detect_silence(data, 44100, 2, width, 1000, thresh, 1)
+        best = min(best, time.perf_counter() - t)
+    return best
+
+
+@pytest.mark.parametrize("width", [2, 3, 4])
+def test_every_window_a_close_call_stays_linear(width):
+    thresh = -90
+    amp = int(10 ** (thresh / 20) * 2 ** (8 * width - 1)) + 1
+
+    def wave(v):
+        return (v.to_bytes(width, "little", signed=True) + (-v).to_bytes(width, "little", signed=True)) * 44100 * 5
+
+    assert best_time(wave(amp), width, thresh) < 10 * best_time(wave(amp + 2), width, thresh)

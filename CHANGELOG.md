@@ -6,32 +6,34 @@ What changed in each release.
 
 ### Added
 
-- `pydub2.strict = True`, or `PYDUB2_STRICT=1` in the environment, makes loads, partial loads, `mediainfo` and exports use ffmpeg and ffprobe like pydub, so the samples and the exported bytes are the same as pydub 0.25.1 gives. It needs ffmpeg, and raises pydub's error with a note when it is missing. It is off by default.
+- `pydub2.strict = True`, or `PYDUB2_STRICT=1` in the environment, makes loads, partial loads, `mediainfo` and exports use ffmpeg and ffprobe like pydub, so the samples and the exported bytes are the same as pydub 0.25.1 gives. It needs ffmpeg, and raises pydub's error with a note when it is missing. The limits for untrusted files (no URLs or playlists, `max_duration`, `ffmpeg_timeout`) stay on. It is off by default.
+- `pip install "pydub2[ffmpeg]"` pulls an ffmpeg binary from the `imageio-ffmpeg` package. pydub2 uses it for m4a, aac, wma and video files when `AudioSegment.converter` is not set and no ffmpeg is on `PATH`.
 
-### Faster and lighter
+### Changed
 
-- Loading ogg vorbis, opus and flac needs about half the memory it did: the peak is now close to the size of the decoded audio. 10 minutes of ogg went from 454 to 234 MiB and of flac from 244 to 126 MiB.
-- This also holds with `pydub2.max_duration` set.
+- Loading ogg vorbis, opus and flac needs about half the memory it did: the peak is now close to the size of the decoded audio. 10 minutes of ogg went from 454 to 234 MiB and of flac from 244 to 126 MiB. This also holds with `pydub2.max_duration` set.
 - `detect_speech` needs a fixed amount of extra memory, not 3 times the audio. On 40 minutes it went from 1.3 GB to 19 MB. The ranges are the same.
 - Writing opus from 44.1 kHz audio on arm64 is about 40 percent faster. 10 minutes took 9.2 s and now take 5.3 s.
 - `overlay` is 3 times faster and `normalize` and `apply_gain` are 1.9 times faster on 60 s of audio.
-
-### Added
-
-- `pip install "pydub2[ffmpeg]"` pulls an ffmpeg binary from the `imageio-ffmpeg` package. pydub2 uses it for m4a, aac, wma and video files when `AudioSegment.converter` is not set and no ffmpeg is on `PATH`.
-- The `FileNotFoundError` for a missing ffmpeg now ends with this install line.
+- The `FileNotFoundError` for a missing ffmpeg says what it looked for, and suggests the `ffmpeg` extra only when `AudioSegment.converter` is not set.
+- `normalize(seg, target_lufs=...)` stops the gain at full scale minus `headroom`, so a quiet file with high peaks ends below the target and does not clip.
 
 ### Fixed
 
+- `rms`, `dBFS`, `detect_silence`, `compress_dynamic_range` and `normalize` of 32 bit audio now match the audioop you have. The first call asks that audioop, so macOS arm64 and the Pythons that fuse the sum give pydub's numbers where they were off by 1 (`rms`) or 1e-8 dB (`dBFS`).
+- A wav export of 8 or 24 bit audio with an odd number of bytes is what the `wave` module of the running Python writes, so there is no pad byte before Python 3.15.
+- A damaged flac file whose header says the maximum block size is 0 no longer makes the seek compute an infinite byte offset, which is undefined in C.
 - The Windows wheels no longer need the Visual C++ redistributable. `import pydub2` failed with "DLL load failed" on a machine without it.
-- pydub2 no longer starts an `ffmpeg`, `ffprobe` or `ffplay` from the current folder when none is found on PATH. It says ffmpeg is not found.
 - On Windows, Ctrl-C reaches ffmpeg again when you run from a console, and ffmpeg is stopped when a call is interrupted or times out.
 - `export` no longer fails on Windows when a virus scanner still holds the temporary file ffmpeg wrote.
 - `import pydub` with pydub2-compat no longer fails under `pythonw` when pydub2 cannot be imported.
 - A converter path in another case, like `C:\ffmpeg\bin\FFMPEG.EXE`, is found on Windows.
 - `AudioSegment.stream` lets go of the file when the generator ends or is closed, so it can be deleted on Windows.
 - A tag too long for the Windows command line raises `CouldntEncodeError` and not a raw `OSError`.
-- `effects.normalize(seg, target_lufs=...)` no longer clips a quiet file with high peaks. The gain stops at full scale minus `headroom`.
+
+### Security
+
+- pydub2 no longer starts an `ffmpeg`, `ffprobe` or `ffplay` from the current folder when none is found on PATH. It says ffmpeg is not found. The ffmpeg extra does not look in the current folder either.
 
 ## [0.0.1] - 2026-11-16
 

@@ -67,7 +67,7 @@ def test_tag_with_data_in_it(tmp_path):
 
 
 def test_missing_converter():
-    with pytest.raises(FileNotFoundError, match="ffmpeg not found, pydub2 needs it for mp3"):
+    with pytest.raises(FileNotFoundError, match="no ffmpeg at nope-not-here, pydub2 needs it for mp3$"):
         _ffmpeg.from_wav("nope-not-here", sine(), "mp3")
 
 
