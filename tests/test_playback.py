@@ -56,7 +56,10 @@ if os.environ.get("FAKE_STUBBORN"):
 with open({rec!r} + ".tmp", "w") as f:
     f.write(repr((os.getpid(), [{tag!r}] + sys.argv[1:])))
 os.replace({rec!r} + ".tmp", {rec!r})
-time.sleep(float(os.environ.get("FAKE_SECONDS", "30")))
+release = os.environ.get("FAKE_RELEASE")
+end = time.time() + float(os.environ.get("FAKE_SECONDS", "30"))
+while time.time() < end and not (release and os.path.exists(release)):
+    time.sleep(0.01)
 """
 
 
@@ -132,13 +135,15 @@ def test_context_manager_stops(fake_ffplay):
     assert not h.is_playing() and not alive(pid) and not os.path.exists(args[-1])
 
 
-def test_dropped_handle_plays_to_its_end_and_cleans_up(fake_ffplay, monkeypatch):
-    monkeypatch.setenv("FAKE_SECONDS", "1")
+def test_dropped_handle_plays_to_its_end_and_cleans_up(fake_ffplay, monkeypatch, tmp_path):
+    release = tmp_path / "release"  # the fake plays until this exists, so no timing decides the first assert
+    monkeypatch.setenv("FAKE_RELEASE", str(release))
     h = playback.play_async(seg)
     pid, args = fake_ffplay()
     del h
     gc.collect()
     assert alive(pid) and os.path.exists(args[-1])
+    release.write_text("")
     assert wait_for(lambda: not alive(pid))
     assert wait_for(lambda: not os.path.exists(args[-1]) and fake_ffplay.temp_files() == [])
 
