@@ -307,20 +307,16 @@ def check_file(path):
         head = f.read(65536)
         size = os.fstat(f.fileno()).st_size
         r["format"] = fmt = what(f, head)
-        # watch whether from_file calls ffmpeg, without changing what it does
-        used, real = [], _ffmpeg.to_wav
-
-        def spy(*args, **kwargs):
-            used.append(1)
-            return real(*args, **kwargs)
-        _ffmpeg.to_wav = spy
+        # ask whether from_file ran ffmpeg, the list is seen by this thread only and nothing is patched
+        used = []
+        token = _ffmpeg._seen.set(used)
         try:
             seg = AudioSegment.from_file(path)
         except Exception as e:
             failed(r, f, head, e)
             return r
         finally:
-            _ffmpeg.to_wav = real
+            _ffmpeg._seen.reset(token)
         native = not used
         if native:
             r["format"] = fmt = native_format(head)
