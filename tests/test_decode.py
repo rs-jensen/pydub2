@@ -663,5 +663,5 @@ SETUP_BOMB = bytes.fromhex(
 
 
 def test_vorbis_setup_bomb():
-    from test_untrusted import peak_mb
-    assert peak_mb("try:\n    _pydub2.decode(bytes.fromhex(%r))\nexcept RuntimeError:\n    pass" % SETUP_BOMB.hex()) < 50
+    from test_untrusted import grows_mb
+    assert grows_mb("try:\n    _pydub2.decode(bytes.fromhex(%r))\nexcept RuntimeError:\n    pass" % SETUP_BOMB.hex()) < 20
