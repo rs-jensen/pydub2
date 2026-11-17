@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 import shutil
@@ -262,7 +263,8 @@ def test_mp3_library_that_does_not_load(capsys, broken_mp3):
     code, out = run(capsys, "--json")
     r = json.loads(out)
     assert code == 1 and not r["ok"] and r["pydub2_mp3"] is False and "mp3" not in r["write_natively"]
-    assert [f["run"] for f in r["fixes"]] == ["pip install --force-reinstall pydub2-mp3"]
+    # without ffmpeg on PATH the ffmpeg fix comes first
+    assert [f["run"] for f in r["fixes"] if "pydub2-mp3" in f["for"]] == ["pip install --force-reinstall pydub2-mp3"]
     code, out = run(capsys)
     assert "(pydub2-mp3 broken)" in out and "missing, pydub2-mp3 is installed but does not load" in out
 
@@ -301,7 +303,7 @@ def test_format_of_files_only_ffmpeg_reads(tmp_path):
 
 
 def wav_head(tag, size):
-    return struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", 36 + size, b"WAVE", b"fmt ", 16, tag, 1, 8000, 8000, 1, 8,
+    return struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", (36 + size) & 0xffffffff, b"WAVE", b"fmt ", 16, tag, 1, 8000, 8000, 1, 8,
                        b"data", size)
 
 
@@ -356,10 +358,12 @@ def test_truncated(tmp_path, format):
 def test_scan_lists_what_it_cant_read(capsys, tmp_path, monkeypatch):
     (tmp_path / "old.py").write_text("import pydub\nprint 'hi'\n")
     (tmp_path / "big.py").write_text("x = 1\n" * 400000)
+    with pytest.raises(SyntaxError) as e:
+        ast.parse("import pydub\nprint 'hi'\n")
     code, out = run(capsys, "--scan", str(tmp_path))
     assert code == 0 and out.splitlines()[:3] == [
         "%s: larger than 2 MB" % (tmp_path / "big.py"),
-        "%s: cant parse line 2: Missing parentheses in call to 'print'. Did you mean print(...)?" % (tmp_path / "old.py"),
+        "%s: cant parse line 2: %s" % (tmp_path / "old.py", e.value.msg),  # the wording is the interpreter's
         "0 of 2 python files use pydub, 2 could not be read and are not counted"]
     # a single file works too
     r = scan(str(tmp_path / "old.py"))
@@ -416,11 +420,19 @@ def test_doctor_patches_nothing(tmp_path, monkeypatch):
     flac, real, seen = tone(tmp_path / "a.flac"), _ffmpeg.to_wav, []
     load = AudioSegment.from_file.__func__
 
+    go, done = threading.Event(), threading.Event()
+
+    def other():
+        go.wait(60)
+        seen.append(_ffmpeg._seen.get())
+        done.set()
+    # started before doctor runs, a thread started inside it inherits the context on free threaded 3.14
+    threading.Thread(target=other, daemon=True).start()
+
     def from_file(cls, *args, **kwargs):
         seen.append(_ffmpeg.to_wav)
-        t = threading.Thread(target=lambda: seen.append(_ffmpeg._seen.get()))
-        t.start()
-        t.join()
+        go.set()
+        assert done.wait(60)
         return load(cls, *args, **kwargs)
     monkeypatch.setattr(AudioSegment, "from_file", classmethod(from_file))
     assert check_file(str(flac))["how"] == "natively"
@@ -433,3 +445,35 @@ def test_how_a_file_loads(tmp_path):
     assert check_file(str(tmp_path / "a.au"))["how"] == "through ffmpeg"
     assert check_file(str(tone(tmp_path / "a.flac")))["how"] == "natively"
     assert _ffmpeg._seen.get() is None
+
+
+@pytest.mark.parametrize("format", ["ogg", "opus"])
+def test_chained_stream_is_not_damaged(noffmpeg, tmp_path, format):
+    one = tone(tmp_path / ("a." + format), format)
+    chain = tmp_path / ("chain." + format)
+    chain.write_bytes(one.read_bytes() * 2)
+    r = check_file(str(chain))
+    assert r["reason"] == "needs_ffmpeg"
+    # a cut stream is still caught
+    cut = tmp_path / ("cut." + format)
+    cut.write_bytes(one.read_bytes()[:-100])
+    assert check_file(str(cut))["reason"] == "truncated"
+
+
+@pytest.mark.parametrize("name", ["a.raw", "a.PCM"])
+def test_raw_needs_its_parameters(noffmpeg, tmp_path, name):
+    path = tmp_path / name
+    path.write_bytes(b"\1\2" * 100)
+    r = check_file(str(path))
+    assert not r["loads"] and "sample_width, frame_rate and channels" in r["note"] and "KeyError" not in r["note"]
+
+
+def test_unknown_wav_length_is_not_truncation(tmp_path):
+    for size in (0, 0xffffffff, 0x7ffff000, 0x7fffffff):
+        path = tmp_path / ("s%d.wav" % size)
+        path.write_bytes(wav_head(1, size) + b"\x80" * 8000)
+        r = check_file(str(path))
+        assert r["loads"] and r["reason"] is None, size
+    path = tmp_path / "short.wav"
+    path.write_bytes(wav_head(1, 16000) + b"\x80" * 8000)
+    assert check_file(str(path))["reason"] == "truncated"

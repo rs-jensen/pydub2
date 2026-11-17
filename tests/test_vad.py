@@ -73,3 +73,26 @@ def test_long_input_in_pieces():
     whole = _pydub2.resample(big, 44100, 1, 2, rate)
     a = _pydub2.detect_speech(big, 44100, 1, 2, 0.5, 250, 100)
     assert a and a == _pydub2.detect_speech(whole, rate, 1, 2, 0.5, 250, 100)
+
+
+def test_threshold_changes_the_ranges():
+    x = np.concatenate([np.zeros(rate * 2), talk(2), np.zeros(rate * 2)])
+    data = (x * 32767).astype("<i2").tobytes()
+    low = _pydub2.detect_speech(data, rate, 1, 2, 0.1, 250, 100)
+    high = _pydub2.detect_speech(data, rate, 1, 2, 0.99, 250, 100)
+    assert len(low) == len(high) == 1
+    assert low[0][0] <= high[0][0] and low[0][1] > high[0][1] + 1000
+
+
+def test_min_speech_len():
+    x = np.concatenate([np.zeros(rate * 2), talk(2), np.zeros(rate * 2)])
+    data = (x * 32767).astype("<i2").tobytes()
+    assert _pydub2.detect_speech(data, rate, 1, 2, 0.5, 1000, 100) == [[2016, 4000]]
+    assert _pydub2.detect_speech(data, rate, 1, 2, 0.5, 2500, 100) == []
+
+
+def test_min_silence_len_joins_bursts():
+    x = np.concatenate([np.zeros(rate), talk(1.5), np.zeros(rate * 3 // 10), talk(1.5), np.zeros(rate)])
+    data = (x * 32767).astype("<i2").tobytes()
+    assert len(_pydub2.detect_speech(data, rate, 1, 2, 0.5, 250, 100)) == 2
+    assert _pydub2.detect_speech(data, rate, 1, 2, 0.5, 250, 400) == [[992, 4352]]

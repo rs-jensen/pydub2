@@ -87,7 +87,8 @@ def fake_ffplay(tmp_path, monkeypatch):
 
     def popen(cmd, *a, **k):
         if os.name == "nt" and cmd[0].lower().endswith("ffplay.exe"):
-            cmd = [sys.executable, cmd[0][:-4] + ".py"] + cmd[1:]  # an .exe cannot be a script
+            # a venv python.exe is a launcher that starts the real one as a child, terminate() would miss it
+            cmd = [getattr(sys, "_base_executable", sys.executable), cmd[0][:-4] + ".py"] + cmd[1:]  # an .exe cannot be a script
         proc = real(cmd, *a, **k)
         started.append(proc)
         return proc
@@ -131,13 +132,24 @@ def test_context_manager_stops(fake_ffplay):
     assert not h.is_playing() and not alive(pid) and not os.path.exists(args[-1])
 
 
-def test_dropped_handle_leaves_no_process(fake_ffplay):
+def test_dropped_handle_plays_to_its_end_and_cleans_up(fake_ffplay, monkeypatch):
+    monkeypatch.setenv("FAKE_SECONDS", "1")
     h = playback.play_async(seg)
     pid, args = fake_ffplay()
     del h
     gc.collect()
+    assert alive(pid) and os.path.exists(args[-1])
     assert wait_for(lambda: not alive(pid))
-    assert wait_for(lambda: not os.path.exists(args[-1]))
+    assert wait_for(lambda: not os.path.exists(args[-1]) and fake_ffplay.temp_files() == [])
+
+
+def test_dropped_handle_is_stopped_at_exit(fake_ffplay):
+    h = playback.play_async(seg)
+    pid, args = fake_ffplay()
+    del h
+    gc.collect()
+    playback._stop_all()
+    assert not alive(pid) and fake_ffplay.temp_files() == []
 
 
 def test_ffplay_from_converter_folder(fake_ffplay, tmp_path, monkeypatch):
@@ -228,7 +240,8 @@ def test_many_handles_leak_nothing(fake_ffplay):
         h = playback.play_async(seg)
         if i % 2:
             h.stop()
-        del h  # every other one is only dropped
+        del h  # every other one is only dropped and plays on
+    playback._stop_all()
     assert wait_for(lambda: threading.active_count() == before[0])
     assert before == (threading.active_count(), fds and len(os.listdir(fds)))
     assert fake_ffplay.temp_files() == [] and all(p.returncode is not None for p in fake_ffplay.started)

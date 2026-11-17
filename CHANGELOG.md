@@ -10,7 +10,7 @@ What changed in each release.
 - `python -m pydub2 doctor FILE...` says what each file is from its first bytes, whether it loads built in or through ffmpeg, and why it does not when it fails (no ffmpeg, damaged, empty, text, a playlist, longer than `max_duration`, not a regular file). It notices a truncated wav, flac, ogg and opus file, a truncated mp3 that has a Xing or Info header, and an mp3 with junk in front.
 - `python -m pydub2 doctor --scan DIR` reads the Python files under DIR with `ast`, without running them, and lists what behaves differently in pydub2, with file and line. Files it cannot read or parse are listed, and a path that does not exist is an error.
 - `CouldntDecodeError`, `CouldntEncodeError` and the `FileNotFoundError` for a missing ffmpeg have the attributes `format`, `reason` and `hint` for tools. The messages are the same as before.
-- `playback.play_async` returns a handle with `stop()`, `wait()` and `is_playing()`. Sounds still playing are stopped when the handle is dropped or the interpreter exits. `playback.play` is unchanged.
+- `playback.play_async` returns a handle with `stop()`, `wait()` and `is_playing()`. A dropped handle lets the sound play to its end, sounds still playing are stopped when the interpreter exits. `playback.play` is unchanged.
 - `pydub2.strict = True`, or `PYDUB2_STRICT=1` in the environment, makes loads, partial loads, `mediainfo` and exports use ffmpeg and ffprobe like pydub, so the samples and the exported bytes are the same as pydub 0.25.1 gives. It needs ffmpeg, and raises pydub's error with a note when it is missing. The limits for untrusted files (no URLs or playlists, `max_duration`, `ffmpeg_timeout`) stay on. It is off by default.
 - `pip install "pydub2[ffmpeg]"` pulls an ffmpeg binary from the `imageio-ffmpeg` package. pydub2 uses it for m4a, aac, wma and video files when `AudioSegment.converter` is not set and no ffmpeg is on `PATH`.
 
@@ -21,6 +21,7 @@ What changed in each release.
 - Writing opus from 44.1 kHz audio on arm64 is about 40 percent faster. 10 minutes now take about 6.2 s.
 - `overlay` is 3 times faster and `normalize` and `apply_gain` are 1.9 times faster on 60 s of audio.
 - The `FileNotFoundError` for a missing ffmpeg says what it looked for, and suggests the `ffmpeg` extra only when `AudioSegment.converter` is not set.
+- A `pydub2.max_duration` that is negative, `nan` or not a number raises `ValueError` when a load starts, where it raised `CouldntDecodeError` or loaded raw input without a limit. One too large to matter, like `1e14`, is no limit.
 - `normalize(seg, target_lufs=...)` stops the gain at full scale minus `headroom`, so a quiet file with high peaks ends below the target and does not clip.
 
 ### Fixed
@@ -37,11 +38,12 @@ What changed in each release.
 - A tag too long for the Windows command line raises `CouldntEncodeError` and not a raw `OSError`.
 - `AudioSegment.stream` now closes the file when the generator is closed before the first chunk, which left it open on Python 3.12.
 - On x86 the mp3 encoder of pydub2-mp3 is built with the options of LAME's own configure, so 24 and 32 bit audio and some VBR settings give the same bytes as ffmpeg's libmp3lame. They were different whenever the low 16 bits of the samples were not zero.
+- A segment built with `+`, `sum()` or `append(crossfade=0)` drops its list of parts once `raw_data` or `_data` is read, so it no longer holds its audio twice, and several threads or a signal handler can read it while it is joined. `_data` appears in `vars(seg)` after the first read, as in pydub. Subclasses that define `_data`, `__init__`, `_spawn`, `__new__`, `__setattr__` or `__getattr__` get the joined data as in pydub.
 
 ### Security
 
 - pydub2 no longer starts an `ffmpeg`, `ffprobe` or `ffplay` from the current folder when none is found on PATH. It says ffmpeg is not found. The ffmpeg extra does not look in the current folder either.
-- `pydub2.max_bytes` limits the size of the decoded audio, off by default. `max_duration` alone does not bound memory, a 301 kB flac that says 8 channels at 192 kHz asked for 22 GB under a limit of an hour. Both limits now hold for raw and pcm input, are checked from the header before anything is read where it gives the length, and take `inf`. Strict mode no longer reads a whole wav before it checks them.
+- `pydub2.max_bytes` limits the size of the decoded audio, off by default. `max_duration` alone does not bound memory, a 301 kB flac that says 8 channels at 192 kHz asked for 22 GB under a limit of an hour. Both limits now hold for raw and pcm input, in strict mode and in `stream`, are checked from the header before anything is read where it gives the length, and take `inf`. They are read once at the start of a load. A file object is still read into memory whole before it is decoded, except for raw and pcm input.
 
 ## [0.0.1] - 2026-11-16
 

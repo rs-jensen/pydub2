@@ -1,9 +1,13 @@
+import copy
 import decimal
+import gc
 import io
 import multiprocessing
+import pickle
 import shutil
 import struct
 import time
+import tracemalloc
 
 import numpy as np
 import pytest
@@ -109,10 +113,25 @@ def test_eq_channel_modes(mode):
     new, old = both(*noise(500, channels=2, seed=5))
     a = pydub2.scipy_effects.eq(new, 1000, 400, mode, "peak", 6)
     assert len(a) == len(new)
+    assert a.raw_data != new.raw_data
     if mode == "L+R":
         assert a.raw_data == pydub.scipy_effects.eq(old, 1000, 400, mode, "peak", 6).raw_data
     if mode == "L":
         assert a.split_to_mono()[1].raw_data == new.split_to_mono()[1].raw_data
+
+
+GAIN = {"L+R": (7.6, 0), "M+S": (10.6, 3), "L": (5.3, 0), "R": (5.3, 0), "M": (10.6, 3), "S": (3, 3)}
+
+
+@pytest.mark.parametrize("mode", GAIN)
+def test_eq_gain_at_the_centre_and_away(mode):
+    pytest.importorskip("scipy")
+    import pydub2.scipy_effects
+    from pydub2.generators import Sine
+    for freq, gain in zip((1000, 6000), GAIN[mode]):
+        seg = Sine(freq, sample_rate=44100).to_audio_segment(1000, volume=-20).set_channels(2)
+        out = pydub2.scipy_effects.eq(seg, 1000, 400, mode, "peak", 6)
+        assert abs((out.dBFS - seg.dBFS) - gain) < 0.3, (mode, freq)
 
 
 @needs_ff
@@ -347,3 +366,80 @@ def test_export_of_a_wav_with_stray_bytes_matches_pydub(fmt, tmp_path):
                                  44100, 176400, 4, 16, b"data", len(data)) + data)
     new, old = (m.AudioSegment.from_file(str(path)) for m in (pydub2, pydub))
     assert len(decoded(new, format=fmt)) == len(decoded(old, format=fmt))
+
+
+def append_loop_peak(m):
+    gc.collect()
+    tracemalloc.start()
+    try:
+        out = m.AudioSegment.empty()
+        for i in range(40):
+            out += m.AudioSegment(bytes([i]) * (1 << 18), sample_width=2, frame_rate=44100, channels=2)
+        len(out.raw_data)
+        out.reverse()
+        return tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def test_append_loop_does_not_keep_the_parts():
+    assert append_loop_peak(pydub2) < 1.2 * append_loop_peak(pydub)
+
+
+JOINS = [lambda a, b: a + b, lambda a, b: sum([a, b]), lambda a, b: a.append(b, crossfade=0)]
+
+
+@pytest.mark.parametrize("join", JOINS)
+def test_joined_segment_after_first_read_has_data_in_dict_and_no_parts(join):
+    new, old = both(*noise(300))
+    x, y = join(new, new), join(old, old)
+    assert x.raw_data == y.raw_data
+    assert vars(x)["_data"] == vars(y)["_data"] and "_parts" not in vars(x)
+    assert sorted(vars(x)) == sorted(vars(y))
+
+
+def subclass(m, **body):
+    return type("K", (m.AudioSegment,), body)
+
+
+def data_property(m):
+    def get(self):
+        return self.__dict__.get("_d", b"")
+
+    def put(self, v):
+        self.__dict__["_d"] = v
+
+    return subclass(m, _data=property(get, put))
+
+
+def own_init(m):
+    def __init__(self, data=None, *args, **kwargs):
+        self.seen = len(data)
+        m.AudioSegment.__init__(self, data, *args, **kwargs)
+
+    return subclass(m, __init__=__init__)
+
+
+def own_spawn(m):
+    def _spawn(self, data, overrides={}):
+        out = m.AudioSegment._spawn(self, data, overrides)
+        out.seen = len(data)
+        return out
+
+    return subclass(m, _spawn=_spawn)
+
+
+@pytest.mark.parametrize("kind", [data_property, own_init, own_spawn])
+@pytest.mark.parametrize("join", JOINS)
+def test_joined_subclass_same_as_pydub(kind, join):
+    data, rate, width, channels = noise(300)
+    new, old = (kind(m)(data, sample_width=width, frame_rate=rate, channels=channels) for m in (pydub2, pydub))
+    x, y = join(new, new), join(old, old)
+    assert type(x) is type(new) and vars(x) == vars(y)
+
+
+@pytest.mark.parametrize("dup", [lambda x: pickle.loads(pickle.dumps(x)), copy.copy, copy.deepcopy])
+def test_copy_of_summed_segment(dup):
+    new, old = both(*noise(300))
+    x, y = dup(sum([new, new, new])), dup(sum([old, old, old]))
+    assert vars(x) == vars(y)

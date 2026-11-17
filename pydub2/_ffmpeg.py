@@ -10,7 +10,7 @@ from io import BytesIO
 import pydub2
 from .exceptions import CouldntDecodeError, CouldntEncodeError, tagged
 from .logging_utils import log_conversion
-from .utils import _using, check_duration, extra_ffmpeg, mediainfo_json, source, which
+from .utils import _using, check_duration, extra_ffmpeg, limits, mediainfo_json, source, which
 from .utils import run as run_command
 
 
@@ -44,15 +44,16 @@ def run(converter, args, data, what):
 
 
 def to_wav(converter, path=None, data=None, format=None, codec=None, parameters=None,
-           start_second=None, duration=None):
+           start_second=None, duration=None, lim=None):
+    lim = lim or limits()
     try:
-        return _to_wav(converter, path, data, format, codec, parameters, start_second, duration)
+        return _to_wav(converter, path, data, format, codec, parameters, start_second, duration, lim)
     except (KeyError, TypeError, ValueError, TimeoutError, struct.error) as e:
         raise tagged(CouldntDecodeError("cant decode this file: " + str(e)), format,
                      "timeout" if isinstance(e, TimeoutError) else "cant_decode")
 
 
-def _to_wav(converter, path, data, format, codec, parameters, start_second, duration):
+def _to_wav(converter, path, data, format, codec, parameters, start_second, duration, lim):
     format = {"m4a": "mp4", "wave": "wav", "wma": "asf"}.get(format, format)
     opts = (["-f", format] if format else []) + (["-acodec", codec] if codec else [])
     inp = source(path if path is not None else BytesIO(data), exe=find(converter))[0]
@@ -72,15 +73,14 @@ def _to_wav(converter, path, data, format, codec, parameters, start_second, dura
             out = ["-acodec", "pcm_u8" if bits == 8 else "pcm_s%dle" % bits] + out
     if start_second is not None:
         out += ["-ss", str(start_second)]
-    limit = pydub2.max_duration
-    # a limit ffmpeg cant take, like inf, is no limit
-    if limit is not None and limit < 2 ** 31:
+    limit, max_bytes = lim
+    if limit is not None:
         # one second over, so a file past the limit is seen and not just cut
         duration = limit + 1 if duration is None else min(duration, limit + 1)
     if duration is not None:
         out += ["-t", str(duration)]
     # room for the wav header, output that reaches it was cut and is over max_bytes
-    fs = None if pydub2.max_bytes is None or pydub2.max_bytes >= 2 ** 62 else int(pydub2.max_bytes) + 65536
+    fs = None if max_bytes is None else int(max_bytes) + 65536
     if fs is not None:
         out += ["-fs", str(fs)]
     # pydub puts them after the output, where ffmpeg ignores them
@@ -104,7 +104,7 @@ def _to_wav(converter, path, data, format, codec, parameters, start_second, dura
         raise tagged(CouldntDecodeError("this file is larger than max_bytes"), reason="too_big")
     if limit is not None or fs is not None:
         channels, rate, _, align, bits = struct.unpack_from("<HIIHH", wav, 22)
-        check_duration((len(wav) - i - 8) // align, rate, channels * (4 if bits == 24 else bits // 8))
+        check_duration((len(wav) - i - 8) // align, rate, channels * (4 if bits == 24 else bits // 8), lim)
     return bytes(wav)
 
 

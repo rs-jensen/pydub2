@@ -1,6 +1,7 @@
 from __future__ import division
 
 import array
+import numbers
 import os
 from tempfile import TemporaryFile, NamedTemporaryFile
 import subprocess
@@ -31,6 +32,7 @@ from .utils import (
     get_array_type,
     check_duration,
     frame_cap,
+    limits,
     read_capped,
 )
 from .exceptions import (
@@ -52,6 +54,9 @@ if sys.version_info >= (3, 0):
     basestring = str
     xrange = range
     StringIO = BytesIO
+
+
+_SPAWN_HOOKS = ("__new__", "__init__", "__setattr__", "__getattr__", "_spawn")
 
 
 def _encode(data, rate, *args):
@@ -428,10 +433,25 @@ class AudioSegment(object):
         super(AudioSegment, self).__init__(*args, **kwargs)
 
     def __getattr__(self, name):
-        if name != "_data" or "_parts" not in self.__dict__:
+        d = self.__dict__
+        # another thread can have joined since the lookup failed
+        if name != "_data" or not ("_parts" in d or "_data" in d):
             raise AttributeError(name)
-        self._data = b"".join(self._parts)
-        return self._data
+        return self._join()
+
+    def _join(self):
+        # no lock: a second thread or a signal handler may join too, and gets equal bytes
+        d = self.__dict__
+        parts = d.get("_parts")
+        if parts is None:
+            return d["_data"]
+        d["_data"] = data = b"".join(parts)
+        d.pop("_parts", None)
+        return data
+
+    def __reduce_ex__(self, protocol):
+        self._data
+        return super(AudioSegment, self).__reduce_ex__(protocol)
 
     @property
     def raw_data(self):
@@ -685,6 +705,7 @@ class AudioSegment(object):
 
     @classmethod
     def from_file(cls, file, format=None, codec=None, parameters=None, start_second=None, duration=None, **kwargs):
+        lim = limits()
         try:
             filename = fsdecode(file)
         except TypeError:
@@ -730,10 +751,19 @@ class AudioSegment(object):
                 'frame_width': channels * sample_width
             }
             fw = channels * sample_width
-            n = frame_cap(frame_rate, fw)
-            data = file.read(n * fw if n >= 0 else -1)
-            if n >= 0:
-                check_duration(len(data) // fw, frame_rate, fw)
+            n = frame_cap(frame_rate, fw, lim)
+            if n < 0:
+                data = file.read(-1)
+            else:
+                # read(k) sets aside k bytes first, so a cap far past the file is read in pieces
+                parts, left = [], n * fw
+                while left > 0:
+                    parts.append(file.read(min(left, 1 << 24)))
+                    if not parts[-1]:
+                        break
+                    left -= len(parts[-1])
+                data = b"".join(parts)
+                check_duration(len(data) // fw, frame_rate, fw, lim)
             if start_second is None and duration is None:
                 return cls(data=data, metadata=metadata)
             elif start_second is not None and duration is None:
@@ -752,19 +782,25 @@ class AudioSegment(object):
                 h = extract_wav_headers(head)
                 w = read_wav_audio(head, h)
                 fw = w.channels * (4 if w.bits_per_sample == 24 else w.bits_per_sample // 8)
-                told = min(h[-1].size, file.seek(0, 2) - h[-1].position - 8) // fw, w.sample_rate, fw
+                size = min(h[-1].size, file.seek(0, 2) - h[-1].position - 8)
+                told = size // fw, w.sample_rate, fw
             except Exception:
                 told = None
             try:
                 # the header gives the length, so a wav over the limits fails before it is read
                 if told:
-                    check_duration(*told)
+                    check_duration(*told, lim)
                 try:
-                    obj = cls._from_safe_wav(file)
+                    if told:
+                        # pydub keeps only what the data chunk says, so the rest is not read
+                        file.seek(0)
+                        obj = cls(data=file.read(h[-1].position + 8 + size))
+                    elif lim == (None, None):
+                        obj = cls._from_safe_wav(file)
                 except Exception:
                     pass
                 if obj is not None:
-                    check_duration(obj.frame_count(), obj.frame_rate, obj.frame_width)
+                    check_duration(obj.frame_count(), obj.frame_rate, obj.frame_width, lim)
             except CouldntDecodeError:
                 if close_file:
                     file.close()
@@ -794,7 +830,7 @@ class AudioSegment(object):
             head[27 + head[26]:][:7] == b"\x01vorbis" and _ffmpeg.find(cls.converter)
 
         # pydub hands anything else to ffmpeg
-        plain = all(v is None or type(v) in (int, float) for v in (start_second, duration))
+        plain = all(v is None or isinstance(v, numbers.Real) for v in (start_second, duration))
         tried = False
         if not pydub2.strict and (own or (codec is None and parameters is None)) and not cut and plain:
             tried = True
@@ -823,10 +859,10 @@ class AudioSegment(object):
                     start, n, final = span
                     if start:
                         d.seek(start)
-                    pcm = read_capped(d, n)
+                    pcm = read_capped(d, n, lim)
                     fw = d.channels * d.width
                     return cls._segment(d, _fit(pcm, len(pcm) // fw, final(len(pcm) // fw), fw, d.rate))
-                obj = cls._segment(d, read_capped(d, -1) + stray)
+                obj = cls._segment(d, read_capped(d, -1, lim) + stray)
                 if start_second is None and duration is None:
                     return obj
                 elif start_second is not None and duration is None:
@@ -841,7 +877,7 @@ class AudioSegment(object):
         if tried and _ffmpeg.find(cls.converter) is None and any(is_format(f) for f in ("wav", "flac", "mp3", "ogg", "opus")):
             raise tagged(CouldntDecodeError("cant read this file"), sniff(head), "cant_decode")
         try:
-            wav = _ffmpeg.to_wav(cls.converter, filename, data, format, codec, parameters, start_second, duration)
+            wav = _ffmpeg.to_wav(cls.converter, filename, data, format, codec, parameters, start_second, duration, lim)
         except (CouldntDecodeError, FileNotFoundError) as e:
             e.format = sniff(head) or getattr(e, "format", None)
             raise
@@ -868,6 +904,7 @@ class AudioSegment(object):
     @classmethod
     def stream(cls, file, chunk_ms=10000, start_second=None, duration=None):
         """Yields the file in chunk_ms pieces without loading all of it. wav, flac, mp3, ogg and opus only."""
+        lim = limits()
         filename = None if hasattr(file, "read") else fsdecode(file)
         try:
             d = _pydub2.Decoder(bytes(file.read()) if filename is None else filename)
@@ -893,19 +930,24 @@ class AudioSegment(object):
             raise ValueError("chunk_ms is too small")
         if start:
             run(d.seek, start)
+        cap = frame_cap(d.rate, fw, lim)
 
         def chunks(d):
             try:
                 yield  # primed below, see there
-                prev = run(d.read, step if n < 0 else min(step, n))
+                k = step if n < 0 else min(step, n)
+                # one frame past the limits at most, like read_capped
+                prev = run(d.read, k if cap < 0 else min(k, cap))
                 got = len(prev) // fw
-                check_duration(got, d.rate, fw)
+                check_duration(got, d.rate, fw, lim)
                 while True:
                     k = step if n < 0 else min(step, n - got)
+                    if cap >= 0:
+                        k = min(k, cap - got)
                     cur = run(d.read, k) if k > 0 else b""
                     got += len(cur) // fw
                     try:
-                        check_duration(got, d.rate, fw)
+                        check_duration(got, d.rate, fw, lim)
                     except CouldntDecodeError:
                         yield cls._segment(d, prev)
                         raise
@@ -1352,11 +1394,16 @@ class AudioSegment(object):
         seg1, seg2 = AudioSegment._sync(self, seg)
 
         if not crossfade:
+            cls = type(seg1)
+            if cls is not AudioSegment and (hasattr(cls, "_data") or any(
+                    getattr(cls, n) is not getattr(AudioSegment, n) for n in _SPAWN_HOOKS)):
+                return seg1._spawn(seg1._data + seg2._data)
             # joined on first read of _data, so seg += chunk in a loop stays linear
-            parts = seg1.__dict__.get("_parts") or [seg1._data]
-            out = seg1._spawn(b"")
-            del out._data
-            out._parts = parts + [seg2._data]
+            d = seg1.__dict__
+            parts = ("_data" not in d and d.get("_parts")) or [seg1._data]
+            out = cls.__new__(cls)
+            out.__dict__.update(sample_width=seg1.sample_width, frame_rate=seg1.frame_rate, channels=seg1.channels,
+                                _parts=parts + [seg2._data], frame_width=seg1.frame_width)
             return out
         elif crossfade > len(self):
             raise ValueError("Crossfade is longer than the original AudioSegment ({}ms > {}ms)".format(

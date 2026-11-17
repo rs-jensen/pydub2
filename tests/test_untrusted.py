@@ -223,7 +223,7 @@ def test_cover_is_not_fetched():
 
 def test_detect_silence_memory():
     mb = peak_mb("_pydub2.detect_silence(bytes(50000), 1, 1, 1, 1000, -40, 1)")
-    assert mb < 150
+    assert mb < 50
 
 
 def test_detect_silence_too_long():
@@ -467,13 +467,13 @@ def test_wav_byte_rate_overflow():
 def test_flac_many_channels_does_not_allocate():
     with pytest.raises(RuntimeError):
         _pydub2.encode(b"", 44100, 65535, 2, "flac")
-    assert peak_mb("try:\n _pydub2.encode(b'', 44100, 65535, 2, 'flac')\nexcept RuntimeError: pass") < 400
+    assert peak_mb("try:\n _pydub2.encode(b'', 44100, 65535, 2, 'flac')\nexcept RuntimeError: pass") < 50
 
 
 def test_resample_checks_the_ratio_first():
     with pytest.raises(RuntimeError):
         _pydub2.resample(bytes(200000), 8000, 1, 2, 8000 * 1000)
-    assert peak_mb("try:\n _pydub2.resample(bytes(200000), 8000, 1, 2, 8000 * 1000)\nexcept RuntimeError: pass") < 150
+    assert peak_mb("try:\n _pydub2.resample(bytes(200000), 8000, 1, 2, 8000 * 1000)\nexcept RuntimeError: pass") < 50
 
 
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), -float("inf")])
@@ -722,3 +722,77 @@ def test_no_limit_changes_nothing(secret, monkeypatch):
     assert not {"-t", "-fs"} & set(seen[-1])
     monkeypatch.setattr(pydub2, "max_bytes", 1 << 30)
     assert AudioSegment.from_file(str(secret / "a.m4a")).raw_data == seg.raw_data
+
+
+@posix
+def test_stream_reads_no_more_than_the_limits(tmp_path):
+    path = str(tmp_path / "big.wav")
+    big_wav(path)
+    base = peak_mb("import pydub2")
+    code = "import pydub2\nfrom pydub2.exceptions import CouldntDecodeError\npydub2.max_bytes = 1 << 20\n" \
+        "try:\n for c in pydub2.AudioSegment.stream({!r}, chunk_ms=60000): pass\nexcept CouldntDecodeError as e:\n" \
+        " assert e.reason == 'too_big', e\nelse:\n raise SystemExit('loaded')".format(path)
+    # one chunk of the default size would be 64 MB
+    assert peak_mb(code) < base + 10
+
+
+@posix
+def test_strict_reads_no_more_of_a_wav_than_the_limits(tmp_path):
+    late, empty = str(tmp_path / "late.wav"), str(tmp_path / "empty.wav")
+    n = 64 << 20
+    fmt = b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 8, 192000, 192000 * 32, 32, 32)
+    with open(late, "wb") as f:
+        # the data chunk starts after the first 64 KiB
+        f.write(b"RIFF" + struct.pack("<I", 36 + 8 + 70000 + n) + fmt + b"LIST" + struct.pack("<I", 70000)
+                + b"\0" * 70000 + b"data" + struct.pack("<I", n))
+        f.truncate(44 + 8 + 70000 + n)
+    with open(empty, "wb") as f:
+        f.write(b"RIFF" + struct.pack("<I", 36 + n) + fmt + b"data" + struct.pack("<I", 0))
+        f.truncate(44 + n)
+    base = peak_mb("import pydub2")
+    code = "import pydub2\npydub2.strict = True\npydub2.max_bytes = 1 << 20\n"
+    assert peak_mb(code + "assert len(pydub2.AudioSegment.from_file({!r})) == 0".format(empty)) < base + 10
+    if ffmpeg:
+        assert peak_mb(LOAD.format("pydub2.strict = True\npydub2.max_bytes = 1 << 20", late, "")) < base + 10
+
+
+def test_numbers_of_any_kind_cut_a_wav_without_ffmpeg(tmp_path, monkeypatch):
+    np = pytest.importorskip("numpy")
+    from fractions import Fraction
+    path = str(tmp_path / "a.wav")
+    AudioSegment.silent(3000, 8000).export(path, "wav")
+    whole = AudioSegment.from_file(path)
+    monkeypatch.setattr(AudioSegment, "converter", str(tmp_path / "no-ffmpeg"))
+    for v in (np.float64(0.5), np.int64(1), np.float32(0.5), True, Fraction(1, 2)):
+        assert AudioSegment.from_file(path, start_second=v).raw_data == whole[v * 1000:].raw_data
+        assert AudioSegment.from_file(path, duration=v).raw_data == whole[:v * 1000].raw_data
+
+
+def test_limits_are_read_once_per_load(monkeypatch):
+    class Upload(io.BytesIO):
+        def read(self, *a):
+            # what another thread could do in the middle of a load
+            pydub2.max_duration = None
+            return super().read(*a)
+    monkeypatch.setattr(pydub2, "max_duration", 1)
+    with pytest.raises(CouldntDecodeError, match="^this file is longer than max_duration$"):
+        AudioSegment.from_file(Upload(b"\0" * 8000 * 60), format="raw", sample_width=1, frame_rate=8000, channels=1)
+
+
+def test_odd_limits(tmp_path, monkeypatch):
+    path = str(tmp_path / "a.wav")
+    AudioSegment.silent(1000, 8000).export(path, "wav")
+    (tmp_path / "a.raw").write_bytes(b"\0" * 16000)
+    raw = dict(file=str(tmp_path / "a.raw"), format="raw", sample_width=2, frame_rate=8000, channels=1)
+    for name in ("max_duration", "max_bytes"):
+        for v in (-1, float("nan"), "10"):
+            monkeypatch.setattr(pydub2, name, v)
+            for load in (lambda: AudioSegment.from_file(path), lambda: AudioSegment.from_file(**raw),
+                         lambda: list(AudioSegment.stream(path))):
+                with pytest.raises(ValueError, match="^pydub2.%s has to be None or a number" % name):
+                    load()
+        for v in (1e14, 2 ** 70, float("inf")):
+            monkeypatch.setattr(pydub2, name, v)
+            assert len(AudioSegment.from_file(path)) == len(AudioSegment.from_file(**raw)) == 1000
+            assert sum(len(c) for c in AudioSegment.stream(path)) == 1000
+        monkeypatch.setattr(pydub2, name, None)
