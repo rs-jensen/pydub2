@@ -50,8 +50,4 @@ set_target_properties(mp3lame PROPERTIES PREFIX "" OUTPUT_NAME libmp3lame WINDOW
 if(NOT WIN32)
     target_link_libraries(mp3lame PRIVATE m)
 endif()
-if(MSVC)
-    # no float shortcuts, as with gcc that builds the lame in ffmpeg on Windows
-    target_compile_options(mp3lame PRIVATE /fp:strict)
-endif()
 install(TARGETS mp3lame LIBRARY DESTINATION pydub2_mp3 RUNTIME DESTINATION pydub2_mp3)
