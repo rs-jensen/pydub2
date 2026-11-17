@@ -45,6 +45,7 @@ What changed in each release.
 - `AudioSegment.stream` raises `FileNotFoundError` for a missing file and says "cant read this file" for a damaged one, where it said it only reads wav, flac, mp3, ogg and opus.
 - A `pydub2.ffmpeg_timeout` that is not a number above 0 raises `ValueError` naming it, and a load that ffprobe gives broken JSON for says so, where both said "cant decode this file" with Python's text.
 - On Linux and macOS `ffmpeg_timeout` and Ctrl-C stop the whole process group, so an ffmpeg behind a wrapper script (snap, conda, docker) is no longer left running.
+- `CouldntEncodeError` and `CouldntDecodeError` from ffmpeg have pydub's text again, with the return code, the command for an export and all of ffmpeg's output. A decode error ends with the line `ffmpeg said: ...` as before.
 
 ### Security
 

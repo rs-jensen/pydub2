@@ -216,6 +216,8 @@ def test_corrupt_mp3_message():
         with pytest.raises(CouldntDecodeError) as new:
             AudioSegment.from_file(io.BytesIO(junk), format="mp3")
         msgs.append(str(new.value))
-    assert msgs[0] == msgs[1]
+    # all of ffmpeg's output like pydub, and a last line without the addresses that change every run
+    assert msgs[0].splitlines()[-1] == msgs[1].splitlines()[-1]
     assert msgs[0].splitlines()[0] == str(old.value).splitlines()[0]
-    assert len(msgs[0]) < 300 and "0x" not in msgs[0] and "libavutil" not in msgs[0] and "mp3" in msgs[0]
+    assert msgs[0].splitlines()[-1].startswith("ffmpeg said: ") and "0x" not in msgs[0].splitlines()[-1]
+    assert "Output from ffmpeg/avlib:" in msgs[0] and "mp3" in msgs[0]

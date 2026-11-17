@@ -496,3 +496,20 @@ def test_bad_ffmpeg_timeout_and_ffprobe_answer_are_named(tmp_path, monkeypatch):
                                                   1, 0, 44100, 176400, 4, 16, b"data", len(data)) + data)
     with pytest.raises(pydub2.exceptions.CouldntDecodeError, match="ffprobe gave no usable answer"):
         pydub2.AudioSegment.from_file(str(tmp_path / "c0.wav"))
+
+
+@needs_ff
+def test_ffmpeg_errors_carry_the_command_and_output_like_pydub():
+    def errors(m):
+        out = []
+        for call in (lambda: m.AudioSegment.silent(10).export(io.BytesIO(), format="nosuchfmt"),
+                     lambda: m.AudioSegment.from_file(io.BytesIO(b"garbage" * 100))):
+            with pytest.raises(m.exceptions.PydubException) as e:
+                call()
+            out.append(str(e.value))
+        return out
+    (new_enc, new_dec), (old_enc, old_dec) = errors(pydub2), errors(pydub)
+    assert new_enc.split("Command:[")[0] == old_enc.split("Command:[")[0]
+    assert "-f', 'nosuchfmt'" in new_enc and "nosuchfmt" in new_enc.split("Output from ffmpeg/avlib:\n\n")[1]
+    assert new_dec.split("ffmpeg version")[0] == old_dec.split("ffmpeg version")[0]
+    assert old_dec.splitlines()[-1] in new_dec

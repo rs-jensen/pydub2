@@ -91,11 +91,13 @@ def _to_wav(converter, path, data, format, codec, parameters, start_second, dura
     out += ["-"] + (parameters or []) if pydub2.strict else (parameters or []) + ["-"]
     p = run(converter, opts + inp + out, None if path is not None else data, format or "this file")
     if p.returncode != 0 or not p.stdout:
-        lines = [x.strip() for x in p.stderr.decode(errors="ignore").splitlines() if x.strip()]
+        err = p.stderr.decode(errors="ignore")
+        lines = [x.strip() for x in err.splitlines() if x.strip()]
         # drop the [mp3 @ 0x...] prefix, the address changes every run
         last = re.sub(r"^\[[^\]]*\] ", "", lines[-1]) if lines else "no output"
-        raise tagged(CouldntDecodeError("Decoding failed. ffmpeg returned error code: %d\n\nformat: %s\nffmpeg said: %s"
-                                        % (p.returncode, format or "unknown", last)), format, "cant_decode")
+        # pydub's text, then the last line alone, which doctor shows
+        raise tagged(CouldntDecodeError("Decoding failed. ffmpeg returned error code: %d\n\nOutput from ffmpeg/avlib:\n\n%s"
+                                        "\nffmpeg said: %s" % (p.returncode, err, last)), format, "cant_decode")
     wav = bytearray(p.stdout)
     i = 12
     while wav[i:i + 4] != b"data":
@@ -147,8 +149,9 @@ def from_wav(converter, wav, format, codec=None, bitrate=None, parameters=None, 
             raise tagged(CouldntEncodeError("cant start ffmpeg (%s), tags that are too long for the command line can cause this" % e),
                          format, "cant_start")
         if p.returncode != 0:
-            raise tagged(CouldntEncodeError("cant encode this file: " + p.stderr.decode(errors="ignore")[-500:]),
-                         format, "cant_encode")
+            raise tagged(CouldntEncodeError(
+                "Encoding failed. ffmpeg/avlib returned error code: {0}\n\nCommand:{1}\n\nOutput from ffmpeg/avlib:\n\n{2}"
+                .format(p.returncode, p.args, p.stderr.decode(errors="ignore"))), format, "cant_encode")
         with open(name, "rb") as f:
             return f.read()
     finally:
