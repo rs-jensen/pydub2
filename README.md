@@ -124,7 +124,7 @@ samples can differ slightly from what ffmpeg gives. They are listed in [docs/dif
 
 Set `pydub2.strict = True`, or start Python with `PYDUB2_STRICT=1`, and every load and export that pydub sends to ffmpeg goes to ffmpeg here too, with the command line pydub builds. `raw_data`, `frame_rate`, `channels` and `sample_width` are then the same bytes as pydub 0.25.1 gives, and exported files are the same bytes as pydub writes on the same machine. A wav that pydub reads itself is read the way pydub reads it.
 
-It needs ffmpeg and ffprobe. Without them the call raises the error pydub raises, with a note that strict mode needs ffmpeg. Those calls lose the speed and memory gains. Effects, resampling and everything else that works on samples stay as fast as before. See [docs/migrating.md](https://github.com/rs-jensen/pydub2/blob/main/docs/migrating.md) for when to use it.
+It needs ffmpeg and ffprobe. Without them the call raises the error pydub raises, with a note that strict mode needs ffmpeg. Those calls lose the speed and memory gains. Effects, resampling and everything else that works on samples stay as fast as before. The limits for untrusted files below still apply in strict mode. Set the switch once at startup and do not flip it from several threads. See [docs/migrating.md](https://github.com/rs-jensen/pydub2/blob/main/docs/migrating.md) for when to use it.
 
 ## More
 

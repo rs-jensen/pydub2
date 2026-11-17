@@ -144,11 +144,34 @@ def test_no_ffmpeg(files, monkeypatch):
     assert len(pydub2.AudioSegment.from_file(files[("wav16", 2)])) > 0
 
 
-@pytest.mark.parametrize("value, want", [("1", True), ("0", False), (None, False)])
+ENV = [("1", True), ("true", True), ("Yes", True), ("ON", True), ("0", False), ("", False), ("false", False),
+       ("no", False), ("Off", False), (None, False)]
+
+
+@pytest.mark.parametrize("value, want", ENV)
 def test_env(value, want):
     env = {k: v for k, v in os.environ.items() if k != "PYDUB2_STRICT"}
-    if value:
+    if value is not None:
         env["PYDUB2_STRICT"] = value
     out = subprocess.run([sys.executable, "-c", "import pydub2; print(pydub2.strict)"], env=env,
                          capture_output=True, text=True)
     assert out.stdout.strip() == str(want)
+
+
+def test_max_duration_for_wav(files, monkeypatch):
+    path = files[("wav16", 2)]
+    monkeypatch.setattr(pydub2, "max_duration", 0.1)
+    for fn in (lambda: pydub2.AudioSegment.from_file(path),
+               lambda: pydub2.AudioSegment.from_wav(path),
+               lambda: pydub2.AudioSegment.from_file(io.BytesIO(open(path, "rb").read()), format="wav"),
+               lambda: pydub2.AudioSegment.from_file(path, start_second=0.1, duration=0.1)):
+        with pytest.raises(pydub2.exceptions.CouldntDecodeError):
+            fn()
+    monkeypatch.setattr(pydub2, "max_duration", 5)
+    assert len(pydub2.AudioSegment.from_file(path)) == 400
+
+
+def test_probe_without_bits(files, monkeypatch):
+    monkeypatch.setattr(pydub2._ffmpeg, "mediainfo_json", lambda *a, **k: {"streams": [{"codec_type": "audio"}]})
+    with pytest.raises(pydub2.exceptions.CouldntDecodeError):
+        pydub2.AudioSegment.from_file(files[("flac", 2)])

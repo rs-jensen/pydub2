@@ -102,7 +102,7 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - A private ffmpeg set as `converter` (absolute, relative or with spaces in the path) is enough for reading, `mediainfo` and export. In pydub the ffprobe call fails with `FileNotFoundError`.
 - A monkeypatched `get_prober_name` is used for `mediainfo` and `mediainfo_json`. `get_encoder_name`, `get_prober_name` and `get_player_name` return the full path they found, and `get_prober_name` gives no warning when it finds nothing.
 - Setting `AudioSegment.ffmpeg` or `.ffprobe` does nothing, as in pydub. Set `converter`.
-- Files go to ffmpeg with a `file:` prefix and `-protocol_whitelist`, so a name like `concat:a.wav` is just a file name.
+- Files go to ffmpeg with a `file:` prefix and `-protocol_whitelist`, so a name like `concat:a.wav` is just a file name. With `pydub2.strict` the prefix is left out, because it would change the `filename` that ffprobe reports. The whitelists stay, so such a name fails to load, as in pydub.
 - A URL passed as the file name (`from_file("http://...")`) is not fetched. pydub hands it to ffmpeg, pydub2 looks for a file with that name.
 - A file that starts like an ffconcat script, an HLS playlist or a DASH manifest raises `CouldntDecodeError`.
 - ffmpeg and ffprobe are also given the list of demuxers they may use (`-format_whitelist`). It is taken from `ffmpeg -demuxers` without hls, dash, concat, imf, sdp, rtsp, rtp and lavfi. A playlist hidden behind a comment or blank lines then cannot make them open other files. Asking for one of those with `format=` fails too.
