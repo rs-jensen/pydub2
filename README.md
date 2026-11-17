@@ -202,6 +202,16 @@ without them.
     pip install pytest numpy pydub "audioop-lts; python_version >= '3.13'"
     pytest
 
+### Building from source without network
+
+The default build downloads the codec libraries. To build offline, for example in a distro package, install the development files for flac, vorbis, opus, opusfile, libopusenc and libsamplerate (with their ogg dependencies) and pkg-config, then link them instead:
+
+    CMAKE_ARGS="-DPYDUB2_SYSTEM_LIBS=ON" pip install --no-build-isolation .
+
+Or pass `-C cmake.define.PYDUB2_SYSTEM_LIBS=ON` to pip or `python -m build`. Nothing is downloaded then, and the wheel links the system libraries dynamically. Use the library versions your distro patches. The wheels on PyPI are built with the versions listed in [THIRD_PARTY.md](https://github.com/rs-jensen/pydub2/blob/main/THIRD_PARTY.md), and some behaviour depends on them, for example libopusenc before 0.3 aborts on an empty opus export.
+
+Without the option you can also unpack the sources yourself and set `FETCHCONTENT_FULLY_DISCONNECTED=ON` with `FETCHCONTENT_SOURCE_DIR_OGG`, `_VORBIS`, `_FLAC`, `_OPUS`, `_OPUSFILE`, `_OPUSENC` and `_SAMPLERATE` in `CMAKE_ARGS`. CMake does not run the opusfile patch (`cmake/opusfile_patch.cmake`) on a source directory you give it, so apply it yourself with `cmake -P` from the opusfile directory.
+
 ## License
 
 MIT. The Python layer is ported from [pydub](https://github.com/jiaaro/pydub) by James Robert,
