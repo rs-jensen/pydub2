@@ -61,6 +61,7 @@ cases = [
     ("mono", {"channels": 1}, {}),
     ("mono 22050", {"channels": 1, "rate": 22050}, {"bitrate": "64k"}),
     ("48000", {"rate": 48000}, {}),
+    ("48000 q:a 4", {"rate": 48000}, {"parameters": ["-q:a", "4"]}),
     ("8 bit", {"width": 1}, {}),
     ("24 bit", {"width": 3}, {}),
     ("32 bit", {"width": 4}, {}),

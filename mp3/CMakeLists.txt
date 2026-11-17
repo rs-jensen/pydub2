@@ -8,7 +8,7 @@ if(MSVC)
     # static runtime, the wheel then needs no vcruntime
     set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
 else()
-    # same as lame's own configure
+    # lame's configure uses -O3 with clang, with gcc its version check fails and it uses none, same output
     set(CMAKE_C_FLAGS_RELEASE "-O3 -DNDEBUG -fstack-protector-strong -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2")
 endif()
 
@@ -27,6 +27,11 @@ file(WRITE ${CMAKE_BINARY_DIR}/config.h [[
 #define HAVE_ERRNO_H 1
 #define HAVE_FCNTL_H 1
 #define HAVE_LIMITS_H 1
+/* lame's configure turns these on for x86 only, so ffmpeg's lame has them there */
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#define TAKEHIRO_IEEE754_HACK 1
+#define USE_FAST_LOG 1
+#endif
 #include <stdint.h>
 typedef float ieee754_float32_t;
 typedef double ieee754_float64_t;
