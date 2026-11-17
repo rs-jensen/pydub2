@@ -785,15 +785,15 @@ class AudioSegment(object):
                 w = read_wav_audio(head, h)
                 fw = w.channels * (4 if w.bits_per_sample == 24 else w.bits_per_sample // 8)
                 size = min(h[-1].size, file.seek(0, 2) - h[-1].position - 8)
-                told = size // fw, w.sample_rate, fw
+                claimed = size // fw, w.sample_rate, fw
             except Exception:
-                told = None
+                claimed = None
             try:
                 # the header gives the length, so a wav over the limits fails before it is read
-                if told:
-                    check_duration(*told, lim)
+                if claimed:
+                    check_duration(*claimed, lim)
                 try:
-                    if told:
+                    if claimed:
                         # pydub keeps only what the data chunk says, so the rest is not read
                         file.seek(0)
                         obj = cls(data=file.read(h[-1].position + 8 + size))
@@ -936,7 +936,7 @@ class AudioSegment(object):
 
         def chunks(d):
             try:
-                yield  # primed below, see there
+                yield  # primed by next(gen) below
                 k = step if n < 0 else min(step, n)
                 # one frame past the limits at most, like read_capped
                 prev = run(d.read, k if cap < 0 else min(k, cap))

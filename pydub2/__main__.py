@@ -268,17 +268,17 @@ def mp3_missing(f, size, got, rate):
     if m is None:
         return None
     s = m.start()
-    x = max(h.find(b"Xing", s, s + 64), h.find(b"Info", s, s + 64))
-    if x < 0 or len(h) < x + 144:
+    tag = max(h.find(b"Xing", s, s + 64), h.find(b"Info", s, s + 64))
+    if tag < 0 or len(h) < tag + 144:
         return None
-    flags, frames, length = struct.unpack(">III", h[x + 4:x + 16])
+    flags, frames, length = struct.unpack(">III", h[tag + 4:tag + 16])
     if flags & 3 != 3 or at + s + length <= size:
         return None
     total = frames * (1152 if h[s + 1] & 8 else 576)
-    if flags & 12 == 12 and h[x + 120:x + 124].isalnum():
+    if flags & 12 == 12 and h[tag + 120:tag + 124].isalnum():
         # the lame tag, the decoder drops this delay and padding
-        g = h[x + 141:x + 144]
-        total -= (g[0] << 4 | g[1] >> 4) + ((g[1] & 15) << 8 | g[2])
+        pad = h[tag + 141:tag + 144]
+        total -= (pad[0] << 4 | pad[1] >> 4) + ((pad[1] & 15) << 8 | pad[2])
     return max(total - got, 0) / rate
 
 
@@ -300,8 +300,9 @@ def ogg_cut(f, size):
     return at > size or not flags & 4
 
 
-def missing(f, path, size, fmt, seg):
+def missing(f, path, fmt, seg):
     # seconds missing at the end, 0 when the length is not known, None when nothing is missing or there is no telling
+    size = os.fstat(f.fileno()).st_size
     got = int(seg.frame_count())
     if fmt == "wav":
         rate = None
@@ -337,7 +338,6 @@ def check_file(path):
         return r
     with f:
         head = f.read(65536)
-        size = os.fstat(f.fileno()).st_size
         r["format"] = fmt = what(f, head)
         if os.path.splitext(path)[1].lower() in (".raw", ".pcm"):
             r.update(reason="cant_decode", note="raw audio has no header, loading it needs sample_width, frame_rate and channels")
@@ -361,7 +361,7 @@ def check_file(path):
         if native and fmt == "mp3" and utils.sniff(head) is None:
             m = re.search(rb"ID3|\xff[\xe0-\xff]", head)
             notes.append("mp3 starts with about %s of junk: ok" % ("%d bytes" % m.start() if m else "64 kB or more"))
-        gone = missing(f, path, size, fmt, seg)
+        gone = missing(f, path, fmt, seg)
         if gone is not None:
             r["reason"] = "truncated"
             notes.append("truncated, last %.2f s missing" % gone if gone else "truncated, the end is missing")
@@ -597,8 +597,8 @@ def doctor(a):
         rs = [check_file(f) for f in a.files]
         if a.json:
             print(json.dumps(rs, indent=1))
-        for r in rs:
-            if not a.json:
+        else:
+            for r in rs:
                 print_file(r)
         return 0 if all(r["loads"] for r in rs) else 1
     r = report()

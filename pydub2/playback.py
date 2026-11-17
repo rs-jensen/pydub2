@@ -219,7 +219,7 @@ def _async_ffplay(seg):
             proc.terminate()
             proc.wait(2)
         except subprocess.TimeoutExpired:
-            proc.kill()  # it ignored the polite request
+            proc.kill()  # it did not stop when asked
         except OSError:
             pass
 
