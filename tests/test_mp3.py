@@ -95,19 +95,20 @@ def test_five_seconds_same_as_ffmpeg():
     assert snr(a, b) > 60
 
 
+# resamplers differ per ffmpeg build
 conversions = [
-    ("ac 1", {}, ["-ac", "1"]),
-    ("ac 2", {"channels": 1}, ["-ac", "2"]),
-    ("ar 22050", {}, ["-ar", "22050"]),
-    ("96k input", {"rate": 96000}, None),
-    ("ar with q:a", {"rate": 32000}, ["-ar", "48000", "-q:a", "2"]),
+    ("ac 1", {}, ["-ac", "1"], 20),
+    ("ac 2", {"channels": 1}, ["-ac", "2"], 25),
+    ("ar 22050", {}, ["-ar", "22050"], 12),
+    ("96k input", {"rate": 96000}, None, 17),
+    ("ar with q:a", {"rate": 32000}, ["-ar", "48000", "-q:a", "2"], 20),
 ]
 
 
 @has_mp3
 @has_ff
-@pytest.mark.parametrize("name,make,params", conversions, ids=[c[0] for c in conversions])
-def test_conversions_like_ffmpeg(name, make, params):
+@pytest.mark.parametrize("name,make,params,least", conversions, ids=[c[0] for c in conversions])
+def test_conversions_like_ffmpeg(name, make, params, least):
     seg = chirp(**make)
     ref, a = decode(oracle(seg).export(format="mp3", parameters=params).read())
     got, b = decode(ours(seg, parameters=params))
@@ -116,7 +117,7 @@ def test_conversions_like_ffmpeg(name, make, params):
     assert abs(len(a) - len(b)) <= 2 * got.channels
     n = min(len(a), len(b))
     # two encodes of a slightly different input differ by the coding noise, so only check it is the same sound
-    assert snr(a[:n], b[:n]) > 15
+    assert snr(a[:n], b[:n]) > least
 
 
 @has_mp3
