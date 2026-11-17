@@ -151,7 +151,7 @@ Give it a few files of each format you use. A different length is worth a bug re
 
 `ModuleNotFoundError: No module named 'pyaudioop'` on Python 3.13 or newer. That is pydub 0.25.1, which needs the removed `audioop` module. pydub2 has no audioop at all, so there is nothing to install. `import pydub2` works on 3.13 and newer as it is.
 
-`RuntimeWarning: Couldn't find ffmpeg or avconv - defaulting to ffmpeg, but may not work` when you import pydub. pydub2 prints nothing at import. If a call really needs ffmpeg and cannot find it, you get `FileNotFoundError: ffmpeg not found, pydub2 needs it for ...` at that call, with no warning. Install ffmpeg, or use a format pydub2 handles itself.
+`RuntimeWarning: Couldn't find ffmpeg or avconv - defaulting to ffmpeg, but may not work` when you import pydub. pydub2 prints nothing at import. If a call really needs ffmpeg and cannot find it, you get `FileNotFoundError: ffmpeg not found, pydub2 needs it for ...` at that call, with no warning. Install ffmpeg, run `pip install "pydub2[ffmpeg]"` to get one with pip, or use a format pydub2 handles itself. The extra is only used when no ffmpeg is on `PATH` and `AudioSegment.converter` is not set. It has no wheel for Alpine Linux.
 
 `FileNotFoundError: [Errno 2] No such file or directory: 'ffprobe'`. In pydub this happens for every file that is not wav. pydub2 does not run ffprobe to read a file, so reading wav, flac, ogg, opus and mp3 works without it, and m4a and the like work with only ffmpeg installed. `utils.mediainfo` and `mediainfo_json` fall back to `ffmpeg -i` for formats pydub2 cannot read itself, and return only the codec, the stream index and the sample size keys.
 
