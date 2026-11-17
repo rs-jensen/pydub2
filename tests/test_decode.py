@@ -546,8 +546,9 @@ def test_channel_order(tmp_path, channels, name, codec):
         # ffmpeg writes no opus for these two layouts
         assert name == "a.opus" and channels in (3, 4), p.stderr
         pytest.skip("this ffmpeg cant write it")
-    # libopus and ffmpeg's own opus decoder are up to 245568 apart on 6 channels, vorbis is under 1024 (1152 with msvc)
-    close(*both(path), 1280 if name == "a.ogg" else 1 << 19)
+    # libopus and ffmpeg's own opus decoder are up to 628272 apart on 6 channels (windows arm64), vorbis is under
+    # 1024 (1152 with msvc). a swapped channel is off by about 6e8, the tones are at 0.3 of full scale
+    close(*both(path), 1280 if name == "a.ogg" else 1 << 21)
 
 
 def test_mp2_goes_to_ffmpeg(tmp_path):
