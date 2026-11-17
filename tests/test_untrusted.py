@@ -493,6 +493,17 @@ def test_vorbis_last_granule_near_the_int64_limits():
     assert d.read() == first
 
 
+def test_float_wav_frames_follow_the_sample_size():
+    # 256 channels of 32 bit float with a block align of 1 counted a frame per byte, 1024 times the audio there is
+    fmt = struct.pack("<HHIIHH", 3, 256, 8000, 8000, 1, 32)
+    data = bytes(1024 * 64)
+    wav = b"RIFF" + struct.pack("<I", 36 + len(data)) + b"WAVEfmt " + struct.pack("<I", 16) + fmt + \
+        b"data" + struct.pack("<I", len(data)) + data
+    d = _pydub2.Decoder(wav)
+    assert d.frames == 64
+    assert len(d.read()) == len(data)
+
+
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), -float("inf")])
 def test_mul_with_a_factor_that_is_not_finite(bad):
     for width in (1, 2, 3, 4):

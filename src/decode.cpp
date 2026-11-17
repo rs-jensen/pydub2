@@ -143,6 +143,8 @@ struct Wav : Dec {
         } else if (w.translatedFormatTag == DR_WAVE_FORMAT_IEEE_FLOAT && frame) {
             width = 4;
             bits = 0;
+            // dr_wav reads frames of this size whatever the block align says, so count them the same way
+            frame = drwav_get_bytes_per_pcm_frame(&w);
         } else {
             fail();
         }
