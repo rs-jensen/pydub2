@@ -252,3 +252,24 @@ def test_declares_free_threading():
     if not sysconfig.get_config_var("Py_GIL_DISABLED"):
         pytest.skip("this python has a gil")
     assert p.stdout.strip() == "False", p.stderr
+
+
+def test_summed_segment_joined_once():
+    parts = [SEG[i * 100:(i + 1) * 100] for i in range(25)]
+    want = b"".join(p.raw_data for p in parts)
+    for _ in range(20):
+        seg = sum(parts)
+        go = threading.Barrier(THREADS)
+        got = []
+
+        def read(i):
+            go.wait()
+            got.append(seg.raw_data if i % 2 else vars(seg)["_data"])
+
+        ts = [threading.Thread(target=read, args=(i,)) for i in range(THREADS)]
+        for x in ts:
+            x.start()
+        for x in ts:
+            x.join()
+        assert len(got) == THREADS and got[0] == want
+        assert all(g is got[0] for g in got) and "_parts" not in vars(seg)
