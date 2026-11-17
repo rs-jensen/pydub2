@@ -2,6 +2,7 @@ from __future__ import division
 
 import glob
 import json
+import numbers
 import os
 import re
 import struct
@@ -191,34 +192,48 @@ def extra_ffmpeg():
     return which(exe) if exe and os.path.isabs(exe) else None
 
 
-def check_duration(frames, rate, fw=None):
-    limit = pydub2.max_duration
-    if limit is not None and frames > limit * rate:
+def limits():
+    # read once per load, so another thread that changes them cant cut a load short
+    out = []
+    for name, top in (("max_duration", 2 ** 31), ("max_bytes", 2 ** 62)):
+        v = getattr(pydub2, name)
+        if v is not None and not (isinstance(v, numbers.Real) and v >= 0):
+            raise ValueError("pydub2.%s has to be None or a number, 0 or more, not %r" % (name, v))
+        # more than ffmpeg or an index can take, like inf, is no limit
+        out.append(None if v is None or v >= top else v)
+    return tuple(out)
+
+
+def check_duration(frames, rate, fw=None, lim=None):
+    max_duration, max_bytes = lim or limits()
+    if max_duration is not None and frames > max_duration * rate:
         raise tagged(CouldntDecodeError("this file is longer than max_duration"), reason="too_long")
-    if pydub2.max_bytes is not None and fw is not None and frames * fw > pydub2.max_bytes:
+    if max_bytes is not None and fw is not None and frames * fw > max_bytes:
         raise tagged(CouldntDecodeError("this file is larger than max_bytes"), reason="too_big")
 
 
-def frame_cap(rate, fw):
+def frame_cap(rate, fw, lim=None):
     # one frame past the limits, so a file over them is seen and not just cut, -1 for no limit
+    max_duration, max_bytes = lim or limits()
     n = inf
-    if pydub2.max_duration is not None:
-        n = pydub2.max_duration * rate
-    if pydub2.max_bytes is not None:
-        n = min(n, pydub2.max_bytes // fw)
+    if max_duration is not None:
+        n = max_duration * rate
+    if max_bytes is not None:
+        n = min(n, max_bytes // fw)
     return -1 if n >= 2 ** 62 else int(n) + 1
 
 
-def read_capped(d, n):
+def read_capped(d, n, lim=None):
     # a header can lie about the length, so read one frame past the limits and look
+    lim = lim or limits()
     fw = d.channels * d.width
     if n < 0 and d.exact:
-        check_duration(d.frames, d.rate, fw)
-    cap = frame_cap(d.rate, fw)
+        check_duration(d.frames, d.rate, fw, lim)
+    cap = frame_cap(d.rate, fw, lim)
     if cap >= 0:
         n = cap if n < 0 else min(n, cap)
     pcm = d.read(n)
-    check_duration(len(pcm) // fw, d.rate, fw)
+    check_duration(len(pcm) // fw, d.rate, fw, lim)
     return pcm
 
 

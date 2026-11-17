@@ -195,7 +195,13 @@ seg = pydub2.AudioSegment.from_file(upload)
 `max_bytes` is what bounds memory. `max_duration` alone does not: the file picks the rate, the channels
 and the sample width, so a 301 kB flac can ask for 22 GB within an hour. Both are checked from the header
 before anything is read where it gives the length, and again while the file is decoded, so a header that
-lies does not get around them. They hold for raw and pcm input, in strict mode and in `stream`.
+lies does not get around them. They hold for raw and pcm input, in strict mode and in `stream`, and
+are read once at the start of each load. A limit that is not `None` or a number of 0 or more raises
+`ValueError`, and one too large to matter, like `inf`, is no limit.
+
+A file object, such as a `BytesIO` or an uploaded file, is read into memory whole before it is decoded,
+except for raw and pcm input. The limits bound what it decodes to, not that read, so cap the upload size
+or pass a path.
 
 Never build `format`, `codec`, `parameters`, `cover` or `AudioSegment.converter` from user input, they
 go to ffmpeg as they are. Do not show exception text to end users, ffmpeg errors can hold paths on your
