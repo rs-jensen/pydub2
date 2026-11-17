@@ -1,3 +1,6 @@
+import os
+
+strict = os.environ.get("PYDUB2_STRICT", "0") not in ("", "0")
 max_duration = None
 ffmpeg_timeout = None
 
