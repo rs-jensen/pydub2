@@ -173,3 +173,28 @@ def test_random_input_at_odd_sizes():
         speed = float(rng.uniform(0.25, 4))
         out = _pydub2.stretch(data, rate, channels, width, speed)
         assert len(out) == round(n / speed) * width * channels
+
+
+@pytest.mark.parametrize("rate", [0.5, 0.8, 1.25, 1.5, 2.0])
+def test_inverted_channel(rate):
+    # left plus right is silence here, the search still has to line the windows up
+    x = tone(440).to_numpy()
+    seg = AudioSegment(data=np.hstack([x, -x]).tobytes(), sample_width=2, frame_rate=44100, channels=2)
+    out = seg.time_stretch(rate)
+    y = out.to_numpy().astype(int)
+    assert np.abs(y[:, 0] + y[:, 1]).max() <= 2
+    assert abs(out.rms / seg.rms - 1) < 0.02
+    mid = np.abs(y[2000:-2000, 0])
+    top = np.array([mid[i:i + 200].max() for i in range(0, len(mid) - 200, 200)])
+    assert top.min() > 0.95 * top.max()
+
+
+@pytest.mark.parametrize("rate", [0.25, 0.7, 0.9, 1.1, 1.5, 2.0, 3.0, 4.0])
+def test_no_silence_at_the_end(rate):
+    # a constant level, so a frame taken from behind the end of the input shows as a drop
+    for n in [44100, 43769, 43400, 3000, 700, 50]:
+        x = np.full(n, 1000, np.int16)
+        seg = AudioSegment(data=x.tobytes(), sample_width=2, frame_rate=44100, channels=1)
+        assert seg.time_stretch(rate).to_numpy().min() >= 999
+    out = AudioSegment(data=np.full(44100, 1000, np.int16).tobytes(), sample_width=2, frame_rate=44100, channels=1).pitch_shift(7)
+    assert out.to_numpy()[:-100].min() >= 900

@@ -48,18 +48,24 @@ void stretch(const Audio &a, double rate, const Cancel &cancel, const Alloc &all
     double full = (double)(1LL << (8 * w - 1));
     std::vector<float> x((size_t)(total * ch)), mono((size_t)total);
     const unsigned char *s = (const unsigned char *)a.data.data();
-    for (long long i = 0; i < n; i++) {
-        float sum = 0;
-        for (long long c = 0; c < ch; c++, s += w) {
-            uint32_t u = 0;
-            for (long long k = w; k--;) {
-                u = u << 8 | s[k];
-            }
-            float v = (float)((int32_t)(u << (32 - 8 * w)) >> (32 - 8 * w)) / (float)full;
-            x[(size_t)((i + pad) * ch + c)] = v;
-            sum += v;
+    for (long long i = 0; i < n * ch; i++, s += w) {
+        uint32_t u = 0;
+        for (long long k = w; k--;) {
+            u = u << 8 | s[k];
         }
-        mono[(size_t)(i + pad)] = sum;
+        x[(size_t)(pad * ch + i)] = (float)((int32_t)(u << (32 - 8 * w)) >> (32 - 8 * w)) / (float)full;
+    }
+    // the search runs on one mix of the channels. a channel that is out of phase with the mix so far
+    // is turned around first, or left and inverted right would cancel and leave nothing to line up
+    for (long long c = 0; c < ch; c++) {
+        double dot = 0;
+        for (long long i = pad; i < n + pad; i++) {
+            dot += (double)mono[(size_t)i] * x[(size_t)(i * ch + c)];
+        }
+        float sign = dot < 0 ? -1.f : 1.f;
+        for (long long i = pad; i < n + pad; i++) {
+            mono[(size_t)i] += sign * x[(size_t)(i * ch + c)];
+        }
     }
 
     const double pi = 3.14159265358979323846;
@@ -71,11 +77,18 @@ void stretch(const Audio &a, double rate, const Cancel &cancel, const Alloc &all
     for (long long k = 0; k <= last && m; k++, prev = q) {
         cancel();
         long long p = at(k);
+        long long o = k * hs, e = std::min(len, m - o);
         q = p;
         if (k) {
             // the window that lines up best with where the previous one would have gone on
             const float *t = &mono[(size_t)(prev + hs + pad)];
             long long lo = p - d, hi = p + d, nd = hs / step;
+            // the last windows would take zeros from behind the input, so their range ends where the input does
+            long long over = hi - std::max(0LL, n - e);
+            if (over > 0) {
+                hi -= over;
+                lo = std::max(-d, lo - over);
+            }
             for (long long j = 0; j < nd; j++) {
                 nat[(size_t)j] = t[j * step];
             }
@@ -102,7 +115,6 @@ void stretch(const Audio &a, double rate, const Cancel &cancel, const Alloc &all
                 }
             }
         }
-        long long o = k * hs, e = std::min(len, m - o);
         const float *src = &x[(size_t)((q + pad) * ch)];
         for (long long j = 0; j < e; j++) {
             ws[(size_t)(o + j)] += win[(size_t)j];
