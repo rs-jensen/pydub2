@@ -1,3 +1,4 @@
+import decimal
 import io
 import multiprocessing
 import shutil
@@ -307,3 +308,42 @@ def test_speedup_with_a_negative_crossfade_matches_pydub(kw):
     assert raises(lambda: new.speedup(**kw)) == raises(lambda: old.speedup(**kw))
     if not raises(lambda: old.speedup(**kw)):
         assert new.speedup(**kw).raw_data == old.speedup(**kw).raw_data
+
+
+def decoded(seg, **kw):
+    return pydub.AudioSegment.from_file(seg.export(io.BytesIO(), **kw), format="ogg" if kw["format"] == "opus" else kw["format"])
+
+
+@needs_ff
+@pytest.mark.parametrize("fmt", ["mp3", "opus"])
+def test_exporting_an_empty_segment_matches_pydub(fmt):
+    new, old = (m.AudioSegment.empty().export(io.BytesIO(), format=fmt).read() for m in (pydub2, pydub))
+    assert new and old
+
+
+@needs_ff
+@pytest.mark.parametrize("kw", [dict(start_second="0.1"), dict(start_second="00:00:01"),
+                                dict(start_second=decimal.Decimal("0.1"))])
+def test_start_second_and_duration_as_text_match_pydub(kw):
+    wav = io.BytesIO()
+    both(*noise(2000, rate=8000))[1].export(wav, format="wav")
+    new, old = (m.AudioSegment.from_file(io.BytesIO(wav.getvalue()), format="wav", **kw) for m in (pydub2, pydub))
+    assert new.raw_data == old.raw_data
+
+
+@needs_ff
+@pytest.mark.parametrize("fmt", ["ogg", "opus"])
+def test_bitrate_with_stray_whitespace_matches_pydub(fmt):
+    new, old = both(*noise(300, rate=48000))
+    assert len(decoded(new, format=fmt, bitrate="64k ")) == len(decoded(old, format=fmt, bitrate="64k "))
+
+
+@needs_ff
+@pytest.mark.parametrize("fmt", ["wav", "mp3", "flac", "ogg"])
+def test_export_of_a_wav_with_stray_bytes_matches_pydub(fmt, tmp_path):
+    data = b"\1\2\3\4" * 1000 + b"\5\6\7"
+    path = tmp_path / "stray.wav"
+    path.write_bytes(struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", 36 + len(data), b"WAVE", b"fmt ", 16, 1, 2,
+                                 44100, 176400, 4, 16, b"data", len(data)) + data)
+    new, old = (m.AudioSegment.from_file(str(path)) for m in (pydub2, pydub))
+    assert len(decoded(new, format=fmt)) == len(decoded(old, format=fmt))
