@@ -504,6 +504,14 @@ def test_float_wav_frames_follow_the_sample_size():
     assert len(d.read()) == len(data)
 
 
+def test_opus_at_a_huge_rate_is_refused_quickly():
+    # the resampler of libopusenc works in the square of the rate, an ogg header of 1 GHz took 150 s a channel
+    start = time.time()
+    with pytest.raises(RuntimeError):
+        _pydub2.encode(bytes(800), 3 * 10 ** 8, 1, 2, "opus")
+    assert time.time() - start < 2
+
+
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), -float("inf")])
 def test_mul_with_a_factor_that_is_not_finite(bad):
     for width in (1, 2, 3, 4):
