@@ -36,6 +36,7 @@ What changed in each release.
 - `AudioSegment.stream` lets go of the file when the generator ends or is closed, so it can be deleted on Windows.
 - A tag too long for the Windows command line raises `CouldntEncodeError` and not a raw `OSError`.
 - `AudioSegment.stream` now closes the file when the generator is closed before the first chunk, which left it open on Python 3.12.
+- On x86 the mp3 encoder of pydub2-mp3 is built with the options of LAME's own configure, so 24 and 32 bit audio and some VBR settings give the same bytes as ffmpeg's libmp3lame. They were different whenever the low 16 bits of the samples were not zero.
 
 ### Security
 
