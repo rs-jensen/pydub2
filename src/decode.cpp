@@ -769,6 +769,7 @@ struct Page {
 };
 
 // the length ffmpeg gives, worked out like its ogg demuxer and vorbis parser do. -1 if unsure, -2 for a chained file
+// or one ffmpeg cannot open
 static int64_t vorbis_len(Input &in, std::vector<Page> &pages) {
     std::string head[3];
     std::vector<Packet> pk;
@@ -818,7 +819,11 @@ static int64_t vorbis_len(Input &in, std::vector<Page> &pages) {
             }
         }
     }
-    if (pk.empty() || head[0].size() < 30 || head[2].empty()) {
+    // ffmpeg opens the file only once it has read a whole page with the end of the first audio packet
+    if (pk.empty()) {
+        return -2;
+    }
+    if (head[0].size() < 30 || head[2].empty()) {
         return -1;
     }
     int bs[2] = {1 << (head[0][28] & 15), 1 << (head[0][28] >> 4 & 15)};

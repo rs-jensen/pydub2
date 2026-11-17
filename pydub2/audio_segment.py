@@ -56,6 +56,7 @@ if sys.version_info >= (3, 0):
     StringIO = BytesIO
 
 
+# a subclass that has its own version of one of these builds its sums like pydub, through _spawn
 _SPAWN_HOOKS = ("__new__", "__init__", "__setattr__", "__getattr__", "_spawn")
 
 
@@ -87,6 +88,16 @@ def _vorbis_tags(tags, format):
     dict_set(out, idx, b"encoder", b"")
     # flac has it last, ogg and opus first
     return out + [(b"encoder", b"pydub2")] if format == "flac" else [(b"encoder", b"pydub2")] + out
+
+
+# the target is opened only once the audio is encoded, so a failed export leaves an existing file as it was
+def _write_out(out_f, *parts):
+    out_f, _ = _fd_or_path_or_tempfile(out_f, 'wb+')
+    out_f.seek(0)
+    for part in parts:
+        out_f.write(part)
+    out_f.seek(0)
+    return out_f
 
 
 def _export_pcm(seg, format, codec, parameters):
@@ -450,6 +461,7 @@ class AudioSegment(object):
         return data
 
     def __reduce_ex__(self, protocol):
+        # a copy or a pickle holds the bytes like in pydub, not the parts
         self._data
         return super(AudioSegment, self).__reduce_ex__(protocol)
 
@@ -783,15 +795,15 @@ class AudioSegment(object):
                 w = read_wav_audio(head, h)
                 fw = w.channels * (4 if w.bits_per_sample == 24 else w.bits_per_sample // 8)
                 size = min(h[-1].size, file.seek(0, 2) - h[-1].position - 8)
-                told = size // fw, w.sample_rate, fw
+                claimed = size // fw, w.sample_rate, fw
             except Exception:
-                told = None
+                claimed = None
             try:
                 # the header gives the length, so a wav over the limits fails before it is read
-                if told:
-                    check_duration(*told, lim)
+                if claimed:
+                    check_duration(*claimed, lim)
                 try:
-                    if told:
+                    if claimed:
                         # pydub keeps only what the data chunk says, so the rest is not read
                         file.seek(0)
                         obj = cls(data=file.read(h[-1].position + 8 + size))
@@ -906,9 +918,17 @@ class AudioSegment(object):
         """Yields the file in chunk_ms pieces without loading all of it. wav, flac, mp3, ogg and opus only."""
         lim = limits()
         filename = None if hasattr(file, "read") else fsdecode(file)
+        data = bytes(file.read()) if filename is None else None
         try:
-            d = _pydub2.Decoder(bytes(file.read()) if filename is None else filename)
+            d = _pydub2.Decoder(data if filename is None else filename)
         except RuntimeError:
+            if filename is not None:
+                # a missing file or a folder raises its own OSError here
+                with open(filename, "rb") as f:
+                    data = f.read(4096)
+            if sniff(data[:4096]) in ("wav", "flac", "mp3", "ogg", "opus") or \
+                    (filename or "").lower().endswith((".wav", ".flac", ".mp3", ".ogg", ".opus")):
+                raise CouldntDecodeError("cant read this file")
             raise CouldntDecodeError("stream only reads wav, flac, mp3, ogg and opus")
 
         def run(f, *args):
@@ -934,7 +954,7 @@ class AudioSegment(object):
 
         def chunks(d):
             try:
-                yield  # primed below, see there
+                yield  # primed by next(gen) below
                 k = step if n < 0 else min(step, n)
                 # one frame past the limits at most, like read_capped
                 prev = run(d.read, k if cap < 0 else min(k, cap))
@@ -1047,13 +1067,8 @@ class AudioSegment(object):
                     'specify an ffmpeg raw format like format="s16le" instead '
                     'or call export(format="raw") with no codec or parameters')
 
-        out_f, _ = _fd_or_path_or_tempfile(out_f, 'wb+')
-        out_f.seek(0)
-
         if format in ("raw", "pcm"):
-            out_f.write(self._data)
-            out_f.seek(0)
-            return out_f
+            return _write_out(out_f, self._data)
 
         # a partial last frame is dropped, the encoders take whole frames only
         fw = self.channels * self.sample_width
@@ -1075,18 +1090,15 @@ class AudioSegment(object):
             if format == "wav" and width in (2, 4):
                 # 8 bit is unsigned in a wav, 16 and 32 bit go out as they are
                 try:
-                    out_f.write(_pydub2.wav_head(data, round(self.frame_rate), self.channels, width))
+                    head = _pydub2.wav_head(data, round(self.frame_rate), self.channels, width)
                 except RuntimeError as e:
                     raise tagged(CouldntEncodeError(str(e)), "wav", "cant_encode")
-                out_f.write(data)
-            else:
-                out = _encode(data, self.frame_rate, self.channels, width, format, rate,
-                              [] if tags is None or format == "wav" else _vorbis_tags(tags, format))
-                if format == "wav" and out[40] & 1 and not WAVE_PADS:
-                    out = riff_without_pad(out[:-1])
-                out_f.write(out)
-            out_f.seek(0)
-            return out_f
+                return _write_out(out_f, head, data)
+            out = _encode(data, self.frame_rate, self.channels, width, format, rate,
+                          [] if tags is None or format == "wav" else _vorbis_tags(tags, format))
+            if format == "wav" and out[40] & 1 and not WAVE_PADS:
+                out = riff_without_pad(out[:-1])
+            return _write_out(out_f, out)
 
         if tags is not None:
             if not isinstance(tags, dict):
@@ -1098,27 +1110,21 @@ class AudioSegment(object):
         if format in ("wav", "flac") and (codec or parameters) and cover is None and tags is None and not pydub2.strict:
             out = _export_pcm(self, format, codec, parameters)
             if out is not None:
-                out_f.write(out)
-                out_f.seek(0)
-                return out_f
+                return _write_out(out_f, out)
 
         if format == "mp3" and codec is None and cover is None and not pydub2.strict:
             if _mp3.available():
                 mp3 = _mp3.encode(pcm, self.frame_rate, self.channels, self.sample_width,
                                   bitrate, tags, id3v2_version, parameters, self.converter)
                 if mp3 is not None:
-                    out_f.write(mp3)
-                    out_f.seek(0)
-                    return out_f
+                    return _write_out(out_f, mp3)
             elif _ffmpeg.find(self.converter) is None:
                 raise tagged(FileNotFoundError("ffmpeg not found, pip install pydub2-mp3 to write mp3 without it"),
                              "mp3", "needs_ffmpeg", 'pip install "pydub2[mp3]"')
 
         wav = _encode(pcm, self.frame_rate, self.channels, self.sample_width, "wav")
-        out_f.write(_ffmpeg.from_wav(self.converter, wav, format, codec, bitrate, parameters, tags,
-                                     id3v2_version, cover))
-        out_f.seek(0)
-        return out_f
+        return _write_out(out_f, _ffmpeg.from_wav(self.converter, wav, format, codec, bitrate, parameters, tags,
+                                                  id3v2_version, cover))
 
     @classmethod
     def from_numpy(cls, array, frame_rate):
@@ -1400,7 +1406,9 @@ class AudioSegment(object):
                 return seg1._spawn(seg1._data + seg2._data)
             # joined on first read of _data, so seg += chunk in a loop stays linear
             d = seg1.__dict__
-            parts = ("_data" not in d and d.get("_parts")) or [seg1._data]
+            parts = None if "_data" in d else d.get("_parts")
+            if not parts:
+                parts = [seg1._data]
             out = cls.__new__(cls)
             out.__dict__.update(sample_width=seg1.sample_width, frame_rate=seg1.frame_rate, channels=seg1.channels,
                                 _parts=parts + [seg2._data], frame_width=seg1.frame_width)

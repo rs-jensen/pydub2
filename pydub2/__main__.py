@@ -126,9 +126,13 @@ def print_report(r):
     print("pydub2", r["pydub2"])
     print("python %s on %s" % (r["python"], r["platform"]))
     print("reads without ffmpeg:", " ".join(r["read_natively"]))
-    print("writes without ffmpeg:", " ".join(r["write_natively"]), "(pydub2-mp3 %s)" %
-          ("installed" if r["pydub2_mp3"] else "broken" if any(f["for"].startswith("pydub2-mp3") for f in r["fixes"])
-           else "not installed"))
+    if r["pydub2_mp3"]:
+        mp3 = "installed"
+    elif any(f["for"].startswith("pydub2-mp3") for f in r["fixes"]):
+        mp3 = "broken"
+    else:
+        mp3 = "not installed"
+    print("writes without ffmpeg:", " ".join(r["write_natively"]), "(pydub2-mp3 %s)" % mp3)
     print(show_tool("ffmpeg", r["ffmpeg"]))
     print(show_tool("ffprobe", r["ffprobe"]))
     print("strict mode:", "on" if r["strict"] else "off")
@@ -193,8 +197,13 @@ def native_format(head):
         return "wav"
     if head[:4] == b"fLaC":
         return "flac"
-    packet = head[27 + head[26]:] if head[:4] == b"OggS" and len(head) > 27 else b""
-    return "opus" if packet.startswith(b"OpusHead") else "ogg" if packet.startswith(b"\x01vorbis") else "mp3"
+    if head[:4] == b"OggS" and len(head) > 27:
+        packet = head[27 + head[26]:]
+        if packet.startswith(b"OpusHead"):
+            return "opus"
+        if packet.startswith(b"\x01vorbis"):
+            return "ogg"
+    return "mp3"
 
 
 def is_text(head):
@@ -226,9 +235,13 @@ def damaged(f, head, fmt):
         return not ogg_chained(f)
     if fmt != "wav":
         return True
-    tag = next((data[:2] if data[:2] != b"\xfe\xff" else data[24:26] for _, cid, n, data in chunks(f) if cid == b"fmt "), b"")
-    # no fmt chunk, or pcm or float which pydub2 reads itself
-    return len(tag) < 2 or struct.unpack("<H", tag)[0] in (1, 3)
+    for _, cid, n, data in chunks(f):
+        if cid == b"fmt ":
+            # an extensible wav keeps its real tag further in
+            tag = data[24:26] if data[:2] == b"\xfe\xff" else data[:2]
+            # pcm and float are what pydub2 reads itself
+            return len(tag) < 2 or struct.unpack("<H", tag)[0] in (1, 3)
+    return True
 
 
 def ogg_chained(f):
@@ -255,17 +268,17 @@ def mp3_missing(f, size, got, rate):
     if m is None:
         return None
     s = m.start()
-    x = max(h.find(b"Xing", s, s + 64), h.find(b"Info", s, s + 64))
-    if x < 0 or len(h) < x + 144:
+    tag = max(h.find(b"Xing", s, s + 64), h.find(b"Info", s, s + 64))
+    if tag < 0 or len(h) < tag + 144:
         return None
-    flags, frames, length = struct.unpack(">III", h[x + 4:x + 16])
+    flags, frames, length = struct.unpack(">III", h[tag + 4:tag + 16])
     if flags & 3 != 3 or at + s + length <= size:
         return None
     total = frames * (1152 if h[s + 1] & 8 else 576)
-    if flags & 12 == 12 and h[x + 120:x + 124].isalnum():
+    if flags & 12 == 12 and h[tag + 120:tag + 124].isalnum():
         # the lame tag, the decoder drops this delay and padding
-        g = h[x + 141:x + 144]
-        total -= (g[0] << 4 | g[1] >> 4) + ((g[1] & 15) << 8 | g[2])
+        pad = h[tag + 141:tag + 144]
+        total -= (pad[0] << 4 | pad[1] >> 4) + ((pad[1] & 15) << 8 | pad[2])
     return max(total - got, 0) / rate
 
 
@@ -287,16 +300,17 @@ def ogg_cut(f, size):
     return at > size or not flags & 4
 
 
-def missing(f, path, size, fmt, seg):
+def missing(f, path, fmt, seg):
     # seconds missing at the end, 0 when the length is not known, None when nothing is missing or there is no telling
+    size = os.fstat(f.fileno()).st_size
     got = int(seg.frame_count())
     if fmt == "wav":
         rate = None
         for at, cid, n, data in chunks(f):
             if cid == b"fmt " and len(data) >= 12:
                 rate = struct.unpack("<I", data[8:12])[0]
-            # shortcut: rf64 keeps the size in ds64, its truncation is not seen, read ds64 if it matters
-            # ffmpeg and streaming writers leave 0, 0xffffffff or 0x7ffff000 and up when the length is not known, so does a size far past the end
+            # a writer that does not know the length leaves 0, 0xffffffff, 0x7ffff000 and up, or a size far past the end
+            # rf64 keeps the size in ds64, which is not read here, so a cut rf64 is not seen
             if cid == b"data" and n and n < 0x7ffff000 and n <= 100 * size and at + 8 + n > size:
                 return (at + 8 + n - size) / rate if rate else 0
     elif fmt == "flac":
@@ -324,12 +338,11 @@ def check_file(path):
         return r
     with f:
         head = f.read(65536)
-        size = os.fstat(f.fileno()).st_size
         r["format"] = fmt = what(f, head)
-        # ask whether from_file ran ffmpeg, the list is seen by this thread only and nothing is patched
         if os.path.splitext(path)[1].lower() in (".raw", ".pcm"):
             r.update(reason="cant_decode", note="raw audio has no header, loading it needs sample_width, frame_rate and channels")
             return r
+        # from_file puts the ffmpeg commands it runs in this list, which only this thread sees
         used = []
         token = _ffmpeg._seen.set(used)
         try:
@@ -348,7 +361,7 @@ def check_file(path):
         if native and fmt == "mp3" and utils.sniff(head) is None:
             m = re.search(rb"ID3|\xff[\xe0-\xff]", head)
             notes.append("mp3 starts with about %s of junk: ok" % ("%d bytes" % m.start() if m else "64 kB or more"))
-        gone = missing(f, path, size, fmt, seg)
+        gone = missing(f, path, fmt, seg)
         if gone is not None:
             r["reason"] = "truncated"
             notes.append("truncated, last %.2f s missing" % gone if gone else "truncated, the end is missing")
@@ -584,8 +597,8 @@ def doctor(a):
         rs = [check_file(f) for f in a.files]
         if a.json:
             print(json.dumps(rs, indent=1))
-        for r in rs:
-            if not a.json:
+        else:
+            for r in rs:
                 print_file(r)
         return 0 if all(r["loads"] for r in rs) else 1
     r = report()

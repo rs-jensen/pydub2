@@ -5,6 +5,7 @@ import json
 import numbers
 import os
 import re
+import signal
 import struct
 import sys
 import subprocess
@@ -212,9 +213,9 @@ def check_duration(frames, rate, fw=None, lim=None):
         raise tagged(CouldntDecodeError("this file is larger than max_bytes"), reason="too_big")
 
 
-def frame_cap(rate, fw, lim=None):
+def frame_cap(rate, fw, lim):
     # one frame past the limits, so a file over them is seen and not just cut, -1 for no limit
-    max_duration, max_bytes = lim or limits()
+    max_duration, max_bytes = lim
     n = inf
     if max_duration is not None:
         n = max_duration * rate
@@ -237,10 +238,31 @@ def read_capped(d, n, lim=None):
     return pcm
 
 
+def timeout():
+    t = pydub2.ffmpeg_timeout
+    if t is not None and not (isinstance(t, numbers.Real) and t > 0):
+        raise ValueError("pydub2.ffmpeg_timeout has to be None or a number more than 0, not %r" % (t,))
+    return t
+
+
 def run(command, data=None, **kwargs):
+    t = timeout()
     try:
-        return subprocess.run(command, input=data, capture_output=True, creationflags=NOWINDOW,
-                              timeout=pydub2.ffmpeg_timeout, **kwargs)
+        if os.name != "posix":
+            return subprocess.run(command, input=data, capture_output=True, creationflags=NOWINDOW,
+                                  timeout=t, **kwargs)
+        # a group of its own, so a timeout or Ctrl-C also stops what a wrapper script around ffmpeg started
+        with Popen(command, stdin=None if data is None else PIPE, stdout=PIPE, stderr=PIPE, start_new_session=True,
+                   **kwargs) as p:
+            try:
+                out, err = p.communicate(data, timeout=t)
+            except BaseException:
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                raise
+        return subprocess.CompletedProcess(command, p.returncode, out, err)
     except subprocess.TimeoutExpired:
         raise TimeoutError("ffmpeg took longer than ffmpeg_timeout")
 
@@ -946,7 +968,10 @@ def mediainfo_json(filepath, read_ahead_limit=-1):
         if f is None:
             return {}
         with f:
+            head = f.read(4096)
             native = _native_info(f, src)
+        from . import _ffmpeg
+        exe = _current()
         if native:
             stream, fmt = native
             for k in ("index", "channels", "bits_per_sample"):
@@ -954,9 +979,12 @@ def mediainfo_json(filepath, read_ahead_limit=-1):
             raw = stream["bits_per_raw_sample"]
             info = {"streams": [{k: v for k, v in stream.items() if v != "N/A"}], "format": dict(fmt, nb_streams=1)}
             extra_info = {0: [stream["sample_fmt"] + (" (%s bit)" % raw if raw != "N/A" else "")]}
+        # refused by the reader means damaged, ffprobe gives {} too, but an ID3 tag can sit in front of anything
+        elif _ffmpeg.find(exe) is None and (sniff(head) in ("wav", "flac", "mp3", "ogg", "opus") and head[:3] != b"ID3"
+                                             or isinstance(src, str)
+                                             and src.lower().endswith((".wav", ".flac", ".mp3", ".ogg", ".opus"))):
+            return {}
         else:
-            from . import _ffmpeg
-            exe = _current()
             args, data = source(filepath, exe=_ffmpeg.find(exe))
             extra_info = get_extra_info(_ffmpeg.run(exe, args, data, "this file").stderr.decode("utf-8", "ignore"))
             info = {"streams": []}

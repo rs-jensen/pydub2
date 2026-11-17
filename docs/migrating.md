@@ -165,7 +165,7 @@ Give it a few files of each format you use. A different length is worth a bug re
 
 `FileNotFoundError` when exporting mp3 or m4a. For mp3, install `"pydub2[mp3]"` or ffmpeg. For m4a and aac you need ffmpeg. The error message says which one.
 
-`CouldntDecodeError: Decoding failed. ffmpeg returned error code ...`. pydub2 raises the same exception with the last part of what ffmpeg said. When ffmpeg is not installed and the file is one of the five formats pydub2 reads itself, you get `CouldntDecodeError: cant read this file`.
+`CouldntDecodeError: Decoding failed. ffmpeg returned error code ...`. pydub2 raises the same exception with the same text, and adds the last line ffmpeg said at the end. When ffmpeg is not installed and the file is one of the five formats pydub2 reads itself, you get `CouldntDecodeError: cant read this file`.
 
 Static noise after exporting an array. If you build an `AudioSegment` from float32 bytes with `sample_width=4`, both pydub and pydub2 read them as 32 bit integers and you get noise. Use `from_numpy`, which takes floats between -1 and 1 as floats:
 
