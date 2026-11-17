@@ -213,9 +213,9 @@ def check_duration(frames, rate, fw=None, lim=None):
         raise tagged(CouldntDecodeError("this file is larger than max_bytes"), reason="too_big")
 
 
-def frame_cap(rate, fw, lim=None):
+def frame_cap(rate, fw, lim):
     # one frame past the limits, so a file over them is seen and not just cut, -1 for no limit
-    max_duration, max_bytes = lim or limits()
+    max_duration, max_bytes = lim
     n = inf
     if max_duration is not None:
         n = max_duration * rate

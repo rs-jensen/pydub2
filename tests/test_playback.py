@@ -258,6 +258,33 @@ def test_many_handles_leak_nothing(fake_ffplay):
     assert fake_ffplay.temp_files() == [] and all(p.returncode is not None for p in fake_ffplay.started)
 
 
+def test_handles_made_in_many_threads_at_once(monkeypatch):
+    # each new handle drops the ended ones from the set the other threads add to
+    errors = []
+
+    def make():
+        try:
+            for _ in range(2000):
+                done = threading.Event()
+                done.set()
+                playback.PlayHandle(lambda: None, done)
+        except Exception as e:
+            errors.append(e)
+
+    monkeypatch.setattr(playback, "_live", set())
+    old = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        threads = [threading.Thread(target=make) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        sys.setswitchinterval(old)
+    assert errors == []
+
+
 EXITING = """import sys
 sys.modules["simpleaudio"] = sys.modules["pyaudio"] = None
 from pydub2 import playback

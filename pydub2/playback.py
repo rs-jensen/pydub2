@@ -90,6 +90,7 @@ def play(audio_segment):
 
 
 _live = set()
+_live_lock = threading.Lock()
 
 
 def _stop_all():
@@ -100,6 +101,7 @@ def _stop_all():
         try:
             h._halt()
         except Exception:
+            # the others still have to be stopped
             pass
     for h in handles:
         h._done.wait(5)
@@ -115,8 +117,10 @@ class PlayHandle:
     def __init__(self, halt, done):
         self._halt = halt
         self._done = done
-        _live.difference_update([h for h in _live if h._done.is_set()])
-        _live.add(self)
+        with _live_lock:
+            _live.difference_update([h for h in _live if h._done.is_set()])
+            _live.add(self)
+        # registered once, and last, so it runs before the other exit handlers
         atexit.unregister(_stop_all)
         atexit.register(_stop_all)
 
@@ -217,7 +221,7 @@ def _async_ffplay(seg):
             proc.terminate()
             proc.wait(2)
         except subprocess.TimeoutExpired:
-            proc.kill()  # it ignored the polite request
+            proc.kill()  # it did not stop when asked
         except OSError:
             pass
 

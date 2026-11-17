@@ -39,8 +39,9 @@ def run(converter, args, data, what):
                      'pip install "pydub2[ffmpeg]"' if name == "ffmpeg" else None)
     cmd = [exe, "-y", "-nostdin"] + args
     log_conversion(cmd)
-    if _seen.get() is not None:
-        _seen.get().append(cmd)
+    seen = _seen.get()
+    if seen is not None:
+        seen.append(cmd)
     return run_command(cmd, data)
 
 
