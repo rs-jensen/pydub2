@@ -38,6 +38,8 @@ def build(d):
         try:
             c.seg.export(path, format=ext)
         except Exception:
+            if ext != "mp3":
+                raise
             continue
         c.files[ext] = path
         with open(path, "rb") as f:

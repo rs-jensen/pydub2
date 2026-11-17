@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 import shutil
@@ -262,7 +263,8 @@ def test_mp3_library_that_does_not_load(capsys, broken_mp3):
     code, out = run(capsys, "--json")
     r = json.loads(out)
     assert code == 1 and not r["ok"] and r["pydub2_mp3"] is False and "mp3" not in r["write_natively"]
-    assert [f["run"] for f in r["fixes"]] == ["pip install --force-reinstall pydub2-mp3"]
+    # without ffmpeg on PATH the ffmpeg fix comes first
+    assert [f["run"] for f in r["fixes"] if "pydub2-mp3" in f["for"]] == ["pip install --force-reinstall pydub2-mp3"]
     code, out = run(capsys)
     assert "(pydub2-mp3 broken)" in out and "missing, pydub2-mp3 is installed but does not load" in out
 
@@ -356,10 +358,12 @@ def test_truncated(tmp_path, format):
 def test_scan_lists_what_it_cant_read(capsys, tmp_path, monkeypatch):
     (tmp_path / "old.py").write_text("import pydub\nprint 'hi'\n")
     (tmp_path / "big.py").write_text("x = 1\n" * 400000)
+    with pytest.raises(SyntaxError) as e:
+        ast.parse("import pydub\nprint 'hi'\n")
     code, out = run(capsys, "--scan", str(tmp_path))
     assert code == 0 and out.splitlines()[:3] == [
         "%s: larger than 2 MB" % (tmp_path / "big.py"),
-        "%s: cant parse line 2: Missing parentheses in call to 'print'. Did you mean print(...)?" % (tmp_path / "old.py"),
+        "%s: cant parse line 2: %s" % (tmp_path / "old.py", e.value.msg),  # the wording is the interpreter's
         "0 of 2 python files use pydub, 2 could not be read and are not counted"]
     # a single file works too
     r = scan(str(tmp_path / "old.py"))

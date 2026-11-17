@@ -87,7 +87,8 @@ def fake_ffplay(tmp_path, monkeypatch):
 
     def popen(cmd, *a, **k):
         if os.name == "nt" and cmd[0].lower().endswith("ffplay.exe"):
-            cmd = [sys.executable, cmd[0][:-4] + ".py"] + cmd[1:]  # an .exe cannot be a script
+            # a venv python.exe is a launcher that starts the real one as a child, terminate() would miss it
+            cmd = [getattr(sys, "_base_executable", sys.executable), cmd[0][:-4] + ".py"] + cmd[1:]  # an .exe cannot be a script
         proc = real(cmd, *a, **k)
         started.append(proc)
         return proc
