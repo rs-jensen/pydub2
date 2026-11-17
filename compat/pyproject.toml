@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pydub2-compat"
-version = "0.0.1"
+version = "0.0.2"
 description = "Makes import pydub use pydub2, even when the real pydub is installed"
 readme = "README.md"
 license = "MIT"

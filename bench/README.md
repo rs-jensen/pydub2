@@ -38,8 +38,8 @@ The timed part of each case is only the call named in the row. Reading the input
     for v in pydub pydublts pydub2 pydub2mp3 sf av mini; do python3.13 -m venv venvs/$v; venvs/$v/bin/pip install numpy; done
     venvs/pydub/bin/pip install pydub==0.25.1 audioop-lts
     venvs/pydublts/bin/pip install pydub-lts
-    venvs/pydub2/bin/pip install ../wheels/pydub2-0.0.1-*.whl
-    venvs/pydub2mp3/bin/pip install ../wheels/pydub2-0.0.1-*.whl ../wheels/pydub2_mp3-*.whl
+    venvs/pydub2/bin/pip install ../wheels/pydub2-*.whl
+    venvs/pydub2mp3/bin/pip install ../wheels/pydub2-*.whl ../wheels/pydub2_mp3-*.whl
     venvs/sf/bin/pip install soundfile
     venvs/av/bin/pip install av
     venvs/mini/bin/pip install miniaudio
