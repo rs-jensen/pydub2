@@ -211,7 +211,13 @@ def cli(*args, **env):
 
 def unix_socket(path):
     s = socket.socket(socket.AF_UNIX)
-    s.bind(str(path))
+    # sun_path holds 104 bytes on macOS and a tmp_path is longer, so bind by a relative name
+    cwd = os.getcwd()
+    os.chdir(os.path.dirname(path))
+    try:
+        s.bind(os.path.basename(path))
+    finally:
+        os.chdir(cwd)
     return s
 
 
@@ -283,8 +289,11 @@ def test_format_of_files_only_ffmpeg_reads(tmp_path):
     id3.write_bytes(b"ID3\4\0\0\0\0\0\x0a" + b"\0" * 10 + tone(tmp_path / "t.wav", "wav").read_bytes())
     mp2 = tmp_path / "mp2.mp3"
     mp2.write_bytes((tmp_path / "a.mp2").read_bytes())
-    rs = json.loads(cli("--json", *[str(tmp_path / ("a." + n)) for n in names], str(id3), str(mp2)).stdout)
-    assert [(r["format"], r["how"]) for r in rs] == [(n, "through ffmpeg") for n in names + ["wav", "mp2"]]
+    # newer ffmpeg builds (macOS) cannot read a wav behind an id3 tag, then there is nothing for doctor to report
+    id3_ok = subprocess.run(["ffmpeg", "-v", "error", "-i", str(id3), "-f", "null", "-"]).returncode == 0
+    files = [str(tmp_path / ("a." + n)) for n in names] + ([str(id3)] if id3_ok else []) + [str(mp2)]
+    rs = json.loads(cli("--json", *files).stdout)
+    assert [(r["format"], r["how"]) for r in rs] == [(n, "through ffmpeg") for n in names + ["wav"] * id3_ok + ["mp2"]]
     unknown = tmp_path / "x.bin"
     unknown.write_bytes(b"\x01\x02" * 100)
     r = check_file(str(unknown))
