@@ -11,6 +11,8 @@ import numpy as np
 import pytest
 
 import _pydub2
+import pydub2
+from pydub2.audio_segment import WAVE_PADS, riff_without_pad
 
 ff = "/opt/homebrew/bin/ffmpeg"
 if not os.path.exists(ff):
@@ -48,14 +50,16 @@ def best_corr(x, y):
 
 @pytest.mark.parametrize("width", [1, 2, 4])
 @pytest.mark.parametrize("channels", [1, 2])
-@pytest.mark.parametrize("secs", [0, 0.5, 1 / 8000])
-def test_wav_like_pydub(width, channels, secs):
+@pytest.mark.parametrize("secs", [0, 0.5, 1 / 8000, 3 / 8000])
+def test_wav_like_pydub(tmp_path, width, channels, secs):
     pydub = pytest.importorskip("pydub")
     data = sine(8000, channels, width, secs)
-    if len(data) % 2 and sys.version_info < (3, 15):
-        pytest.skip("wave only pads odd data from 3.15")
-    seg = pydub.AudioSegment(data, frame_rate=8000, channels=channels, sample_width=width)
-    assert _pydub2.encode(data, 8000, channels, width, "wav") == seg.export(format="wav").read()
+    old = pydub.AudioSegment(data, frame_rate=8000, channels=channels, sample_width=width)
+    new = pydub2.AudioSegment(data, frame_rate=8000, channels=channels, sample_width=width)
+    assert new.export(format="wav").read() == old.export(format="wav").read()
+    new.export(str(tmp_path / "new.wav"), format="wav")
+    old.export(str(tmp_path / "old.wav"), format="wav")
+    assert (tmp_path / "new.wav").read_bytes() == (tmp_path / "old.wav").read_bytes()
 
 
 @needs_ff
@@ -136,15 +140,16 @@ def test_flac_8_bit_roundtrip(channels):
 @pytest.mark.parametrize("secs", [0, 0.5, 1 / 8000])
 def test_wav_24_bit_like_wave_module(channels, secs):
     data = pcm24(3, channels, secs, 8000)
-    if len(data) % 2 and sys.version_info < (3, 15):
-        pytest.skip("wave only pads odd data from 3.15")
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
         w.setnchannels(channels)
         w.setsampwidth(3)
         w.setframerate(8000)
         w.writeframes(data)
-    assert _pydub2.encode(data, 8000, channels, 3, "wav") == buf.getvalue()
+    out = _pydub2.encode(data, 8000, channels, 3, "wav")
+    if len(data) % 2 and not WAVE_PADS:
+        out = riff_without_pad(out[:-1])
+    assert out == buf.getvalue()
 
 
 @needs_ff

@@ -153,6 +153,25 @@ def classproperty(func):
     return ClassPropertyDescriptor(func)
 
 
+def wave_pads_odd_data():
+    buf = BytesIO()
+    w = wave.open(buf, "wb")
+    w.setnchannels(1)
+    w.setsampwidth(1)
+    w.setframerate(8000)
+    w.writeframes(b"\0")
+    w.close()
+    return len(buf.getvalue()) % 2 == 0
+
+
+# the wave module pydub writes with counts the pad byte of odd data from python 3.15 on, the core always does
+WAVE_PADS = wave_pads_odd_data()
+
+
+def riff_without_pad(wav):
+    return wav[:4] + (int.from_bytes(wav[4:8], "little") - 1).to_bytes(4, "little") + wav[8:]
+
+
 AUDIO_FILE_EXT_ALIASES = {
     "m4a": "mp4",
     "wave": "wav",
@@ -953,8 +972,11 @@ class AudioSegment(object):
                     raise CouldntEncodeError(str(e))
                 out_f.write(data)
             else:
-                out_f.write(_encode(data, self.frame_rate, self.channels, width, format, rate,
-                                    [] if tags is None or format == "wav" else _vorbis_tags(tags, format)))
+                out = _encode(data, self.frame_rate, self.channels, width, format, rate,
+                              [] if tags is None or format == "wav" else _vorbis_tags(tags, format))
+                if format == "wav" and out[40] & 1 and not WAVE_PADS:
+                    out = riff_without_pad(out[:-1])
+                out_f.write(out)
             out_f.seek(0)
             return out_f
 
