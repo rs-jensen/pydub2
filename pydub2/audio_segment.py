@@ -6,7 +6,6 @@ from tempfile import TemporaryFile, NamedTemporaryFile
 import subprocess
 import sys
 import struct
-import threading
 import wave
 from .utils import dict_set, fsdecode, get_encoder_name, mediainfo_json, sniff
 from .logging_utils import log_conversion, log_subprocess_output
@@ -56,23 +55,6 @@ if sys.version_info >= (3, 0):
 
 
 _SPAWN_HOOKS = ("__new__", "__init__", "__setattr__", "__getattr__", "_spawn")
-_join_lock = threading.Lock()
-
-
-def _join(d):
-    with _join_lock:
-        if "_parts" in d:
-            d["_data"] = b"".join(d["_parts"])
-            del d["_parts"]
-    return dict.__getitem__(d, "_data")
-
-
-class _Parts(dict):
-    # instance __dict__ of a segment built by +, so vars(seg)["_data"] joins like the attribute does
-    def __missing__(self, key):
-        if key != "_data" or "_parts" not in self:
-            raise KeyError(key)
-        return _join(self)
 
 
 def _encode(data, rate, *args):
@@ -449,14 +431,24 @@ class AudioSegment(object):
         super(AudioSegment, self).__init__(*args, **kwargs)
 
     def __getattr__(self, name):
-        if name != "_data" or "_parts" not in self.__dict__:
+        d = self.__dict__
+        # another thread can have joined since the lookup failed
+        if name != "_data" or not ("_parts" in d or "_data" in d):
             raise AttributeError(name)
-        return _join(self.__dict__)
+        return self._join()
+
+    def _join(self):
+        # no lock: a second thread or a signal handler may join too, and gets equal bytes
+        d = self.__dict__
+        parts = d.get("_parts")
+        if parts is None:
+            return d["_data"]
+        d["_data"] = data = b"".join(parts)
+        d.pop("_parts", None)
+        return data
 
     def __reduce_ex__(self, protocol):
-        if type(self.__dict__) is _Parts:
-            _join(self.__dict__)
-            self.__dict__ = dict(self.__dict__)
+        self._data
         return super(AudioSegment, self).__reduce_ex__(protocol)
 
     @property
@@ -1386,8 +1378,8 @@ class AudioSegment(object):
             d = seg1.__dict__
             parts = ("_data" not in d and d.get("_parts")) or [seg1._data]
             out = cls.__new__(cls)
-            out.__dict__ = _Parts(sample_width=seg1.sample_width, frame_rate=seg1.frame_rate, channels=seg1.channels,
-                                  _parts=parts + [seg2._data], frame_width=seg1.frame_width)
+            out.__dict__.update(sample_width=seg1.sample_width, frame_rate=seg1.frame_rate, channels=seg1.channels,
+                                _parts=parts + [seg2._data], frame_width=seg1.frame_width)
             return out
         elif crossfade > len(self):
             raise ValueError("Crossfade is longer than the original AudioSegment ({}ms > {}ms)".format(

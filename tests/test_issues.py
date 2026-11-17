@@ -390,10 +390,11 @@ JOINS = [lambda a, b: a + b, lambda a, b: sum([a, b]), lambda a, b: a.append(b, 
 
 
 @pytest.mark.parametrize("join", JOINS)
-def test_joined_segment_has_data_in_dict(join):
+def test_joined_segment_after_first_read_has_data_in_dict_and_no_parts(join):
     new, old = both(*noise(300))
     x, y = join(new, new), join(old, old)
-    assert vars(x)["_data"] == vars(y)["_data"]
+    assert x.raw_data == y.raw_data
+    assert vars(x)["_data"] == vars(y)["_data"] and "_parts" not in vars(x)
     assert sorted(vars(x)) == sorted(vars(y))
 
 
@@ -441,4 +442,4 @@ def test_joined_subclass_same_as_pydub(kind, join):
 def test_copy_of_summed_segment(dup):
     new, old = both(*noise(300))
     x, y = dup(sum([new, new, new])), dup(sum([old, old, old]))
-    assert vars(x) == vars(y) and type(vars(x)) is dict
+    assert vars(x) == vars(y)

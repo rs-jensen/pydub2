@@ -256,22 +256,41 @@ def test_declares_free_threading():
     assert p.stdout.strip() == "False", p.stderr
 
 
-def test_summed_segment_joined_once():
+def test_summed_segment_read_by_16_threads_gives_equal_bytes():
     parts = [SEG[i * 100:(i + 1) * 100] for i in range(25)]
     want = b"".join(p.raw_data for p in parts)
-    for _ in range(20):
+    for _ in range(200):
         seg = sum(parts)
-        go = threading.Barrier(THREADS)
-        got = []
+        go = threading.Barrier(16)
+        got, errors = [], []
 
         def read(i):
-            go.wait()
-            got.append(seg.raw_data if i % 2 else vars(seg)["_data"])
+            try:
+                go.wait()
+                got.append(seg.raw_data if i % 2 else vars(seg).get("_data") or seg._data)
+            except BaseException as e:
+                errors.append(e)
 
-        ts = [threading.Thread(target=read, args=(i,)) for i in range(THREADS)]
+        ts = [threading.Thread(target=read, args=(i,)) for i in range(16)]
         for x in ts:
             x.start()
         for x in ts:
             x.join()
-        assert len(got) == THREADS and got[0] == want
-        assert all(g is got[0] for g in got) and "_parts" not in vars(seg)
+        assert not errors and len(got) == 16 and all(g == want for g in got)
+        assert "_parts" not in vars(seg)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="no setitimer")
+def test_signal_handler_reading_summed_segment_does_not_deadlock():
+    code = """
+import signal, pydub2
+chunk = pydub2.AudioSegment(b"\\1" * (20 << 20), sample_width=2, frame_rate=44100, channels=2)
+big = sum([chunk] * 5)
+seen = []
+signal.signal(signal.SIGALRM, lambda *a: seen.append(len(big.raw_data)))
+signal.setitimer(signal.ITIMER_REAL, 0.001)
+size = len(big.raw_data)
+signal.setitimer(signal.ITIMER_REAL, 0)
+assert size == 5 * (20 << 20) and seen == [size]
+"""
+    subprocess.run([sys.executable, "-c", code], check=True, timeout=120)

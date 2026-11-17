@@ -36,7 +36,7 @@ What changed in each release.
 - `AudioSegment.stream` lets go of the file when the generator ends or is closed, so it can be deleted on Windows.
 - A tag too long for the Windows command line raises `CouldntEncodeError` and not a raw `OSError`.
 - `AudioSegment.stream` now closes the file when the generator is closed before the first chunk, which left it open on Python 3.12.
-- A segment built with `+`, `sum()` or `append(crossfade=0)` no longer holds its audio twice after the first read of `raw_data`, and has `_data` in `vars(seg)` like pydub. Subclasses that define `_data`, `__init__` or `_spawn` get the joined data as in pydub, and pickle, copy and deepcopy give pydub's attributes.
+- A segment built with `+`, `sum()` or `append(crossfade=0)` drops its list of parts once `raw_data` or `_data` is read, so it no longer holds its audio twice, and several threads or a signal handler can read it while it is joined. `_data` appears in `vars(seg)` after the first read, as in pydub. Subclasses that define `_data`, `__init__`, `_spawn`, `__new__`, `__setattr__` or `__getattr__` get the joined data as in pydub.
 
 ### Security
 
