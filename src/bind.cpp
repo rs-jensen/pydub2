@@ -424,6 +424,16 @@ NB_MODULE(_pydub2, m) {
         return out;
     });
 
+    m.def("stretch", [](nb::bytes data, int rate, int channels, int width, double speed) {
+        Audio a = audio(data, rate, channels, width);
+        nb::object out;
+        {
+            nb::gil_scoped_release g;
+            stretch(a, speed, interrupt(), into(out));
+        }
+        return out;
+    });
+
     m.def("loudness", [](nb::bytes data, int rate, int channels, int width) {
         Audio a = audio(data, rate, channels, width);
         nb::gil_scoped_release g;

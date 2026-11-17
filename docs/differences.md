@@ -148,6 +148,7 @@ These give a result in pydub without an error, so pydub2 gives the same result.
 - `from_mono_audiosegments(..., fill_up=True)` pads shorter segments with silence.
 - `split_on_silence` and `split_on_speech` take `return_ranges=True` and return `(chunk, (start, end))` pairs.
 - `AudioSegment.from_numpy(array, frame_rate)` and `to_numpy()`.
+- `time_stretch(rate)` and `pitch_shift(semitones)` on `AudioSegment` and in `pydub2.effects`.
 - `pydub2.logging_utils`, `silence.db_to_float` and the other module level names of pydub exist. `pyaudioop` and the `audioop` name in the modules are not there, because the C++ core does that work.
 - `speedup` is much faster on long audio, with the same output.
 - `+=` and `sum()` of many segments are linear. `compress_dynamic_range`, `low_pass_filter` and `high_pass_filter` are several times faster. All of them give the same bytes.

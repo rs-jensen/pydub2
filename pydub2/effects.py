@@ -142,6 +142,39 @@ def speedup(seg, playback_speed=1.5, chunk_size=150, crossfade=25):
     
 
 @register_pydub_effect
+def time_stretch(seg, rate):
+    """
+    rate 2.0 plays twice as fast and 0.5 at half speed, the pitch stays the same
+    """
+    # not x <= rate <= y is also true for nan
+    if not 0.25 <= rate <= 4:
+        raise ValueError("rate must be between 0.25 and 4")
+    if rate == 1 or not seg._data:
+        return seg
+    return seg._spawn(_pydub2.stretch(seg._data, round(seg.frame_rate), seg.channels, seg.sample_width, float(rate)))
+
+
+@register_pydub_effect
+def pitch_shift(seg, semitones):
+    """
+    moves the pitch by semitones (12 is an octave up), the length stays the same
+    """
+    if not -24 <= semitones <= 24:
+        raise ValueError("semitones must be between -24 and 24")
+    if semitones == 0 or not seg._data:
+        return seg
+    ratio = 2 ** (semitones / 12.0)
+    data = _pydub2.stretch(seg._data, round(seg.frame_rate), seg.channels, seg.sample_width, 1 / ratio)
+    n, m = len(seg._data) // seg.frame_width, len(data) // seg.frame_width
+    if not m:
+        # one or two frames stretched to nothing, there is no pitch to move
+        return seg
+    # frame counts as rates bring it back to n frames. one frame more and cut, the resampler can leave the last one at 0
+    data = _pydub2.resample(data, m, seg.channels, seg.sample_width, n + 1)
+    return seg._spawn(data[:n * seg.frame_width])
+
+
+@register_pydub_effect
 def strip_silence(seg, silence_len=1000, silence_thresh=-16, padding=100):
     if padding > silence_len:
         raise InvalidDuration("padding cannot be longer than silence_len")

@@ -95,6 +95,10 @@ void resample(const Audio &a, int new_rate, const Cancel &cancel, const Alloc &a
 typedef std::function<void(std::string_view)> Piece;
 void resample_each(const Audio &a, int new_rate, const Cancel &cancel, const Piece &emit);
 
+// stretch.cpp
+// wsola time stretch, rate 2 is twice as fast and the pitch stays. all channels move by the same offset
+void stretch(const Audio &a, double rate, const Cancel &cancel, const Alloc &alloc);
+
 // loudness.cpp
 // integrated loudness in LUFS (EBU R128)
 double loudness(const Audio &a, const Cancel &cancel);

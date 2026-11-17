@@ -110,6 +110,16 @@ Resample with libsamplerate, which sounds better than the default ratecv:
 seg.set_frame_rate(16000, resample_quality="high")
 ```
 
+Change the speed without changing the pitch, or the pitch without changing the length.
+`time_stretch(2.0)` plays twice as fast and `time_stretch(0.5)` at half speed, from 0.25 to 4.
+`pitch_shift` takes semitones from -24 to 24. Both use WSOLA, which works best on speech and is
+fine for music. `speedup` is still pydub's own and gives the same bytes as before.
+
+```python
+seg.time_stretch(1.25)
+seg.pitch_shift(-3)
+```
+
 Find where somebody is talking, or split on it. This uses the Silero VAD model built into the
 C++ core, so you do not need onnxruntime or torch.
 
