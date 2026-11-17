@@ -32,7 +32,7 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - mp3 inside mpeg ts, mpeg ps, mp4, matroska, avi, flv, zip, tar and the like goes to ffmpeg. So does a junk start whose frames are cut up more than twice.
 - Past 64k of junk, or with a long run of repeated sync words in it, the result can differ by a frame or a few samples.
 - Still decoded differently: mp3PRO, a last frame cut inside its first 36 bytes, frames whose granules claim more bits than the frame has, and a short block followed by a normal one (after a dropped frame). A seek into such a damaged stream can differ from the full read for a frame or two after the seek point.
-- A flac frame with a bad crc is kept as silence of the same length. ffmpeg keeps its damaged samples, which can be loud noise. The length is the same and that one frame differs.
+- A flac frame with a bad crc is kept as silence of the same length. ffmpeg keeps its damaged samples, which can be loud noise. The length is the same and that one frame differs. ffmpeg 6 drops that frame and the two after it instead.
 - A flac frame with a damaged or missing header is kept as silence too. ffmpeg drops it, so the file is one frame longer than with ffmpeg.
 - A flac frame that dr_flac cannot decode is dropped like ffmpeg does, and decoding goes on after it. The first frame, the last frame and more than 8 damaged frames in a row are dropped, where ffmpeg may keep them. A seek into a silent frame lands on the next good one.
 - Damaged ogg vorbis keeps the audio of a page with a bad checksum, where ffmpeg drops the page (about a second).
