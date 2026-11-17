@@ -118,6 +118,8 @@ Turn it off when you have looked at the differences and are happy with them. A g
 
 Strict mode does not cover the new functions (`stream`, `detect_speech`, `from_numpy`), the error class where pydub raises `audioop.error` (pydub2 raises `ValueError`), calls that hang in pydub, and the URL, playlist and demuxer limits for untrusted files. File names are handed to ffmpeg as they are, like in pydub.
 
+One known exception: pydub reads a 24 bit 192 kHz flac with 6 or 8 channels from a file object or `BytesIO` with a different number of frames from one run to the next. Strict mode runs the same ffmpeg calls, so it can differ from pydub there by chance.
+
 ## Check your own code
 
 Run your tests with both. If you use `pydub2-compat`, that is one variable:
