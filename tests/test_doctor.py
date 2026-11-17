@@ -276,7 +276,7 @@ def test_never_a_traceback(capsys, monkeypatch, tmp_path):
     good = tone(tmp_path / "\xe9.flac")
     p = cli(str(good), PYTHONIOENCODING="ascii")
     assert p.returncode == 0 and p.stderr == b""
-    assert p.stdout.endswith(b"?.flac: flac, loads natively, 1.00 s, 44100 Hz, 1 channel, 16 bit\n")
+    assert p.stdout.replace(b"\r\n", b"\n").endswith(b"?.flac: flac, loads natively, 1.00 s, 44100 Hz, 1 channel, 16 bit\n")
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
