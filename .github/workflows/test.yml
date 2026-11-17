@@ -23,7 +23,7 @@ jobs:
           python-version: "3.13"
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: pip install . ./mp3 pytest pydub audioop-lts numpy
-      - run: pytest -v -o faulthandler_timeout=300 tests
+      - run: pytest tests
 
   test-native:
     name: test ${{ matrix.os }}
