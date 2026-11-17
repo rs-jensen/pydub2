@@ -31,6 +31,12 @@ def alive(pid):
             return k.WaitForSingleObject(h, 0) == 0x102  # WAIT_TIMEOUT
         finally:
             k.CloseHandle(h)
+    if os.path.isdir("/proc/self"):  # the ps in the wheel build containers does not take these options
+        try:
+            with open("/proc/%d/stat" % pid) as f:
+                return f.read().rpartition(")")[2].split()[0] != "Z"
+        except OSError:
+            return False
     stat = subprocess.run(["/bin/ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout
     return bool(stat.strip()) and "Z" not in stat
 
