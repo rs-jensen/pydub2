@@ -54,6 +54,9 @@ if sys.version_info >= (3, 0):
     StringIO = BytesIO
 
 
+_SPAWN_HOOKS = ("__new__", "__init__", "__setattr__", "__getattr__", "_spawn")
+
+
 def _encode(data, rate, *args):
     try:
         # the wave module in pydub rounds the rate
@@ -428,10 +431,25 @@ class AudioSegment(object):
         super(AudioSegment, self).__init__(*args, **kwargs)
 
     def __getattr__(self, name):
-        if name != "_data" or "_parts" not in self.__dict__:
+        d = self.__dict__
+        # another thread can have joined since the lookup failed
+        if name != "_data" or not ("_parts" in d or "_data" in d):
             raise AttributeError(name)
-        self._data = b"".join(self._parts)
-        return self._data
+        return self._join()
+
+    def _join(self):
+        # no lock: a second thread or a signal handler may join too, and gets equal bytes
+        d = self.__dict__
+        parts = d.get("_parts")
+        if parts is None:
+            return d["_data"]
+        d["_data"] = data = b"".join(parts)
+        d.pop("_parts", None)
+        return data
+
+    def __reduce_ex__(self, protocol):
+        self._data
+        return super(AudioSegment, self).__reduce_ex__(protocol)
 
     @property
     def raw_data(self):
@@ -1352,11 +1370,16 @@ class AudioSegment(object):
         seg1, seg2 = AudioSegment._sync(self, seg)
 
         if not crossfade:
+            cls = type(seg1)
+            if cls is not AudioSegment and (hasattr(cls, "_data") or any(
+                    getattr(cls, n) is not getattr(AudioSegment, n) for n in _SPAWN_HOOKS)):
+                return seg1._spawn(seg1._data + seg2._data)
             # joined on first read of _data, so seg += chunk in a loop stays linear
-            parts = seg1.__dict__.get("_parts") or [seg1._data]
-            out = seg1._spawn(b"")
-            del out._data
-            out._parts = parts + [seg2._data]
+            d = seg1.__dict__
+            parts = ("_data" not in d and d.get("_parts")) or [seg1._data]
+            out = cls.__new__(cls)
+            out.__dict__.update(sample_width=seg1.sample_width, frame_rate=seg1.frame_rate, channels=seg1.channels,
+                                _parts=parts + [seg2._data], frame_width=seg1.frame_width)
             return out
         elif crossfade > len(self):
             raise ValueError("Crossfade is longer than the original AudioSegment ({}ms > {}ms)".format(
