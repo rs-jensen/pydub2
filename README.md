@@ -204,13 +204,38 @@ without them.
 
 ### Building from source without network
 
-The default build downloads the codec libraries. To build offline, for example in a distro package, install the development files for flac, vorbis, opus, opusfile, libopusenc and libsamplerate (with their ogg dependencies) and pkg-config, then link them instead:
+The default build downloads the codec libraries. To build offline, for example in a distro
+package, install pkg-config and the development files for ogg, flac, vorbis, opus, opusfile,
+libopusenc and libsamplerate. On Debian and Ubuntu:
+
+    apt install pkg-config libflac-dev libvorbis-dev libopusfile-dev libopusenc-dev libsamplerate0-dev
+
+Then build with the option on. Without build isolation pip does not download the build tools,
+so scikit-build-core and nanobind must be installed already:
 
     CMAKE_ARGS="-DPYDUB2_SYSTEM_LIBS=ON" pip install --no-build-isolation .
 
-Or pass `-C cmake.define.PYDUB2_SYSTEM_LIBS=ON` to pip or `python -m build`. Nothing is downloaded then, and the wheel links the system libraries dynamically. Use the library versions your distro patches. The wheels on PyPI are built with the versions listed in [THIRD_PARTY.md](https://github.com/rs-jensen/pydub2/blob/main/THIRD_PARTY.md), and some behaviour depends on them, for example libopusenc before 0.3 aborts on an empty opus export.
+Or pass `-C cmake.define.PYDUB2_SYSTEM_LIBS=ON` to pip or `python -m build`. Nothing is
+downloaded then, and the module links the system libraries dynamically. CMake stops and names
+the package when one is missing or older than flac 1.4.0, vorbis 1.3.7, opus 1.4, opusfile 0.12,
+libopusenc 0.2.1 or libsamplerate 0.2.2. These are the oldest versions the tests were run with.
 
-Without the option you can also unpack the sources yourself and set `FETCHCONTENT_FULLY_DISCONNECTED=ON` with `FETCHCONTENT_SOURCE_DIR_OGG`, `_VORBIS`, `_FLAC`, `_OPUS`, `_OPUSFILE`, `_OPUSENC` and `_SAMPLERATE` in `CMAKE_ARGS`. CMake does not run the opusfile patch (`cmake/opusfile_patch.cmake`) on a source directory you give it, so apply it yourself with `cmake -P` from the opusfile directory.
+The wheels on PyPI are built with the versions listed in
+[THIRD_PARTY.md](https://github.com/rs-jensen/pydub2/blob/main/THIRD_PARTY.md). With other
+versions the encoded flac, ogg and opus bytes can differ.
+
+The default build patches opusfile 0.12 (`cmake/opusfile_patch.cmake`) and a system opusfile
+only has these fixes if the distro added them. The first is CVE-2022-47021: without it opusfile
+reads through a NULL pointer and the process crashes when memory runs out while it reads a
+file. Debian and Ubuntu have this fix from 0.12-4. The second is a memory leak when an opus
+file with more than one link fails to open. Both let a hostile file stop or bloat the process.
+Neither corrupts memory.
+
+Without the option you can also unpack the sources yourself and set
+`FETCHCONTENT_FULLY_DISCONNECTED=ON` with `FETCHCONTENT_SOURCE_DIR_OGG`, `_VORBIS`, `_FLAC`,
+`_OPUS`, `_OPUSFILE`, `_OPUSENC` and `_SAMPLERATE` in `CMAKE_ARGS`. CMake does not run the
+opusfile patch on a source directory you give it, so apply it yourself with
+`cmake -P cmake/opusfile_patch.cmake` (full path) from the opusfile directory.
 
 ## License
 

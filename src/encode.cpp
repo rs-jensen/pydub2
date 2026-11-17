@@ -336,6 +336,11 @@ static std::string opus(const Audio &a, int bitrate, const Tags &tags, const Can
         ope_encoder_destroy(enc);
         throw;
     }
+    if (!err && !frames) {
+        // libopusenc before 0.3 asserts in the drain when nothing was written, an empty write starts the stream first
+        float none = 0;
+        err = ope_encoder_write_float(enc, &none, 0);
+    }
     if (!err) {
         err = ope_encoder_drain(enc);
     }

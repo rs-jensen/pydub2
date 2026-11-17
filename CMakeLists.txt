@@ -39,7 +39,9 @@ option(PYDUB2_SYSTEM_LIBS "Link the system codec libraries found with pkg-config
 
 if(PYDUB2_SYSTEM_LIBS)
     find_package(PkgConfig REQUIRED)
-    pkg_check_modules(codecs REQUIRED IMPORTED_TARGET flac vorbisenc vorbis opusfile libopusenc samplerate)
+    # the oldest versions the tests were run with, vorbis before 1.3.7 has encoder overflows on odd rates and channel counts
+    pkg_check_modules(codecs REQUIRED IMPORTED_TARGET ogg flac>=1.4.0 vorbisenc>=1.3.7 vorbis>=1.3.7
+        opus>=1.4 opusfile>=0.12 libopusenc>=0.2.1 samplerate>=0.2.2)
     set(codec_libs PkgConfig::codecs)
 else()
     include(FetchContent)
