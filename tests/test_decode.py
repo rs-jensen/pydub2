@@ -664,4 +664,5 @@ SETUP_BOMB = bytes.fromhex(
 
 def test_vorbis_setup_bomb():
     from test_untrusted import grows_mb
-    assert grows_mb("try:\n    _pydub2.decode(bytes.fromhex(%r))\nexcept RuntimeError:\n    pass" % SETUP_BOMB.hex()) < 20
+    # the Windows working set grew 32 MB there (0.5 MB on Linux) for what stb frees again, the real bomb is gigabytes
+    assert grows_mb("try:\n    _pydub2.decode(bytes.fromhex(%r))\nexcept RuntimeError:\n    pass" % SETUP_BOMB.hex()) < 60
