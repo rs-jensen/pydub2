@@ -6,6 +6,14 @@ Install it with pip:
 
     pip install pydub2
 
+## Scan your code first
+
+Before you change anything, see what in your project is affected. This reads your Python files, never runs them, and prints each line that behaves differently in pydub2 with one sentence about it:
+
+    python -m pydub2 doctor --scan path/to/project
+
+It ends with how many files use pydub, how many findings need a change, and how many strict mode (below) covers. `python -m pydub2 doctor` on its own checks the install, and `python -m pydub2 doctor file.m4a` checks single files.
+
 ## Change the import
 
 Replace `pydub` with `pydub2` in your imports. The module names under it are the same.

@@ -3,6 +3,8 @@ class PydubException(Exception):
     Base class for any Pydub exception
     """
 
+    format = reason = hint = None
+
 
 class TooManyMissingFrames(PydubException):
     pass
@@ -30,3 +32,9 @@ class CouldntEncodeError(PydubException):
 
 class MissingAudioParameter(PydubException):
     pass
+
+
+def tagged(e, format=None, reason=None, hint=None):
+    # for tools: what was sniffed, a short stable code and the command that fixes it
+    e.format, e.reason, e.hint = format, reason, hint
+    return e

@@ -4,6 +4,13 @@ What changed in each release.
 
 ## [Unreleased]
 
+### Added
+
+- `python -m pydub2 doctor` prints the pydub2 version, the formats that work without ffmpeg, which ffmpeg and ffprobe are used and where they come from, strict mode, whether `import pydub` gives pydub2 or the real pydub, and the command that fixes each missing piece. It exits with 1 when the basics do not work. `--json` prints the same as JSON.
+- `python -m pydub2 doctor FILE...` says what each file is from its first bytes, whether it loads built in or through ffmpeg, and why it does not when it fails (no ffmpeg, a playlist, not audio, longer than `max_duration`). It notices a truncated file and an mp3 with junk in front.
+- `python -m pydub2 doctor --scan DIR` reads the Python files under DIR with `ast`, without running them, and lists what behaves differently in pydub2, with file and line.
+- `CouldntDecodeError`, `CouldntEncodeError` and the `FileNotFoundError` for a missing ffmpeg have the attributes `format`, `reason` and `hint` for tools. The messages are the same as before.
+
 ## [0.0.2] - 2026-11-17
 
 ### Added

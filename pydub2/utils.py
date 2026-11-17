@@ -21,7 +21,7 @@ from bisect import bisect_right
 
 import _pydub2
 import pydub2
-from .exceptions import CouldntDecodeError
+from .exceptions import CouldntDecodeError, tagged
 
 if sys.version_info >= (3, 0):
     basestring = str
@@ -194,7 +194,7 @@ def extra_ffmpeg():
 def check_duration(frames, rate):
     limit = pydub2.max_duration
     if limit is not None and frames > limit * rate:
-        raise CouldntDecodeError("this file is longer than max_duration")
+        raise tagged(CouldntDecodeError("this file is longer than max_duration"), reason="too_long")
 
 
 def read_capped(d, n):
@@ -231,6 +231,34 @@ def allowed_demuxers(exe):
     return names
 
 
+def sniff(head):
+    # from the first bytes only, None when nothing is recognised
+    h = head.lstrip(b"\xef\xbb\xbf \t\r\n")
+    if h.startswith((b"ffconcat", b"#EXTM3U", b"<MPD", b"<?xml")):
+        return "playlist"
+    if head[:4] in (b"RIFF", b"RF64") and head[8:12] == b"WAVE":
+        return "wav"
+    if head[:4] == b"fLaC":
+        return "flac"
+    if head[:4] == b"OggS":
+        return "opus" if b"OpusHead" in head[:200] else "ogg"
+    if head[4:8] == b"ftyp":
+        return "m4a" if head[8:12] == b"M4A " else "mp4"
+    if head[:4] == b"FORM" and head[8:12] in (b"AIFF", b"AIFC"):
+        return "aiff"
+    if head[:4] == b"\x30\x26\xb2\x75":
+        return "wma"
+    if head[:4] == b"\x1aE\xdf\xa3":
+        return "webm"
+    if head[:3] == b"ID3":
+        return "mp3"
+    if head[:1] == b"\xff" and len(head) > 1:
+        if head[1] & 0xe0 == 0xe0 and head[1] & 6:
+            return "mp3"
+        if head[1] & 0xf6 == 0xf0:
+            return "aac"
+
+
 def source(filepath, read_ahead_limit=-1, exe=None):
     # sniffing the start of a file is not enough, so ffmpeg is also told which demuxers it may use
     allow = ["-format_whitelist", allowed_demuxers(exe)] if exe else []
@@ -245,8 +273,8 @@ def source(filepath, read_ahead_limit=-1, exe=None):
             head = f.read(64)
     except OSError:
         head = b""
-    if head.lstrip(b"\xef\xbb\xbf \t\r\n").startswith((b"ffconcat", b"#EXTM3U", b"<MPD", b"<?xml")):
-        raise CouldntDecodeError("cant decode this file")
+    if sniff(head) == "playlist":
+        raise tagged(CouldntDecodeError("cant decode this file"), "playlist", "playlist_refused")
     return ["-protocol_whitelist", "file"] + allow + ["-i", path if pydub2.strict else "file:" + path], None
 
 
@@ -865,7 +893,8 @@ def _open(filepath):
 def _has_prober():
     path = which(get_prober_name())
     if path is None and pydub2.strict:
-        raise FileNotFoundError("%s not found, pydub2 needs it for this. strict mode needs ffmpeg" % get_prober_name())
+        raise tagged(FileNotFoundError("%s not found, pydub2 needs it for this. strict mode needs ffmpeg" % get_prober_name()),
+                     reason="needs_ffmpeg", hint="install ffmpeg and ffprobe")
     return path
 
 

@@ -7,7 +7,7 @@ import subprocess
 import sys
 import struct
 import wave
-from .utils import dict_set, fsdecode, get_encoder_name, mediainfo_json
+from .utils import dict_set, fsdecode, get_encoder_name, mediainfo_json, sniff
 from .logging_utils import log_conversion, log_subprocess_output
 import base64
 from collections import namedtuple
@@ -40,6 +40,7 @@ from .exceptions import (
     CouldntDecodeError,
     CouldntEncodeError,
     MissingAudioParameter,
+    tagged,
 )
 from . import _ffmpeg
 from . import _mp3
@@ -57,7 +58,7 @@ def _encode(data, rate, *args):
         # the wave module in pydub rounds the rate
         return _pydub2.encode(data, round(rate), *args)
     except RuntimeError as e:
-        raise CouldntEncodeError(str(e))
+        raise tagged(CouldntEncodeError(str(e)), args[2], "cant_encode")
 
 
 def _vorbis_tags(tags, format):
@@ -118,7 +119,7 @@ def _export_pcm(seg, format, codec, parameters):
         head = struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", 36 + n + n % 2, b"WAVE", b"fmt ", 16, 1, channels, rate,
                            rate * channels * 3, channels * 3, 24, b"data", n)
     except struct.error:
-        raise CouldntEncodeError("cant encode this")
+        raise tagged(CouldntEncodeError("cant encode this"), format, "cant_encode")
     return head + bytes(pcm) + b"\0" * (n % 2)
 
 
@@ -817,9 +818,13 @@ class AudioSegment(object):
                 pass
 
         if tried and _ffmpeg.find(cls.converter) is None and any(is_format(f) for f in ("wav", "flac", "mp3", "ogg", "opus")):
-            raise CouldntDecodeError("cant read this file")
-        obj = decoded(_ffmpeg.to_wav(cls.converter, filename, data, format, codec, parameters,
-                                     start_second, duration))
+            raise tagged(CouldntDecodeError("cant read this file"), sniff(head), "cant_decode")
+        try:
+            wav = _ffmpeg.to_wav(cls.converter, filename, data, format, codec, parameters, start_second, duration)
+        except (CouldntDecodeError, FileNotFoundError) as e:
+            e.format = sniff(head) or getattr(e, "format", None)
+            raise
+        obj = decoded(wav)
 
         if start_second is None and duration is None:
             return obj
@@ -994,7 +999,7 @@ class AudioSegment(object):
                 try:
                     out_f.write(_pydub2.wav_head(data, round(self.frame_rate), self.channels, width))
                 except RuntimeError as e:
-                    raise CouldntEncodeError(str(e))
+                    raise tagged(CouldntEncodeError(str(e)), "wav", "cant_encode")
                 out_f.write(data)
             else:
                 out = _encode(data, self.frame_rate, self.channels, width, format, rate,
@@ -1028,7 +1033,8 @@ class AudioSegment(object):
                     out_f.seek(0)
                     return out_f
             elif _ffmpeg.find(self.converter) is None:
-                raise FileNotFoundError("ffmpeg not found, pip install pydub2-mp3 to write mp3 without it")
+                raise tagged(FileNotFoundError("ffmpeg not found, pip install pydub2-mp3 to write mp3 without it"),
+                             "mp3", "needs_ffmpeg", 'pip install "pydub2[mp3]"')
 
         wav = _encode(self._data, self.frame_rate, self.channels, self.sample_width, "wav")
         out_f.write(_ffmpeg.from_wav(self.converter, wav, format, codec, bitrate, parameters, tags,
