@@ -303,7 +303,7 @@ def test_format_of_files_only_ffmpeg_reads(tmp_path):
 
 
 def wav_head(tag, size):
-    return struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", 36 + size, b"WAVE", b"fmt ", 16, tag, 1, 8000, 8000, 1, 8,
+    return struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", (36 + size) & 0xffffffff, b"WAVE", b"fmt ", 16, tag, 1, 8000, 8000, 1, 8,
                        b"data", size)
 
 
@@ -445,3 +445,35 @@ def test_how_a_file_loads(tmp_path):
     assert check_file(str(tmp_path / "a.au"))["how"] == "through ffmpeg"
     assert check_file(str(tone(tmp_path / "a.flac")))["how"] == "natively"
     assert _ffmpeg._seen.get() is None
+
+
+@pytest.mark.parametrize("format", ["ogg", "opus"])
+def test_chained_stream_is_not_damaged(noffmpeg, tmp_path, format):
+    one = tone(tmp_path / ("a." + format), format)
+    chain = tmp_path / ("chain." + format)
+    chain.write_bytes(one.read_bytes() * 2)
+    r = check_file(str(chain))
+    assert r["reason"] == "needs_ffmpeg"
+    # a cut stream is still caught
+    cut = tmp_path / ("cut." + format)
+    cut.write_bytes(one.read_bytes()[:-100])
+    assert check_file(str(cut))["reason"] == "truncated"
+
+
+@pytest.mark.parametrize("name", ["a.raw", "a.PCM"])
+def test_raw_needs_its_parameters(noffmpeg, tmp_path, name):
+    path = tmp_path / name
+    path.write_bytes(b"\1\2" * 100)
+    r = check_file(str(path))
+    assert not r["loads"] and "sample_width, frame_rate and channels" in r["note"] and "KeyError" not in r["note"]
+
+
+def test_unknown_wav_length_is_not_truncation(tmp_path):
+    for size in (0, 0xffffffff, 0x7ffff000, 0x7fffffff):
+        path = tmp_path / ("s%d.wav" % size)
+        path.write_bytes(wav_head(1, size) + b"\x80" * 8000)
+        r = check_file(str(path))
+        assert r["loads"] and r["reason"] is None, size
+    path = tmp_path / "short.wav"
+    path.write_bytes(wav_head(1, 16000) + b"\x80" * 8000)
+    assert check_file(str(path))["reason"] == "truncated"
