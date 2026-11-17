@@ -7,7 +7,7 @@ import tempfile
 from io import BytesIO
 
 import pydub2
-from .exceptions import CouldntDecodeError, CouldntEncodeError
+from .exceptions import CouldntDecodeError, CouldntEncodeError, tagged
 from .logging_utils import log_conversion
 from .utils import _using, check_duration, extra_ffmpeg, mediainfo_json, source, which
 from .utils import run as run_command
@@ -26,9 +26,11 @@ def run(converter, args, data, what):
     exe = find(converter)
     if exe is None:
         name = os.fspath(converter)
-        raise FileNotFoundError(("ffmpeg not found" if name == "ffmpeg" else "no ffmpeg at " + name) +
-                                ", pydub2 needs it for " + what + (". strict mode needs ffmpeg" if pydub2.strict else "") +
-                                ('. install ffmpeg or pip install "pydub2[ffmpeg]"' if name == "ffmpeg" else ""))
+        raise tagged(FileNotFoundError(("ffmpeg not found" if name == "ffmpeg" else "no ffmpeg at " + name) +
+                                       ", pydub2 needs it for " + what + (". strict mode needs ffmpeg" if pydub2.strict else "") +
+                                       ('. install ffmpeg or pip install "pydub2[ffmpeg]"' if name == "ffmpeg" else "")),
+                     None if what == "this file" else what, "needs_ffmpeg",
+                     'pip install "pydub2[ffmpeg]"' if name == "ffmpeg" else None)
     cmd = [exe, "-y", "-nostdin"] + args
     log_conversion(cmd)
     return run_command(cmd, data)
@@ -39,7 +41,8 @@ def to_wav(converter, path=None, data=None, format=None, codec=None, parameters=
     try:
         return _to_wav(converter, path, data, format, codec, parameters, start_second, duration)
     except (KeyError, TypeError, ValueError, TimeoutError, struct.error) as e:
-        raise CouldntDecodeError("cant decode this file: " + str(e))
+        raise tagged(CouldntDecodeError("cant decode this file: " + str(e)), format,
+                     "timeout" if isinstance(e, TimeoutError) else "cant_decode")
 
 
 def _to_wav(converter, path, data, format, codec, parameters, start_second, duration):
@@ -75,8 +78,8 @@ def _to_wav(converter, path, data, format, codec, parameters, start_second, dura
         lines = [x.strip() for x in p.stderr.decode(errors="ignore").splitlines() if x.strip()]
         # drop the [mp3 @ 0x...] prefix, the address changes every run
         last = re.sub(r"^\[[^\]]*\] ", "", lines[-1]) if lines else "no output"
-        raise CouldntDecodeError("Decoding failed. ffmpeg returned error code: %d\n\nformat: %s\nffmpeg said: %s"
-                                 % (p.returncode, format or "unknown", last))
+        raise tagged(CouldntDecodeError("Decoding failed. ffmpeg returned error code: %d\n\nformat: %s\nffmpeg said: %s"
+                                        % (p.returncode, format or "unknown", last)), format, "cant_decode")
     wav = bytearray(p.stdout)
     i = 12
     while wav[i:i + 4] != b"data":
@@ -119,13 +122,15 @@ def from_wav(converter, wav, format, codec=None, bitrate=None, parameters=None, 
         try:
             p = run(converter, args + ["-f", muxer, name], wav, format)
         except TimeoutError as e:
-            raise CouldntEncodeError("cant encode this file: " + str(e))
+            raise tagged(CouldntEncodeError("cant encode this file: " + str(e)), format, "timeout")
         except OSError as e:
             if find(converter) is None:
                 raise
-            raise CouldntEncodeError("cant start ffmpeg (%s), tags that are too long for the command line can cause this" % e)
+            raise tagged(CouldntEncodeError("cant start ffmpeg (%s), tags that are too long for the command line can cause this" % e),
+                         format, "cant_start")
         if p.returncode != 0:
-            raise CouldntEncodeError("cant encode this file: " + p.stderr.decode(errors="ignore")[-500:])
+            raise tagged(CouldntEncodeError("cant encode this file: " + p.stderr.decode(errors="ignore")[-500:]),
+                         format, "cant_encode")
         with open(name, "rb") as f:
             return f.read()
     finally:

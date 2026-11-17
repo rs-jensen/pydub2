@@ -135,6 +135,22 @@ Set `pydub2.strict = True`, or start Python with `PYDUB2_STRICT=1`, and every lo
 
 It needs ffmpeg and ffprobe. Without them the call raises the error pydub raises, with a note that strict mode needs ffmpeg. Those calls lose the speed and memory gains. Effects, resampling and everything else that works on samples stay as fast as before. The limits for untrusted files below still apply in strict mode. Set the switch once at startup and do not flip it from several threads. See [docs/migrating.md](https://github.com/rs-jensen/pydub2/blob/main/docs/migrating.md) for when to use it.
 
+## Something does not work?
+
+Run this and read what it says. It shows the pydub2 version, which ffmpeg it found and where, and for each thing that is missing the command that fixes it:
+
+    python -m pydub2 doctor
+
+Give it the files that fail and it tells you what each one is, how it loads (built in, through ffmpeg or not at all) and why:
+
+    python -m pydub2 doctor song.m4a upload.mp3
+
+Add `--json` for the same output as JSON. To see what in your own code behaves differently in pydub2, point it at the project. It reads the Python files and never runs them:
+
+    python -m pydub2 doctor --scan .
+
+When you report a problem, paste the output of the first command.
+
 ## More
 
 How pydub2 compares with soundfile, PyAV, pedalboard and the others: [docs/comparison.md](https://github.com/rs-jensen/pydub2/blob/main/docs/comparison.md), including timings and memory use measured with the scripts in [bench/](https://github.com/rs-jensen/pydub2/tree/main/bench).
