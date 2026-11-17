@@ -50,7 +50,4 @@ set_target_properties(mp3lame PROPERTIES PREFIX "" OUTPUT_NAME libmp3lame WINDOW
 if(NOT WIN32)
     target_link_libraries(mp3lame PRIVATE m)
 endif()
-if(MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64")
-    target_sources(mp3lame PRIVATE fma3.c)
-endif()
 install(TARGETS mp3lame LIBRARY DESTINATION pydub2_mp3 RUNTIME DESTINATION pydub2_mp3)
