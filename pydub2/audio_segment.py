@@ -873,27 +873,35 @@ class AudioSegment(object):
         if start:
             run(d.seek, start)
 
-        def chunks():
-            prev = run(d.read, step if n < 0 else min(step, n))
-            got = len(prev) // fw
-            check_duration(got, d.rate)
-            while True:
-                k = step if n < 0 else min(step, n - got)
-                cur = run(d.read, k) if k > 0 else b""
-                got += len(cur) // fw
-                if pydub2.max_duration is not None and got > pydub2.max_duration * d.rate:
+        def chunks(d):
+            try:
+                yield  # primed below, see there
+                prev = run(d.read, step if n < 0 else min(step, n))
+                got = len(prev) // fw
+                check_duration(got, d.rate)
+                while True:
+                    k = step if n < 0 else min(step, n - got)
+                    cur = run(d.read, k) if k > 0 else b""
+                    got += len(cur) // fw
+                    if pydub2.max_duration is not None and got > pydub2.max_duration * d.rate:
+                        yield cls._segment(d, prev)
+                        check_duration(got, d.rate)
+                    if k <= 0 or len(cur) < k * fw:
+                        break
                     yield cls._segment(d, prev)
-                    check_duration(got, d.rate)
-                if k <= 0 or len(cur) < k * fw:
-                    break
-                yield cls._segment(d, prev)
-                prev = cur
-            # only the end can change, by under a ms, so it stays inside the last two chunks
-            tail = _fit(prev + cur, got, final(got), fw, d.rate)
-            for i in range(0, len(tail), step * fw):
-                yield cls._segment(d, tail[i:i + step * fw])
+                    prev = cur
+                # only the end can change, by under a ms, so it stays inside the last two chunks
+                tail = _fit(prev + cur, got, final(got), fw, d.rate)
+                for i in range(0, len(tail), step * fw):
+                    yield cls._segment(d, tail[i:i + step * fw])
+            finally:
+                # early python 3.12 releases close a generator outside a try without clearing its locals
+                del d
 
-        return chunks()
+        # a generator closed before it starts never runs the finally, and python 3.12 then keeps the file open
+        gen = chunks(d)
+        next(gen)
+        return gen
 
     @classmethod
     def from_mp3(cls, file, parameters=None):
