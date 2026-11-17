@@ -884,7 +884,9 @@ static int64_t vorbis_len(Input &in, std::vector<Page> &pages) {
         return d;
     };
     int prev = bs[0], d = 0;
-    int64_t total = 0, skip = (int64_t)(0 - (uint64_t)pk.back().gran);
+    // the granules are any 64 bits, so skip wraps instead of overflowing
+    int64_t total = 0;
+    uint64_t skip = 0 - (uint64_t)pk.back().gran;
     for (size_t k = 0; k < pk.size(); k++) {
         d = dur(prev, pk[k].b);
         total += k ? d : 0;
@@ -903,11 +905,11 @@ static int64_t vorbis_len(Input &in, std::vector<Page> &pages) {
             int e = dur(prev, x.b);
             skip += x.page == pk.back().page ? e : 0;
             if (x.page < pk.back().page) {
-                skip = (int64_t)((uint64_t)x.gran - (uint64_t)pk.back().gran);
+                skip = (uint64_t)x.gran - (uint64_t)pk.back().gran;
             }
         }
     }
-    return skip > 0 && skip <= d ? total - skip : total;
+    return skip && skip <= (uint64_t)d ? total - (int64_t)skip : total;
 }
 
 // stb in push mode, so we can feed it from a file and fix the last page on the way

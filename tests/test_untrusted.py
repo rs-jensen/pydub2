@@ -480,6 +480,19 @@ def test_resample_checks_the_ratio_first():
     assert grows_mb("try:\n _pydub2.resample(bytes(200000), 8000, 1, 2, 8000 * 1000)\nexcept RuntimeError: pass") < 20
 
 
+REGRESSIONS = os.path.join(os.path.dirname(__file__), "fuzz", "regressions")
+
+
+def test_vorbis_last_granule_near_the_int64_limits():
+    # the skip worked out from a last granule of -2**63 + 1 overflowed, the sanitizer build of tests/fuzz reports it
+    path = os.path.join(REGRESSIONS, "vorbis_granule.ogg")
+    d = _pydub2.Decoder(path)
+    assert d.frames == 1024
+    first = d.read()
+    d.seek(0)
+    assert d.read() == first
+
+
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), -float("inf")])
 def test_mul_with_a_factor_that_is_not_finite(bad):
     for width in (1, 2, 3, 4):
