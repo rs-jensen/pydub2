@@ -120,6 +120,28 @@ def test_conversions_like_ffmpeg(name, make, params, least):
     assert snr(a[:n], b[:n]) > least
 
 
+# the chirp stays below the new nyquist, so the snr above passes a resampler without a low-pass too
+# no ffmpeg needed, so this also runs in the wheel check
+@has_mp3
+@pytest.mark.parametrize("rate,tone,params", [(44100, 15000, ["-ar", "22050"]), (48000, 15000, ["-ar", "22050"]),
+                                              (96000, 40000, None)])
+def test_downsampling_filters_out_the_alias(rate, tone, params):
+    t = np.arange(rate) / rate
+    # 1 khz must come through, the tone above the new nyquist must not
+    x = 0.25 * np.sin(2 * np.pi * 1000 * t) + 0.25 * np.sin(2 * np.pi * tone * t)
+    seg = AudioSegment((x * 32767).astype("<i2").tobytes(), frame_rate=rate, channels=1, sample_width=2)
+    got = AudioSegment.from_file(io.BytesIO(ours(seg, parameters=params)), format="mp3")
+    assert got.frame_rate < 2 * tone
+    b = np.frombuffer(got.raw_data, np.int16).astype(float)
+    spec = np.abs(np.fft.rfft(b * np.hanning(len(b)))) / (len(b) / 4)
+    f = np.fft.rfftfreq(len(b), 1 / got.frame_rate)
+    kept = spec[abs(f - 1000) < 50].max()
+    alias = spec[abs(f - (got.frame_rate - tone)) < 50].max()
+    assert kept > 0.5 * 0.25 * 32767
+    # without a low-pass the alias is about as loud as the 1 khz tone, with it more than 90 db below
+    assert alias < kept * 1e-3
+
+
 @has_mp3
 @pytest.mark.parametrize("v", ["3", "4"])
 def test_tags(v):
