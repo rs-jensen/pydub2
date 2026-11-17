@@ -56,6 +56,7 @@ if sys.version_info >= (3, 0):
     StringIO = BytesIO
 
 
+# a subclass that has its own version of one of these builds its sums like pydub, through _spawn
 _SPAWN_HOOKS = ("__new__", "__init__", "__setattr__", "__getattr__", "_spawn")
 
 
@@ -450,6 +451,7 @@ class AudioSegment(object):
         return data
 
     def __reduce_ex__(self, protocol):
+        # a copy or a pickle holds the bytes like in pydub, not the parts
         self._data
         return super(AudioSegment, self).__reduce_ex__(protocol)
 
@@ -783,15 +785,15 @@ class AudioSegment(object):
                 w = read_wav_audio(head, h)
                 fw = w.channels * (4 if w.bits_per_sample == 24 else w.bits_per_sample // 8)
                 size = min(h[-1].size, file.seek(0, 2) - h[-1].position - 8)
-                told = size // fw, w.sample_rate, fw
+                claimed = size // fw, w.sample_rate, fw
             except Exception:
-                told = None
+                claimed = None
             try:
                 # the header gives the length, so a wav over the limits fails before it is read
-                if told:
-                    check_duration(*told, lim)
+                if claimed:
+                    check_duration(*claimed, lim)
                 try:
-                    if told:
+                    if claimed:
                         # pydub keeps only what the data chunk says, so the rest is not read
                         file.seek(0)
                         obj = cls(data=file.read(h[-1].position + 8 + size))
@@ -934,7 +936,7 @@ class AudioSegment(object):
 
         def chunks(d):
             try:
-                yield  # primed below, see there
+                yield  # primed by next(gen) below
                 k = step if n < 0 else min(step, n)
                 # one frame past the limits at most, like read_capped
                 prev = run(d.read, k if cap < 0 else min(k, cap))
@@ -1400,7 +1402,9 @@ class AudioSegment(object):
                 return seg1._spawn(seg1._data + seg2._data)
             # joined on first read of _data, so seg += chunk in a loop stays linear
             d = seg1.__dict__
-            parts = ("_data" not in d and d.get("_parts")) or [seg1._data]
+            parts = None if "_data" in d else d.get("_parts")
+            if not parts:
+                parts = [seg1._data]
             out = cls.__new__(cls)
             out.__dict__.update(sample_width=seg1.sample_width, frame_rate=seg1.frame_rate, channels=seg1.channels,
                                 _parts=parts + [seg2._data], frame_width=seg1.frame_width)
