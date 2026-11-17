@@ -20,7 +20,7 @@ No audio from pydub's repository is kept. `tests/pydub_suite/conftest.py` makes 
 
 mp3 reading is built in (minimp3 through dr_mp3). mp3 writing uses LAME 3.100 (LGPL-2.0-or-later), which is not in this package. It is in the separate package `pydub2-mp3`, installed with `pip install "pydub2[mp3]"`. LAME is built from the unmodified release tarball (sha256 `ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e`) with `mp3/CMakeLists.txt` as its own shared library, which pydub2 loads with ctypes. Anyone can replace it with their own build. The `LICENSE` of that package has the full LGPL text, the source and how to replace the library.
 
-aac, m4a, wma and video files are not bundled. They go to ffmpeg, which you install yourself.
+aac, m4a, wma and video files are not bundled. They go to ffmpeg, which you install yourself or get with `pip install "pydub2[ffmpeg]"`. That extra only declares a dependency on `imageio-ffmpeg` (BSD-2-Clause). pydub2 finds the ffmpeg executable it ships and runs it as a separate program. The binary has its own license, the GPL for the builds `imageio-ffmpeg` carries today, and that is between you and its authors.
 
 ## The name
 

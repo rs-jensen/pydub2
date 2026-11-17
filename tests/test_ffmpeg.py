@@ -132,6 +132,7 @@ def test_reading_with_a_private_converter(tmp_path, monkeypatch, m4a, where, pro
 @need_real
 def test_missing_converter_raises_like_pydub(tmp_path, monkeypatch, m4a):
     monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setitem(sys.modules, "imageio_ffmpeg", None)
     for conv in ("ffmpeg", str(tmp_path / "nope" / "ffmpeg")):
         monkeypatch.setattr(AudioSegment, "converter", conv)
         monkeypatch.setattr(pydub.AudioSegment, "converter", conv)

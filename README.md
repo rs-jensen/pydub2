@@ -51,6 +51,15 @@ To write mp3 without ffmpeg, install the small `pydub2-mp3` package, which carri
 seg.export("out.mp3", format="mp3")
 ```
 
+If you have no ffmpeg and do not want to install one, this pulls in a ready made ffmpeg binary from the
+`imageio-ffmpeg` package, so m4a, aac, wma and video files work right away:
+
+    pip install "pydub2[ffmpeg]"
+
+pydub2 uses that binary only when it finds no ffmpeg on `PATH` and `AudioSegment.converter` is not set. The binary
+is built by others and has its own license, which is the GPL for the builds `imageio-ffmpeg` ships.
+There is no wheel for Alpine Linux (musl). The package has no ffprobe, `mediainfo` then gives the codec and sample size only.
+
 If ffmpeg is there, pydub2 uses ffmpeg for the things the built in code does not do, such as a
 chained vorbis file or an mp3 export with unusual `parameters`.
 
