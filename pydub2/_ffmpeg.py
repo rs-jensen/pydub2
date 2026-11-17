@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import shutil
@@ -10,7 +11,7 @@ from io import BytesIO
 import pydub2
 from .exceptions import CouldntDecodeError, CouldntEncodeError, tagged
 from .logging_utils import log_conversion
-from .utils import _using, check_duration, extra_ffmpeg, limits, mediainfo_json, source, which
+from .utils import _using, check_duration, extra_ffmpeg, limits, mediainfo_json, source, timeout, which
 from .utils import run as run_command
 
 
@@ -46,8 +47,11 @@ def run(converter, args, data, what):
 def to_wav(converter, path=None, data=None, format=None, codec=None, parameters=None,
            start_second=None, duration=None, lim=None):
     lim = lim or limits()
+    timeout()
     try:
         return _to_wav(converter, path, data, format, codec, parameters, start_second, duration, lim)
+    except json.JSONDecodeError:
+        raise tagged(CouldntDecodeError("cant decode this file: ffprobe gave no usable answer"), format, "cant_decode")
     except (KeyError, TypeError, ValueError, TimeoutError, struct.error) as e:
         raise tagged(CouldntDecodeError("cant decode this file: " + str(e)), format,
                      "timeout" if isinstance(e, TimeoutError) else "cant_decode")

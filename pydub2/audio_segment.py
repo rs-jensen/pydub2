@@ -916,9 +916,17 @@ class AudioSegment(object):
         """Yields the file in chunk_ms pieces without loading all of it. wav, flac, mp3, ogg and opus only."""
         lim = limits()
         filename = None if hasattr(file, "read") else fsdecode(file)
+        data = bytes(file.read()) if filename is None else None
         try:
-            d = _pydub2.Decoder(bytes(file.read()) if filename is None else filename)
+            d = _pydub2.Decoder(data if filename is None else filename)
         except RuntimeError:
+            if filename is not None:
+                # a missing file or a folder raises its own OSError here
+                with open(filename, "rb") as f:
+                    data = f.read(4096)
+            if sniff(data[:4096]) in ("wav", "flac", "mp3", "ogg", "opus") or \
+                    (filename or "").lower().endswith((".wav", ".flac", ".mp3", ".ogg", ".opus")):
+                raise CouldntDecodeError("cant read this file")
             raise CouldntDecodeError("stream only reads wav, flac, mp3, ogg and opus")
 
         def run(f, *args):

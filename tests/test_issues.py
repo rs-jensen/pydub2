@@ -456,3 +456,43 @@ def test_failed_export_keeps_the_old_file(fmt, kw, tmp_path):
     with pytest.raises(Exception):
         pydub2.AudioSegment.silent(100).export(str(path), format=fmt, **kw)
     assert path.read_bytes() == b"x" * 1000
+
+
+@needs_ff
+@pytest.mark.parametrize("data", [b"", b"RIFF" + b"\0" * 40, b"fLaC" + b"\1" * 40], ids=["empty", "wav", "flac"])
+def test_mediainfo_of_a_damaged_file_without_ffmpeg_matches_pydub(data, tmp_path, monkeypatch):
+    path = tmp_path / "bad.wav"
+    path.write_bytes(data)
+    old = pydub.utils.mediainfo_json(str(path)), pydub.utils.mediainfo(str(path))
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr(pydub2.AudioSegment, "converter", "ffmpeg")
+    assert (utils.mediainfo_json(str(path)), utils.mediainfo(str(path))) == old == ({}, {})
+
+
+def test_stream_says_what_is_wrong_with_the_file(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        pydub2.AudioSegment.stream(str(tmp_path / "missing.mp3"))
+    (tmp_path / "dir.wav").mkdir()
+    with pytest.raises(OSError):
+        pydub2.AudioSegment.stream(str(tmp_path / "dir.wav"))
+    (tmp_path / "empty.wav").write_bytes(b"")
+    with pytest.raises(pydub2.exceptions.CouldntDecodeError, match="^cant read this file$"):
+        pydub2.AudioSegment.stream(str(tmp_path / "empty.wav"))
+    with pytest.raises(pydub2.exceptions.CouldntDecodeError, match="^stream only reads"):
+        pydub2.AudioSegment.stream(io.BytesIO(b"\0" * 1000))
+
+
+@needs_ff
+def test_bad_ffmpeg_timeout_and_ffprobe_answer_are_named(tmp_path, monkeypatch):
+    path = str(tmp_path / "a.m4a")
+    pydub2.AudioSegment.silent(100).export(path, format="m4a")
+    monkeypatch.setattr(pydub2, "ffmpeg_timeout", "60")
+    for call in (lambda: pydub2.AudioSegment.from_file(path), lambda: pydub2.AudioSegment.silent(100).export(format="m4a")):
+        with pytest.raises(ValueError, match="^pydub2.ffmpeg_timeout has to be None or a number"):
+            call()
+    monkeypatch.setattr(pydub2, "ffmpeg_timeout", None)
+    data = b"\0" * 400
+    (tmp_path / "c0.wav").write_bytes(struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", 36 + len(data), b"WAVE", b"fmt ", 16,
+                                                  1, 0, 44100, 176400, 4, 16, b"data", len(data)) + data)
+    with pytest.raises(pydub2.exceptions.CouldntDecodeError, match="ffprobe gave no usable answer"):
+        pydub2.AudioSegment.from_file(str(tmp_path / "c0.wav"))

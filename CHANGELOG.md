@@ -41,6 +41,9 @@ What changed in each release.
 - A segment built with `+`, `sum()` or `append(crossfade=0)` drops its list of parts once `raw_data` or `_data` is read, so it no longer holds its audio twice, and several threads or a signal handler can read it while it is joined. `_data` appears in `vars(seg)` after the first read, as in pydub. Subclasses that define `_data`, `__init__`, `_spawn`, `__new__`, `__setattr__` or `__getattr__` get the joined data as in pydub.
 - An ogg vorbis file cut before its first audio page ends raises `CouldntDecodeError` like pydub, where a few frames were returned.
 - A failed `export` leaves an existing file as it was. The file is opened once the audio is encoded, where pydub empties it first.
+- `utils.mediainfo` and `mediainfo_json` without ffmpeg return `{}` for a damaged wav, flac, mp3, ogg or opus file like pydub, where they said ffmpeg was not found.
+- `AudioSegment.stream` raises `FileNotFoundError` for a missing file and says "cant read this file" for a damaged one, where it said it only reads wav, flac, mp3, ogg and opus.
+- A `pydub2.ffmpeg_timeout` that is not a number above 0 raises `ValueError` naming it, and a load that ffprobe gives broken JSON for says so, where both said "cant decode this file" with Python's text.
 
 ### Security
 
