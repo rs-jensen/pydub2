@@ -132,8 +132,9 @@ void mul(std::string_view data, size_t width, double factor, const Alloc &alloc)
         constexpr size_t W = decltype(w)::value;
         for (size_t i = 0; i < data.size(); i += W) {
             double v = get(&data[i], W) * factor;
-            nan |= std::isnan(v);
-            put(out + i, W, (int)floor(fbound(v, minvals[W], maxvals[W])));
+            bool bad = std::isnan(v);
+            nan |= bad;
+            put(out + i, W, bad ? 0 : (int)floor(fbound(v, minvals[W], maxvals[W])));
         }
     });
     if (nan) {

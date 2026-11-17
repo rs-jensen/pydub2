@@ -1,4 +1,8 @@
+import os
+import platform
 import random
+import subprocess
+import sys
 
 import pytest
 
@@ -69,6 +73,28 @@ def test_rms_32_bit_sum_like_audioop():
     for vals in ([1608362628, 1608362630, -1608362626], [2017695478, 2017695481, 2017695479, 2017695478]):
         buf = pack(4, vals)
         same(core.rms(buf, 4), audioop.rms(buf, 4))
+
+
+PROBE = pack(4, [2122901605] * 7)
+FUSED, PLAIN = 2122901604, 2122901605
+
+
+def rms_with(setup):
+    code = "import sys, _pydub2\nassert 'audioop' not in sys.modules\n%s\nprint(_pydub2.rms(%r, 4))" % (setup, PROBE)
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(sys.path))
+    return int(subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True).stdout)
+
+
+@pytest.mark.parametrize("want", [FUSED, PLAIN])
+def test_rms_follows_the_audioop_that_is_there(want):
+    fake = "import types\nm = types.ModuleType('audioop')\nm.rms = lambda d, w: %d\nsys.modules['audioop'] = m" % want
+    assert rms_with(fake) == want
+
+
+def test_rms_without_audioop_follows_the_platform():
+    arm = platform.machine().lower() in ("arm64", "aarch64") and sys.platform != "win32"
+    fused = arm and (sys.platform == "darwin" or sys.version_info >= (3, 13))
+    assert rms_with("sys.modules['audioop'] = None") == (FUSED if fused else PLAIN)
 
 
 @pytest.mark.parametrize("width", WIDTHS)
