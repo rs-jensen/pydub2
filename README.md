@@ -2,7 +2,7 @@
 
 pydub2 is a drop-in replacement for pydub. It has a C++ core that reads and writes the common
 audio formats without ffmpeg, and it works on Python 3.13 and newer where the audioop module is gone.
-There are wheels for Python 3.9 to 3.14 on 64 bit Linux, macOS and Windows.
+There are wheels for Python 3.9 to 3.14 on 64 bit Linux, macOS and Windows (Windows arm64 from 3.11).
 
 ## Install
 
@@ -58,7 +58,8 @@ If you have no ffmpeg and do not want to install one, this pulls in a ready made
 
 pydub2 uses that binary only when it finds no ffmpeg on `PATH` and `AudioSegment.converter` is not set. The binary
 is built by others and has its own license, which is the GPL for the builds `imageio-ffmpeg` ships.
-There is no wheel for Alpine Linux (musl). The package has no ffprobe, `mediainfo` then gives the codec and sample size only.
+`IMAGEIO_FFMPEG_EXE` with an absolute path is honoured, as in `imageio-ffmpeg`.
+`imageio-ffmpeg` has no wheel for Alpine Linux (musl). The package has no ffprobe, `mediainfo` then gives the codec, sample format and sample size only.
 
 If ffmpeg is there, pydub2 uses ffmpeg for the things the built in code does not do, such as a
 chained vorbis file or an mp3 export with unusual `parameters`.
@@ -133,7 +134,7 @@ samples can differ slightly from what ffmpeg gives. They are listed in [docs/dif
 
 Set `pydub2.strict = True`, or start Python with `PYDUB2_STRICT=1`, and every load and export that pydub sends to ffmpeg goes to ffmpeg here too, with the command line pydub builds. `raw_data`, `frame_rate`, `channels` and `sample_width` are then the same bytes as pydub 0.25.1 gives, and exported files are the same bytes as pydub writes on the same machine. A wav that pydub reads itself is read the way pydub reads it.
 
-It needs ffmpeg and ffprobe. Without them the call raises the error pydub raises, with a note that strict mode needs ffmpeg. Those calls lose the speed and memory gains. Effects, resampling and everything else that works on samples stay as fast as before. The limits for untrusted files below still apply in strict mode. Set the switch once at startup and do not flip it from several threads. See [docs/migrating.md](https://github.com/rs-jensen/pydub2/blob/main/docs/migrating.md) for when to use it.
+It needs ffmpeg and ffprobe. Without them the call raises `FileNotFoundError` like pydub, with a note that strict mode needs ffmpeg. Those calls lose the speed and memory gains. Effects, resampling and everything else that works on samples stay as fast as before. The limits for untrusted files below still apply in strict mode. Set the switch once at startup and do not flip it from several threads. See [docs/migrating.md](https://github.com/rs-jensen/pydub2/blob/main/docs/migrating.md) for when to use it.
 
 ## Something does not work?
 
@@ -153,7 +154,7 @@ When you report a problem, paste the output of the first command.
 
 ## More
 
-How pydub2 compares with soundfile, PyAV, pedalboard and the others: [docs/comparison.md](https://github.com/rs-jensen/pydub2/blob/main/docs/comparison.md), including timings and memory use measured with the scripts in [bench/](https://github.com/rs-jensen/pydub2/tree/main/bench).
+How pydub2 compares with soundfile, PyAV, pedalboard and the others: [docs/comparison.md](https://github.com/rs-jensen/pydub2/blob/main/docs/comparison.md), including timings and memory use measured with [bench/bench.py](https://github.com/rs-jensen/pydub2/blob/main/bench/bench.py).
 
 Moving a project from pydub: [docs/migrating.md](https://github.com/rs-jensen/pydub2/blob/main/docs/migrating.md).
 
