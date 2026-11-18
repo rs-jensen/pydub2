@@ -121,9 +121,11 @@ def from_wav(converter, wav, format, codec=None, bitrate=None, parameters=None, 
     muxer = format if pydub2.strict else {"m4a": "ipod", "aac": "adts", "wma": "asf"}.get(format, format)
     args = ["-f", "wav", "-i", "pipe:0"]
     if cover is not None:
-        cover = os.fspath(cover)
+        if isinstance(cover, os.PathLike):
+            cover = os.fspath(cover)
         if format != "mp3" or not cover.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")):
-            raise AttributeError("cover images only work with mp3 and png, jpg, bmp or tif files")
+            raise AttributeError("Currently cover images are only supported by MP3 files. "
+                                 "The allowed image formats are: .tif, .jpg, .bmp, .jpeg and .png.")
         args += ["-protocol_whitelist", "file", "-i", "file:" + cover, "-map", "0", "-map", "1", "-c:v", "mjpeg"]
     if codec:
         args += ["-acodec", codec]
@@ -153,6 +155,9 @@ def from_wav(converter, wav, format, codec=None, bitrate=None, parameters=None, 
             raise tagged(CouldntEncodeError(
                 "Encoding failed. ffmpeg/avlib returned error code: {0}\n\nCommand:{1}\n\nOutput from ffmpeg/avlib:\n\n{2}"
                 .format(p.returncode, p.args, p.stderr.decode(errors="ignore"))), format, "cant_encode")
+        # pydub makes the file before ffmpeg runs, so no output at all is an empty export there
+        if not os.path.exists(name):
+            return b""
         with open(name, "rb") as f:
             return f.read()
     finally:
