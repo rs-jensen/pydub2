@@ -165,8 +165,21 @@ def test_overlay_times_not_a_number(times, length):
         try:
             results.append(base.overlay(lib.AudioSegment.silent(length), times=times).raw_data)
         except Exception as e:
-            results.append(type(e).__name__)
+            results.append((type(e).__name__, str(e)))
     assert results[0] == results[1]
+
+
+@pytest.mark.parametrize("loop", [False, True])
+@pytest.mark.parametrize("times", [0, 1, 2, None])
+def test_overlay_times_like_pydub(times, loop):
+    pydub = pytest.importorskip("pydub")
+    results = []
+    for lib in (pydub, pydub2):
+        base = lib.AudioSegment(b"\x01\x00" * 8000, sample_width=2, frame_rate=8000, channels=1)
+        tone = lib.AudioSegment(b"\x10\x20" * 400, sample_width=2, frame_rate=8000, channels=1)
+        results.append(base.overlay(tone, times=times, loop=loop).raw_data)
+    assert results[0] == results[1]
+    assert (results[0] == base.raw_data) == (times == 0 and not loop)
 
 
 @pytest.mark.parametrize("thresh", ["x", None, [1], "-20", 3j])

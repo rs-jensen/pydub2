@@ -1391,14 +1391,14 @@ class AudioSegment(object):
         if not times:
             n = 0
         elif remaining > len(seg2):
-            # pydub counts times down as it loops, so what cannot be counted fails
-            times - 1
             # a times that never counts down to 0 loops to the end, like negative
             try:
                 if times > 0 and times % 1 == 0:
                     n = min(n, int(times))
             except TypeError:
                 pass
+            # pydub counts times down as it loops, so what cannot be counted fails
+            times -= 1
         seg2 = (seg2 * n)[:remaining]
         pos = len(seg2)
         if gain_during_overlay:
