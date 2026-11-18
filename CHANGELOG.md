@@ -58,6 +58,7 @@ What changed in each release.
 - A bitrate of `"64m"` is 0.064 bits, as in ffmpeg, where it was 64 million. `0x40k`, `64Ki` and `64kB` are read like ffmpeg reads them.
 - A bitrate with a null byte raises `ValueError` on export of flac, as with pydub, where flac took it.
 - `AudioSegment.stream` takes a `start_second` or `duration` under 0.0001 (written `1e-05` by Python) and cuts it like a longer one, where it raised `ValueError`.
+- A `start_second` or `duration` that is a `Fraction`, a `bool` or under 0.0001 works when `from_file` hands the file to ffmpeg (a-law wav, a `codec`, a negative start), and a `Fraction` or `bool` works in `AudioSegment.stream` of flac, mp3, ogg and opus. ffmpeg was given text like `1/2` or `1e-05` and refused it.
 - An ffmpeg that exits with 0 and writes no file gives an empty export, as with pydub, and not `FileNotFoundError`.
 - `export` of an empty segment to mp3 or opus, of mp3 from a rate as low as 10 Hz, and of opus below 100 Hz give what pydub gives, where they raised `RuntimeError` or `CouldntEncodeError`. Opus below 100 Hz goes through ffmpeg.
 - `AudioSegment.from_file` and `AudioSegment.stream` read a named pipe (fifo) once and decode the bytes, where they opened it a second time and waited for ever for a second writer or said they could not read the file.

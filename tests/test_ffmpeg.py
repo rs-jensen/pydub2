@@ -1,3 +1,4 @@
+import fractions
 import io
 import math
 import os
@@ -7,6 +8,7 @@ import subprocess
 import sys
 import wave
 
+import numpy as np
 import pytest
 
 import pathlib
@@ -254,3 +256,26 @@ def test_replaced_lookups_still_work(tmp_path, monkeypatch, m4a, name, args):
     playback._play_with_ffplay(AudioSegment.silent(100))
     assert calls[0][0] == (path if name == "get_player_name" else str(folder / "ffplay"))
     assert all(x is None for x in seen)
+
+
+@pytest.mark.parametrize("kind", ["start_second", "duration"])
+@pytest.mark.parametrize("value, plain", [(fractions.Fraction(1, 2), 0.5), (True, 1), (fractions.Fraction(1, 4), 0.25), (np.float32(0.25), 0.25)])
+def test_ffmpeg_gets_seconds_as_plain_text(tmp_path, kind, value, plain):
+    path = str(tmp_path / "a.flac")
+    AudioSegment.silent(3000, 8000).export(path, "flac")
+    got = AudioSegment.from_file(path, codec="flac", **{kind: value})
+    assert got.raw_data == AudioSegment.from_file(path, codec="flac", **{kind: plain}).raw_data
+
+
+def test_ffmpeg_gets_a_negative_start_as_plain_text(tmp_path):
+    path = str(tmp_path / "a.flac")
+    AudioSegment.silent(3000, 8000).export(path, "flac")
+    got = AudioSegment.from_file(path, codec="flac", start_second=fractions.Fraction(-1, 2))
+    assert got.raw_data == AudioSegment.from_file(path, codec="flac", start_second=-0.5).raw_data
+
+
+def test_ffmpeg_gets_tiny_seconds_as_plain_text(tmp_path):
+    path = str(tmp_path / "a.flac")
+    AudioSegment.silent(3000, 8000).export(path, "flac")
+    for value in (1e-5, np.float64(1e-5), np.float32(1e-9)):
+        assert AudioSegment.from_file(path, codec="flac", start_second=value) == AudioSegment.from_file(path)

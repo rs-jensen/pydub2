@@ -1,4 +1,5 @@
 import array
+import fractions
 import gc
 import io
 import os
@@ -87,6 +88,16 @@ def test_path_kinds(files, ext):
     assert AudioSegment.from_file(pathlib.Path(p)) == a
     assert AudioSegment.from_file(os.fsencode(p)) == a
     assert sum(AudioSegment.stream(pathlib.Path(p), 2000)) == a
+
+
+def test_stream_takes_any_plain_number_of_seconds(tmp_path):
+    np = pytest.importorskip("numpy")
+    path = str(tmp_path / "a.flac")
+    AudioSegment.silent(3000, 8000).export(path, "flac")
+    for value, plain in ((fractions.Fraction(1, 2), 0.5), (True, 1), (np.float32(0.25), 0.25), (1e-5, 0)):
+        want = AudioSegment.from_file(path, start_second=plain, duration=1).raw_data
+        got = AudioSegment.stream(path, 700, start_second=value, duration=1)
+        assert b"".join(c.raw_data for c in got) == want
 
 
 def test_stream_needs_a_bundled_format(tmp_path):

@@ -1,4 +1,6 @@
 import json
+import math
+import numbers
 import os
 import re
 import shutil
@@ -6,6 +8,7 @@ import struct
 import sys
 import tempfile
 from contextvars import ContextVar
+from decimal import Decimal
 from io import BytesIO
 
 import pydub2
@@ -45,6 +48,18 @@ def run(converter, args, data, what):
     return run_command(cmd, data)
 
 
+def seconds(v):
+    # ffmpeg reads plain decimal text, where str() gives 1e-05, 1/2 or True
+    if isinstance(v, bool):
+        return str(int(v))
+    if isinstance(v, numbers.Real) and not isinstance(v, numbers.Integral):
+        try:
+            return format(Decimal(repr(float(v))), "f") if math.isfinite(v) else str(v)
+        except OverflowError:
+            pass
+    return str(v)
+
+
 def to_wav(converter, path=None, data=None, format=None, codec=None, parameters=None,
            start_second=None, duration=None, lim=None, probe=True):
     lim = lim or limits()
@@ -77,13 +92,13 @@ def _to_wav(converter, path, data, format, codec, parameters, start_second, dura
                 bits = 16
             out = ["-acodec", "pcm_u8" if bits == 8 else "pcm_s%dle" % bits] + out
     if start_second is not None:
-        out += ["-ss", str(start_second)]
+        out += ["-ss", seconds(start_second)]
     limit, max_bytes = lim[:2]
     if limit is not None:
         # one second over, so a file past the limit is seen and not just cut
         duration = limit + 1 if duration is None else min(duration, limit + 1)
     if duration is not None:
-        out += ["-t", str(duration)]
+        out += ["-t", seconds(duration)]
     # room for the wav header, output that reaches it was cut and is over max_bytes
     fs = None if max_bytes is None else int(max_bytes) + 65536
     if fs is not None:

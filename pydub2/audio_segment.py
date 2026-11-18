@@ -352,7 +352,7 @@ def _own_wav(head, flen, read_at):
 def _ffmpeg_frames(x, rate):
     # ffmpeg reads str(x) to the microsecond and rounds to the nearest frame
     try:
-        us = int(Decimal(str(x)) * 1000000)
+        us = int(Decimal(_ffmpeg.seconds(x)) * 1000000)
     except (ArithmeticError, ValueError):
         return None
     return (us * rate + 500000) // 1000000
