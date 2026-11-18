@@ -1,5 +1,4 @@
 import json
-import math
 import numbers
 import os
 import re
@@ -49,14 +48,15 @@ def run(converter, args, data, what):
 
 
 def seconds(v):
-    # ffmpeg reads plain decimal text, where str() gives 1e-05, 1/2 or True
+    # ffmpeg reads 1e+30 but not 1e-05, 1/2 or True
     if isinstance(v, bool):
         return str(int(v))
     if isinstance(v, numbers.Real) and not isinstance(v, numbers.Integral):
         try:
-            return format(Decimal(repr(float(v))), "f") if math.isfinite(v) else str(v)
+            text = str(v if isinstance(v, float) else float(v))
         except OverflowError:
-            pass
+            return str(v)
+        return format(Decimal(text), "f") if "e-" in text else text
     return str(v)
 
 
