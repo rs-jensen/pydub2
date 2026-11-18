@@ -34,6 +34,7 @@ What changed in each release.
 - Writing opus from 44.1 kHz audio on arm64 is about 40 percent faster. 10 minutes now take about 6.2 s.
 - `overlay` is 3 times faster and `normalize` and `apply_gain` are 1.9 times faster on 60 s of audio.
 - `apply_gain`, `invert_phase`, `reverse`, `normalize`, `max` and `rms` are 3 to 5 times faster, as fast as pydub or faster. On 10 minutes of 16 bit stereo `apply_gain` went from 0.36 s to 0.07 s, `reverse` from 0.24 s to 0.055 s and `normalize` from 0.50 s to 0.10 s. The sample loops were built for size, now they are built for speed.
+- `set_channels`, `set_sample_width`, `pan` and `apply_gain_stereo` are 2 to 4 times faster and now take less time than pydub. On 10 minutes of 16 bit stereo `set_channels(1)` went from 0.36 s to 0.10 s, `set_sample_width(4)` from 0.33 s to 0.10 s and `pan` from 1.4 s to 0.56 s.
 - The `FileNotFoundError` for a missing ffmpeg says what it looked for, and suggests the `ffmpeg` extra only when `AudioSegment.converter` is not set.
 - A `pydub2.max_duration` that is negative, `nan` or not a number raises `ValueError` when a load starts, where it raised `CouldntDecodeError` or loaded raw input without a limit. One too large to matter, like `1e14`, is no limit.
 - `normalize(seg, target_lufs=...)` stops the gain at full scale minus `headroom`, so a quiet file with high peaks ends below the target and does not clip.

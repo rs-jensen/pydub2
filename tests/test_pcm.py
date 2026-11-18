@@ -1,3 +1,4 @@
+import math
 import os
 import platform
 import random
@@ -89,6 +90,39 @@ def test_reverse_of_any_length_like_audioop(width):
         same(core.reverse(buf, width), audioop.reverse(buf, width))
 
 
+def samples_of(buf, width):
+    return [int.from_bytes(buf[i:i + width], "little", signed=True) for i in range(0, len(buf), width)]
+
+
+def floored(val, width):
+    lo, hi = LIMITS[width]
+    return math.floor(hi if val > hi else lo if val < lo + 1 else val)
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_width_and_channel_conversions_of_any_length(width):
+    rnd = random.Random(width)
+    for frames in list(range(40)) + [1001, 4099]:
+        buf = rnd.randbytes(frames * 2 * width)
+        for new in WIDTHS:
+            same(core.lin2lin(buf, width, new), audioop.lin2lin(buf, width, new))
+        for l, r in [(1, 1), (1, 0), (0.5, 2), (-1.3, 3.1), (100, -100), (1e10, -1e10)]:
+            same(core.tostereo(buf, width, l, r), audioop.tostereo(buf, width, l, r))
+            vals = samples_of(buf, width)
+            # as plain double math, some audioop builds fuse the two products
+            want = [floored(vals[i] * l + vals[i + 1] * r, width) for i in range(0, len(vals), 2)]
+            same(core.tomono(buf, width, l, r), pack(width, want))
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+@pytest.mark.parametrize("call", [lambda b, w, f: core.tostereo(b, w, f, 1), lambda b, w, f: core.tomono(b, w, f, 1)])
+def test_a_factor_that_is_not_a_number_fails_a_conversion_with_samples(width, call):
+    nan = float("nan")
+    with pytest.raises(ValueError):
+        call(bytes(8 * width), width, nan)
+    assert call(b"", width, nan) == b""
+
+
 def speed_of(f):
     best = float("inf")
     for _ in range(5):
@@ -98,12 +132,14 @@ def speed_of(f):
     return best
 
 
-# 5 MB of 16 bit audio. The module was built for size and mul took 1.9 times audioop and reverse 3.6 times
-# on x86 Linux, now 0.4 and 0.8 times
-def test_mul_and_reverse_take_no_more_than_audioop():
+# 5 MB of 16 bit audio, the time of the module over the time of audioop. The module was built for size and took
+# 2.3 times audioop for mul, 9.5 for reverse, 5.7 for lin2lin, 3.3 for tomono and 2.6 for tostereo on x86 Linux, now 0.2, 0.4, 0.3, 0.7 and 0.8
+def test_sample_loops_take_no_more_than_audioop():
     buf = random.Random(1).randbytes(5_000_000)
-    assert speed_of(lambda: core.mul(buf, 2, 0.7)) < 1.5 * speed_of(lambda: audioop.mul(buf, 2, 0.7))
-    assert speed_of(lambda: core.reverse(buf, 2)) < 2 * speed_of(lambda: audioop.reverse(buf, 2))
+    for name, args in (("mul", (0.7,)), ("reverse", ()), ("lin2lin", (4,)), ("tomono", (0.5, 0.5)), ("tostereo", (1, 1))):
+        ours = speed_of(lambda: getattr(core, name)(buf, 2, *args))
+        theirs = speed_of(lambda: getattr(audioop, name)(buf, 2, *args))
+        assert ours < 2 * theirs, name
 
 
 @pytest.mark.parametrize("width", WIDTHS)

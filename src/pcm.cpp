@@ -126,10 +126,9 @@ long long max(std::string_view data, size_t width) {
     return m;
 }
 
-// audioop's mul for one sample: the floor of the product, held to the sample range. nan is set when the product is not a number
+// the floor of a product held to the sample range, the way audioop's mul and tomono end. nan is set when it is not a number
 template <size_t W>
-static inline int gain1(int x, double factor, bool &nan) {
-    double v = (double)x * factor;
+static inline int floored(double v, bool &nan) {
     bool bad = v != v;
     nan |= bad;
     v = v > maxvals[W] ? (double)maxvals[W] : v;
@@ -138,6 +137,11 @@ static inline int gain1(int x, double factor, bool &nan) {
     // v is within the range of an int, so the cast cannot overflow
     int i = (int)v;
     return i - (v < (double)i);
+}
+
+template <size_t W>
+static inline int gain1(int x, double factor, bool &nan) {
+    return floored<W>((double)x * factor, nan);
 }
 
 // count samples scaled from in to out, they may be the same memory. true if one of them came out not a number
@@ -202,9 +206,16 @@ void lin2lin(std::string_view data, size_t width, size_t new_width, const Alloc 
     check(data, width);
     check("", new_width);
     char *out = alloc(data.size() / width * new_width);
-    for (size_t i = 0, j = 0; i < data.size(); i += width, j += new_width) {
-        put32(out + j, new_width, get32(&data[i], width));
-    }
+    by_width(width, [&](auto w) {
+        constexpr size_t W = decltype(w)::value;
+        by_width(new_width, [&](auto nw) {
+            constexpr size_t N = decltype(nw)::value;
+            size_t count = data.size() / W;
+            for (size_t k = 0; k < count; k++) {
+                put32(out + k * N, N, get32(&data[k * W], W));
+            }
+        });
+    });
 }
 
 void mix(std::string_view head, std::string_view tail, std::string_view over, size_t width, size_t n, bool gain, double factor,
@@ -391,19 +402,33 @@ void widen24(std::string_view data, size_t width, const Alloc &alloc) {
 void tomono(std::string_view data, size_t width, double lfac, double rfac, const Alloc &alloc) {
     check(data, width, 2);
     char *out = alloc(data.size() / 2);
-    for (size_t i = 0; i < data.size(); i += width * 2) {
-        double val = (double)get(&data[i], width) * lfac + (double)get(&data[i + width], width) * rfac;
-        put(out + i / 2, width, scale(val, width));
+    bool nan = false;
+    by_width(width, [&](auto w) {
+        constexpr size_t W = decltype(w)::value;
+        for (size_t i = 0; i < data.size(); i += W * 2) {
+            double val = (double)get(&data[i], W) * lfac + (double)get(&data[i + W], W) * rfac;
+            put(out + i / 2, W, floored<W>(val, nan));
+        }
+    });
+    if (nan) {
+        throw std::invalid_argument("not a number");
     }
 }
 
 void tostereo(std::string_view data, size_t width, double lfac, double rfac, const Alloc &alloc) {
     check(data, width);
     char *out = alloc(data.size() * 2);
-    for (size_t i = 0; i < data.size(); i += width) {
-        double val = get(&data[i], width);
-        put(out + i * 2, width, scale(val * lfac, width));
-        put(out + i * 2 + width, width, scale(val * rfac, width));
+    bool nan = false;
+    by_width(width, [&](auto w) {
+        constexpr size_t W = decltype(w)::value;
+        for (size_t i = 0; i < data.size(); i += W) {
+            int val = get(&data[i], W);
+            put(out + i * 2, W, gain1<W>(val, lfac, nan));
+            put(out + i * 2 + W, W, gain1<W>(val, rfac, nan));
+        }
+    });
+    if (nan) {
+        throw std::invalid_argument("not a number");
     }
 }
 
