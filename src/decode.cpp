@@ -344,37 +344,42 @@ static uint64_t mp3_tag(Input &in, uint64_t at, size_t &skip, size_t &cut, uint6
     }
     size_t n = std::min(mp3_size(f), len);
     bool mono = DRMP3_HDR_IS_MONO(f);
-    size_t side = (f[1] & 8) ? (mono ? 17 : 32) : (mono ? 9 : 17);
-    size_t o = 4 + (f[1] & 1 ? 0 : 2) + side;
-    if (o + 8 > n || (memcmp(f + o, "Xing", 4) && memcmp(f + o, "Info", 4))) {
-        return at;
-    }
-    int flags = f[o + 7];
-    o += 8;
+    // ffmpeg looks for the tag where it is in a frame without a crc
+    size_t o = 4 + ((f[1] & 8) ? (mono ? 17 : 32) : (mono ? 9 : 17));
     auto word = [&](size_t q) { return q + 4 <= n ? be32(f + q) : 0u; };
-    uint64_t size = 0;
-    const size_t sizes[] = {4, 4, 100, 4};
-    for (int i = 0; i < 4; i++) {
-        if (flags >> i & 1) {
-            if (i == 0) {
-                count = word(o);
-            } else if (i == 1) {
-                size = word(o);
+    uint64_t size = 0, frames = 0;
+    if (o + 8 <= n && (!memcmp(f + o, "Xing", 4) || !memcmp(f + o, "Info", 4))) {
+        int flags = f[o + 7];
+        o += 8;
+        const size_t sizes[] = {4, 4, 100, 4};
+        for (int i = 0; i < 4; i++) {
+            if (flags >> i & 1) {
+                if (i == 0) {
+                    count = word(o);
+                } else if (i == 1) {
+                    size = word(o);
+                }
+                o += sizes[i];
             }
-            o += sizes[i];
+        }
+        // a file much bigger than the tag says counts as files glued together, ffmpeg then forgets the frame count
+        uint64_t have = in.len - at;
+        if (size && have > size && have - size > size >> 4) {
+            count = 0;
+        }
+        frames = count;
+        if (o + 24 <= n && (!memcmp(f + o, "LAME", 4) || !memcmp(f + o, "Lavf", 4) || !memcmp(f + o, "Lavc", 4))) {
+            skip = (size_t)((f[o + 21] << 4 | f[o + 22] >> 4) + 529);
+            unsigned pad = (f[o + 22] & 15u) << 8 | f[o + 23];
+            cut = pad > 529 ? pad - 529 : 0;
         }
     }
-    // a file much bigger than the tag says counts as files glued together, ffmpeg then forgets the frame count
-    uint64_t have = in.len - at;
-    if (size && have > size && have - size > size >> 4) {
-        count = 0;
+    if (54 <= n && !memcmp(f + 36, "VBRI", 4) && f[40] == 0 && f[41] == 1) {
+        size = word(46);
+        frames = word(50);
     }
-    if (o + 24 <= n && (!memcmp(f + o, "LAME", 4) || !memcmp(f + o, "Lavf", 4) || !memcmp(f + o, "Lavc", 4))) {
-        skip = (size_t)((f[o + 21] << 4 | f[o + 22] >> 4) + 529);
-        unsigned pad = (f[o + 22] & 15u) << 8 | f[o + 23];
-        cut = pad > 529 ? pad - 529 : 0;
-    }
-    return at + mp3_size(f);
+    // a tag that counts neither frames nor bytes is audio to ffmpeg, its delay still counts
+    return frames || size ? at + mp3_size(f) : at;
 }
 
 static int bits(const uint8_t *o, size_t p, int n) {
@@ -481,6 +486,8 @@ struct Mp3 : Dec {
     // decoded floats from frame start on, pos is the next frame to hand out
     std::vector<float> buf;
     uint64_t start = 0, pos = 0;
+    // padding ffmpeg drops in the middle, in decoded frames
+    uint64_t hole = 0, hole_at = 0;
 
     void init() {
         uint64_t count = 0, len = in.len, at = mp3_id3(in), off = 0;
@@ -544,9 +551,10 @@ struct Mp3 : Dec {
             first = find(next);
         }
         // like its parser: the 4 byte window starts empty after a frame, junk other than zeros drops the next frame
-        uint64_t t = 0, e = count * drmp3_hdr_frame_samples(load(first)), drop = 0;
+        uint64_t t = 0, e = count * drmp3_hdr_frame_samples(load(first)), drop = 0, out = 0, dur = 0;
         bool none = true, after = false;
-        int gaps = 0;
+        int gaps = 0, heads = 0;
+        uint32_t last = 0;
         cut = e < cut ? 0 : cut;
         for (uint64_t p = first; p < len;) {
             uint64_t h = p;
@@ -574,11 +582,17 @@ struct Mp3 : Dec {
             if (zero) {
                 fr.push_back({h, n, bad});
             }
-            // the padding goes by the time of all frames, dropped ones too, and only the first carries the delay
-            uint64_t dur = drmp3_hdr_frame_samples(f);
+            // the padding goes by the time of all frames, dropped ones too, and only the first carries the delay. The
+            // parser keeps the old duration for two frames after junk and three after a new version, layer or rate
+            heads = last && ((be32(f) ^ last) & 0xfffe0c00) ? -3 : h != p ? -2 : heads;
+            last = be32(f);
+            dur = ++heads > 0 ? drmp3_hdr_frame_samples(f) : dur;
             if (keep && cut && t < e && t + dur > e - cut) {
-                drop += std::min(t + dur - (e - cut), dur);
+                uint64_t d = std::min(t + dur - (e - cut), dur);
+                hole_at = drop ? hole_at : out + dur - d;
+                drop += d;
             }
+            out += keep ? dur : 0;
             after = after || (keep && t >= e);
             skip = t || keep ? skip : 0;
             t += dur;
@@ -596,9 +610,10 @@ struct Mp3 : Dec {
         for (Frame &f : fr) {
             n += f.bad ? 0 : spf;
         }
-        // where the padding is not at the end ffmpeg drops it in the middle, we keep it
+        // where the padding is not at the end ffmpeg drops it in the middle
         cut = after ? 0 : drop;
-        frames = n > skip + cut ? n - skip - cut : 0;
+        hole = after && hole_at >= skip ? drop : 0;
+        frames = n > skip + cut + hole ? n - skip - cut - hole : 0;
         exact = true;
         pos = skip;
         memset(&dec, 0, sizeof(dec));
@@ -662,6 +677,30 @@ struct Mp3 : Dec {
                     out += 2;
                 }
             }
+#elif defined(__x86_64__) || defined(_M_X64)
+            // ffmpeg on x86 converts each decoded frame with sse in blocks of 16, which gives -32768 for a sample past the
+            // int32 range, and the rest with C, where such a sample wraps from a long to an int (on Windows the long
+            // already is -2^31). Only damaged frames get that loud
+            uint64_t lo = std::max<uint64_t>(skip, f), hi = std::min<uint64_t>(f + spf, end);
+            uint64_t simd = std::min(stop, lo + ((hi - lo) & ~(uint64_t)15));
+            const float *x = &buf[(j - start) * c];
+            size_t m = (size_t)(stop - j) * c;
+            put(out, x, m, 2);
+            for (size_t i = 0; i < m; i++) {
+                float v = x[i] * 32768.0f;
+                if (std::fabs(v) < 2147483648.0f) {
+                    continue;
+                }
+#ifdef _WIN32
+                int32_t w = INT32_MIN;
+#else
+                int32_t w = i < (simd - std::min(simd, j)) * c ? INT32_MIN : (int32_t)(uint32_t)llrintf(v);
+#endif
+                int16_t s = w > 32767 ? 32767 : w < -32768 ? -32768 : (int16_t)w;
+                memcpy(out + i * 2, &s, 2);
+            }
+            out += m * 2;
+            j = stop;
 #endif
             put(out, &buf[(j - start) * c], (stop - j) * c, 2);
             out += (stop - j) * c * 2;
@@ -675,10 +714,17 @@ struct Mp3 : Dec {
             uint64_t have = start + buf.size() / c;
             uint64_t end = have - std::min<uint64_t>(have, cut);
             // a frame can only be converted once we know if the padding starts in it
-            uint64_t lim = eof ? end : end / spf * spf;
+            uint64_t lim = eof ? end : end / spf * spf, stop = eof ? end : UINT64_MAX;
+            if (hole && pos == hole_at) {
+                pos += hole;
+            }
+            if (hole && pos < hole_at) {
+                lim = std::min(lim, hole_at);
+                stop = std::min(stop, hole_at);
+            }
             if (pos < lim) {
                 size_t m = (size_t)std::min<uint64_t>(n - done, lim - pos);
-                convert(out + done * c * 2, pos, pos + m, eof ? end : UINT64_MAX);
+                convert(out + done * c * 2, pos, pos + m, stop);
                 pos += m;
                 done += m;
                 continue;
@@ -701,8 +747,9 @@ struct Mp3 : Dec {
     }
 
     void seek(uint64_t to) {
-        to = std::min(to, frames);
-        uint64_t want = (skip + to) / spf, g = 0;
+        to = std::min(to, frames) + skip;
+        to += hole && to >= hole_at ? hole : 0;
+        uint64_t want = to / spf, g = 0;
         size_t at = 0;
         for (; at < fr.size() && (fr[at].bad || g++ < want); at++) {
         }
@@ -721,7 +768,7 @@ struct Mp3 : Dec {
         }
         buf.clear();
         start = want * spf;
-        pos = skip + to;
+        pos = to;
         eof = false;
     }
 };
