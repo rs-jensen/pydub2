@@ -560,6 +560,18 @@ def test_mp3_seek_after_a_dropped_frame(tmp_path):
         assert d.read(1500) == whole[at * 4:(at + 1500) * 4]
 
 
+# ffmpeg lowers the gain for the ms bit of the mode extension in any mode, and does stereo only in joint stereo
+@pytest.mark.parametrize("channels", [1, 2])
+def test_mp3_mode_extension_outside_joint_stereo(tmp_path, channels):
+    m = open(make(tmp_path, "a.mp3", channels, "-c:a", "libmp3lame", "-b:a", "128k", samples=CLICKS), "rb").read()
+    starts = mp3_frames(m)
+    for ext in (0x10, 0x20, 0x30):
+        d = bytearray(m)
+        for at in starts[10:30]:
+            d[at + 3] = d[at + 3] & 0xcf | ext if channels == 1 else d[at + 3] & 0x0f | ext
+        same_as_ffmpeg(tmp_path, "ext.mp3", bytes(d))
+
+
 # the private bits in the side info are no scfsi, set them in every frame
 @pytest.mark.parametrize("channels", [1, 2])
 def test_mp3_private_bits(tmp_path, channels):

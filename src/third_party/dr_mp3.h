@@ -1297,7 +1297,7 @@ static void drmp3_L3_decode_scalefactors(const drmp3_uint8 *hdr, drmp3_uint8 *is
         }
     }
 
-    gain_exp = gr->global_gain + DRMP3_BITS_DEQUANTIZER_OUT*4 - 210 - (DRMP3_HDR_IS_MS_STEREO(hdr) ? 2 : 0);
+    gain_exp = gr->global_gain + DRMP3_BITS_DEQUANTIZER_OUT*4 - 210 - (DRMP3_HDR_IS_MS_STEREO(hdr) || (hdr[3] & 0x30) == 0x20 ? 2 : 0); /* pydub2: ffmpeg lowers the gain for the ms bit alone in any mode */
     gain = drmp3_L3_ldexp_q2(1 << (DRMP3_MAX_SCFI/4),  DRMP3_MAX_SCFI - gain_exp);
     for (i = 0; i < (int)(gr->n_long_sfb + gr->n_short_sfb); i++)
     {
@@ -1898,7 +1898,7 @@ static void drmp3_L3_decode(drmp3dec *h, drmp3dec_scratch *s, drmp3_L3_gr_info *
         drmp3_L3_huffman(s->grbuf[ch], &s->bs, gr_info + ch, s->scf, layer3gr_limit, end, data);
     }
 
-    if (DRMP3_HDR_TEST_I_STEREO(h->header))
+    if (DRMP3_HDR_TEST_I_STEREO(h->header) && (h->header[3] & 0xC0) == 0x40) /* pydub2: ffmpeg does intensity stereo only in joint stereo */
     {
         drmp3_L3_intensity_stereo(s->grbuf[0], s->ist_pos[1], gr_info, h->header);
     } else if (DRMP3_HDR_IS_MS_STEREO(h->header))
