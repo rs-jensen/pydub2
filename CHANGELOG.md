@@ -49,6 +49,7 @@ What changed in each release.
 - `CouldntEncodeError` and `CouldntDecodeError` from ffmpeg have pydub's text again, with the return code, the command for an export and all of ffmpeg's output. A decode error ends with the line `ffmpeg said: ...` as before.
 - `playback.play_async` called from two threads at once no longer raises `RuntimeError: Set changed size during iteration`.
 - A bitrate that ffmpeg cannot read, like `"k"` or `"1e400k"`, raises `CouldntEncodeError` on export, as with pydub, and not `ValueError` or `OverflowError`.
+- `AudioSegment.stream` takes a `start_second` or `duration` under 0.0001 (written `1e-05` by Python) and cuts it like a longer one, where it raised `ValueError`.
 
 ### Security
 

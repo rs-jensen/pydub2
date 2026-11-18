@@ -11,6 +11,7 @@ import wave
 from .utils import dict_set, fsdecode, get_encoder_name, mediainfo_json, sniff
 from .logging_utils import log_conversion, log_subprocess_output
 import base64
+from decimal import Decimal
 from collections import namedtuple
 
 try:
@@ -296,10 +297,10 @@ def _own_wav(head, flen, read_at):
 
 def _ffmpeg_frames(x, rate):
     # ffmpeg reads str(x) to the microsecond and rounds to the nearest frame
-    i, _, f = str(x).partition(".")
-    if not i.isdigit() or not (f.isdigit() or f == ""):
+    try:
+        us = int(Decimal(str(x)) * 1000000)
+    except (ArithmeticError, ValueError):
         return None
-    us = int(i) * 1000000 + int((f + "000000")[:6])
     return (us * rate + 500000) // 1000000
 
 
