@@ -177,6 +177,12 @@ def test_rms_where_the_sum_of_squares_passes_2_to_the_53_like_audioop(width):
             same(core.rms(buf, width), audioop.rms(buf, width))
 
 
+def test_rms_drops_what_a_double_drops_past_2_to_the_53():
+    # 2^23 squares of full scale make 2^53, then a double drops each square of 1. Added up exactly the result is 29620
+    buf = pack(2, [-32768]) * (1 << 23) + pack(2, [1]) * 1877827
+    assert core.rms(buf, 2) == audioop.rms(buf, 2) == 29619
+
+
 def test_rms_32_bit_sum_like_audioop():
     for vals in ([1608362628, 1608362630, -1608362626], [2017695478, 2017695481, 2017695479, 2017695478]):
         buf = pack(4, vals)
