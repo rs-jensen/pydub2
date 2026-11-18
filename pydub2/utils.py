@@ -259,7 +259,8 @@ def read_file(f, lim):
 def read_upto(f, lim, n=-1):
     # read(n) sets aside n bytes first, so a cap far past the file is read in pieces
     if lim[2] is not None:
-        n = lim[2] + 1 if n < 0 else min(n, lim[2] + 1)
+        top = int(lim[2]) + 1
+        n = top if n < 0 else min(n, top)
     parts = []
     while n > 0:
         parts.append(f.read(min(n, 1 << 24)))

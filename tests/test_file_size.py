@@ -112,6 +112,14 @@ def test_an_endless_stream_stops_at_the_limit(cap, format):
         assert f.taken == (1 << 20) + 1
 
 
+def test_a_float_limit_stops_a_pipe(cap):
+    cap(1e6)
+    f = Pipe(audio("flac"), True)
+    with pytest.raises(CouldntDecodeError, match=TOO_BIG):
+        AudioSegment.from_file(f, "flac")
+    assert f.taken == 1000001
+
+
 def test_endless_raw_input_stops_at_the_limit(cap):
     cap(1 << 20)
     f = Pipe(b"", True)
