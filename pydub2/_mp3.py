@@ -168,15 +168,20 @@ def encode(data, rate, channels, width, bitrate=None, tags=None, id3v2_version="
         id3 = ctypes.create_string_buffer(n)
         lame.lame_get_id3v2_tag(gfp, id3, ctypes.c_size_t(n))
 
-        pcm = data if width == 4 else _pydub2.lin2lin(data, width, 4)
-        frames = len(pcm) // (4 * channels)
-        base = ctypes.cast(ctypes.c_char_p(pcm), ctypes.c_void_p).value
+        fw = width * channels
+        frames = len(data) // fw
+        base = ctypes.cast(ctypes.c_char_p(data), ctypes.c_void_p).value
         step = 1152 * 64
         buf = ctypes.create_string_buffer(step * 5 // 4 + 7200)
         out = []
         for i in range(0, frames, step):
             k = min(step, frames - i)
-            p = ctypes.c_void_p(base + i * 4 * channels)
+            if width == 4:
+                p = ctypes.c_void_p(base + i * fw)
+            else:
+                # 32 bit a block at a time, the whole audio would take twice its size again
+                pcm = _pydub2.lin2lin(data[i * fw:(i + k) * fw], width, 4)
+                p = ctypes.c_char_p(pcm)
             if channels == 2:
                 got = lame.lame_encode_buffer_interleaved_int(gfp, p, k, buf, len(buf))
             else:
@@ -188,14 +193,21 @@ def encode(data, rate, channels, width, bitrate=None, tags=None, id3v2_version="
         if got < 0:
             raise CouldntEncodeError("lame failed with code %d" % got)
         out.append(buf.raw[:got])
-        mp3 = b"".join(out)
+        music = sum(map(len, out))
 
         # the first frame is a placeholder for the lame tag, it only knows the gapless info at the end
         n = lame.lame_get_lametag_frame(gfp, buf, ctypes.c_size_t(len(buf)))
         if n == 0:
-            first = info_frame(rate, channels, lame.lame_get_frameNum(gfp), len(mp3),
+            first = info_frame(rate, channels, lame.lame_get_frameNum(gfp), music,
                                lame.lame_get_encoder_delay(gfp), lame.lame_get_encoder_padding(gfp))
-            return id3.raw + first + mp3
-        return id3.raw + buf.raw[:n] + mp3[n:]
+        else:
+            first = buf.raw[:n]
+            while n and out:
+                if len(out[0]) <= n:
+                    n -= len(out.pop(0))
+                else:
+                    out[0] = out[0][n:]
+                    n = 0
+        return b"".join([id3.raw, first] + out)
     finally:
         lame.lame_close(gfp)

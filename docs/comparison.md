@@ -83,7 +83,7 @@ Where pydub2 is slower or heavier than something else in these runs:
 - Opus export takes 6.2 seconds for 10 minutes, a little more than ffmpeg through pydub (4.9). It is faster than PyAV (20). This is measured on Apple silicon, where the resampler inside the opus encoder has a neon version.
 - mp3 export with `pydub2-mp3` is about 10 percent behind soundfile (5.8 against 5.2) and 3 percent behind PyAV.
 - Reading mp3 and ogg is a little slower than miniaudio (0.40 against 0.31 for mp3, 0.54 against 0.52 for ogg).
-- Memory: decoding 10 minutes of ogg or opus peaks at 237 to 253 MiB for pydub2 against 131 to 140 for soundfile and 262 to 283 for PyAV. Flac is 133 against 131. Exporting 10 minutes of ogg or opus peaks at about 360 MiB against 164 for pydub.
+- Memory: decoding 10 minutes of ogg or opus peaks at 237 to 253 MiB for pydub2 against 131 to 140 for soundfile and 262 to 283 for PyAV. Flac is 133 against 131. Exporting 10 minutes of ogg or opus peaked at about 360 MiB against 164 for pydub when I made that run. The encoders have since stopped holding a float copy of the audio, see the next section for the current numbers.
 
 `to_numpy()` is as fast as `np.array(seg.get_array_of_samples())` or faster (0.037 against 0.037 seconds for a 60 second mp3 in a later run, 0.003 against 0.004 for wav). An earlier run looked slower because it timed the import of numpy.
 
@@ -98,6 +98,50 @@ Size on macOS arm64 with Python 3.13, without numpy:
 | miniaudio | 0.39 MB | 2.8 MB | no |
 
 pydub2 is 3 MB because the codecs are in the wheel. PyAV is 18.6 MB because FFmpeg is.
+
+## Memory
+
+I measured the peak memory of each call on 2026-11-18 on a 4 core Intel Xeon at 2.1 GHz with 16 GB, Linux 6.18, Python 3.13.18 and ffmpeg 6.1.1, with pydub 0.25.1 and audioop-lts 0.2.2 next to pydub2 0.0.2. The source is 10 minutes of 44.1 kHz stereo 16 bit audio, which is 101 MiB (105,840,000 bytes) of samples. Every case ran in a fresh process. It loaded the source, then made the one call. The number is the highest resident size of the Python process during the call, minus its resident size before the source was loaded, so the audio the call starts from is in it. A call that needs one input and one output shows 2.0x. A column of its own shows the highest resident size of the ffmpeg processes pydub starts, which is a separate process and not in the pydub column. I ran the table once and the same cases several times while changing the code. The peaks moved by about 1 percent.
+
+MiB of peak memory, and as a multiple of the 101 MiB of samples, for 10 minutes of audio:
+
+| | pydub | pydub ffmpeg process | pydub2 |
+|---|---|---|---|
+| `from_file` wav, path | 202 (2.0x) | 0 | 101 (1.0x) |
+| `from_file` flac, path | 303 (3.0x) | 50 | 101 (1.0x) |
+| `from_file` mp3, path | 305 (3.0x) | 50 | 102 (1.0x) |
+| `from_file` ogg, path (32 bit result) | 608 (6.0x) | 50 | 202 (2.0x) |
+| `from_file` opus, path (32 bit result) | 661 (6.6x) | 50 | 221 (2.2x) |
+| `from_file` mp3, 10 s from the middle | 5 (0.1x) | 50 | 2 (0.0x) |
+| `AudioSegment.stream` mp3, 10 s pieces | does not exist | | 5 (0.1x) |
+| `export` wav to `BytesIO` | 202 (2.0x) | 0 | 202 (2.0x) |
+| `export` flac to a path | 176 (1.7x) | 136 | 177 (1.7x) |
+| `export` mp3 to a path | 110 (1.1x) | 136 | 125 (1.2x) |
+| `export` ogg to a path | 109 (1.1x) | 136 | 120 (1.2x) |
+| `export` opus to a path | 108 (1.1x) | 136 | 117 (1.2x) |
+| slice of half | 151 (1.5x) | 0 | 152 (1.5x) |
+| `overlay` of 5 s, `loop=True`, `gain_during_overlay=-6` | 306 (3.0x) | 0 | 203 (2.0x) |
+| `append` with crossfade, two 10 minute segments | 404 (4.0x) | 0 | 404 (4.0x) |
+| `apply_gain` | 202 (2.0x) | 0 | 202 (2.0x) |
+| `fade_in` then `fade_out`, 2 s each | 404 (4.0x) | 0 | 303 (3.0x) |
+| `set_frame_rate(48000)` | 321 (3.2x) | 0 | 211 (2.1x) |
+| `set_channels(1)` | 151 (1.5x) | 0 | 152 (1.5x) |
+| `set_sample_width(3)` | 454 (4.5x) | 0 | 303 (3.0x) |
+| `split_to_mono` | 353 (3.5x) | 0 | 202 (2.0x) |
+| `normalize` | 202 (2.0x) | 0 | 202 (2.0x) |
+| `compress_dynamic_range` | 3638 (36.0x) | 0 | 202 (2.0x) |
+| `low_pass_filter` | 404 (4.0x) | 0 | 202 (2.0x) |
+| `detect_silence` | 101 (1.0x) | 0 | 101 (1.0x) |
+| `speedup(1.5)` | 348 (3.5x) | 0 | 181 (1.8x) |
+
+Notes on the table:
+
+- ogg and opus decode to 32 bit samples, in pydub2 and through ffmpeg, so the result is twice the size of the 16 bit source. 2.0x there is one copy of the decoded audio.
+- Writing mp3, ogg and opus in pydub2 holds the audio and a little more. The Python process of pydub is 9 to 15 MiB lower, because ffmpeg does the work in its own process, and that process peaks at 136 MiB.
+- Writing to a `BytesIO` holds the file twice, once as the encoded bytes and once in the `BytesIO`. For flac that is 2.5x, for the others it is small.
+- A 1 minute source gives the same multiples within 0.2x for the calls that read all of the audio and do not write a file. Writing, taking 10 seconds and streaming have fixed costs of a few MiB that show on a small source: ogg 1.4x, opus 1.5x, mp3 1.8x and flac 2.0x for writing, and 0.5x for streaming.
+- `fade` over the whole file, with `duration` the length of the audio, is the heaviest call left. It peaks at 3.8x in pydub2 and in pydub, because every millisecond is its own piece until they are joined.
+- `append` with a crossfade is 4.0x because it holds both inputs and builds a result as long as both.
 
 ## When another library is the better choice
 

@@ -298,6 +298,24 @@ assert size == 5 * (20 << 20) and seen in ([], [size])
     subprocess.run([sys.executable, "-c", code], check=True, timeout=120)
 
 
+def test_interleave_keeps_its_parts_while_another_thread_changes_the_list():
+    code = """
+import sys, threading, _pydub2
+sys.setswitchinterval(10)
+n = 1 << 24
+for _ in range(5):
+    parts = [bytes(n), bytes(n)]
+    go = threading.Event()
+    # takes the gil once interleave lets go of it, and frees what the list held
+    t = threading.Thread(target=lambda: go.wait() and parts.__setitem__(0, b""))
+    t.start()
+    go.set()
+    assert len(_pydub2.interleave(parts, 2, n // 2)) == 2 * n
+    t.join()
+"""
+    subprocess.run([sys.executable, "-c", code], check=True, timeout=120)
+
+
 def test_lame_fills_its_tables_once():
     # a second init writing them again races with the encoders of other threads, tsan sees it
     from pydub2 import _mp3

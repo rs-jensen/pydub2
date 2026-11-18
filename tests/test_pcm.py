@@ -140,6 +140,19 @@ def test_errors():
         core.lin2lin(b"\0" * 4, 2, 5)
 
 
+def test_avg_of_every_other_sample_refuses_a_step_that_wraps():
+    data = b"\1\0\2\0\3\0"
+    assert core.avg(data, 2, 2, 1) == 2 and core.avg(data, 2, 1 << 62, 2) == 3
+    for step, first in ((-1, 0), (0, 0), (1, -1)):
+        with pytest.raises(ValueError):
+            core.avg(data, 2, step, first)
+
+
+def test_interleave_refuses_a_size_that_wraps():
+    with pytest.raises(MemoryError):
+        core.interleave([b"\0" * 4] * 4, 4, 1 << 62)
+
+
 @pytest.mark.parametrize("channels", [0])
 @pytest.mark.parametrize("data", [b"", b"\0" * 8])
 def test_no_channels(channels, data):

@@ -2,10 +2,12 @@
 #include <chrono>
 #include <cstring>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/filesystem.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
@@ -82,6 +84,23 @@ static std::string_view str(nb::bytes b) {
     return std::string_view(b.c_str(), b.size());
 }
 
+// bytes, or a slice of them seen through a memoryview, read in place
+struct View {
+    Py_buffer v{};
+    explicit View(nb::handle h) {
+        if (PyObject_GetBuffer(h.ptr(), &v, PyBUF_SIMPLE)) {
+            throw nb::python_error();
+        }
+    }
+    View(const View &) = delete;
+    ~View() {
+        PyBuffer_Release(&v);
+    }
+    std::string_view get() const {
+        return std::string_view((const char *)v.buf, (size_t)v.len);
+    }
+};
+
 static nb::object blank(size_t n) {
     nb::object out = nb::steal(PyBytes_FromStringAndSize(NULL, (Py_ssize_t)n));
     if (!out.is_valid()) {
@@ -96,6 +115,16 @@ static Alloc into(nb::object &out) {
         nb::gil_scoped_acquire g;
         out = blank(n);
         return PyBytes_AS_STRING(out.ptr());
+    };
+}
+
+// each piece is bytes of its own at the end of the list
+static Alloc append(nb::list &list) {
+    return [&list](size_t n) {
+        nb::gil_scoped_acquire g;
+        nb::object b = blank(n);
+        list.append(b);
+        return PyBytes_AS_STRING(b.ptr());
     };
 }
 
@@ -234,20 +263,28 @@ NB_MODULE(_pydub2, m) {
     });
 
     m.def("encode", [](nb::bytes data, int rate, int channels, int width, std::string format, int bitrate,
-                       std::vector<std::pair<nb::bytes, nb::bytes>> tags) {
+                       std::vector<std::pair<nb::bytes, nb::bytes>> tags, bool parts) {
         Audio a = audio(data, rate, channels, width);
         Tags t;
         for (auto &p : tags) {
             t.push_back({std::string(p.first.c_str(), p.first.size()), std::string(p.second.c_str(), p.second.size())});
         }
         nb::object out;
+        nb::list list;
         {
             nb::gil_scoped_release g;
-            encode(a, format, bitrate, t, interrupt(), into(out));
+            encode(a, format, bitrate, t, interrupt(), into(out), parts ? append(list) : Alloc());
         }
-        return out;
+        if (!parts) {
+            return out;
+        }
+        // only flac comes in pieces, the other formats are one
+        if (out.is_valid()) {
+            list.append(out);
+        }
+        return nb::object(list);
     }, nb::arg("data"), nb::arg("rate"), nb::arg("channels"), nb::arg("width"), nb::arg("format"), nb::arg("bitrate") = 0,
-       nb::arg("tags") = nb::list());
+       nb::arg("tags") = nb::list(), nb::arg("parts") = false);
 
     m.def("wav_head", [](nb::bytes data, int rate, int channels, int width) {
         std::string s = wav_head(audio(data, rate, channels, width));
@@ -267,8 +304,9 @@ NB_MODULE(_pydub2, m) {
         return pydub2::max(s, width);
     });
 
-    m.def("mul", [](nb::bytes data, long long width, double factor) {
-        std::string_view s = str(data);
+    m.def("mul", [](nb::object data, long long width, double factor) {
+        View v(data);
+        std::string_view s = v.get();
         nb::object out;
         {
             nb::gil_scoped_release g;
@@ -324,6 +362,53 @@ NB_MODULE(_pydub2, m) {
         return out;
     });
 
+    m.def("mix", [](nb::object head, nb::object tail, nb::object over, long long width, size_t n, std::optional<double> gain) {
+        View h(head), t(tail), o(over);
+        std::string_view hs = h.get(), ts = t.get(), os = o.get();
+        nb::object out;
+        {
+            nb::gil_scoped_release g;
+            mix(hs, ts, os, width, n, gain.has_value(), gain.value_or(0), into(out));
+        }
+        return out;
+    });
+
+    m.def("widen24", [](nb::bytes data, long long width) {
+        std::string_view s = str(data);
+        nb::object out;
+        {
+            nb::gil_scoped_release g;
+            widen24(s, width, into(out));
+        }
+        return out;
+    });
+
+    m.def("channel", [](nb::bytes data, long long width, long long channels, long long index) {
+        std::string_view s = str(data);
+        nb::object out;
+        {
+            nb::gil_scoped_release g;
+            channel(s, width, channels, index, into(out));
+        }
+        return out;
+    });
+
+    m.def("interleave", [](nb::list parts, long long width, size_t frames) {
+        // held here, another thread can take them out of the list while the gil is released
+        std::vector<nb::bytes> held;
+        std::vector<std::string_view> views;
+        for (nb::handle h : parts) {
+            held.push_back(nb::cast<nb::bytes>(h));
+            views.push_back(str(held.back()));
+        }
+        nb::object out;
+        {
+            nb::gil_scoped_release g;
+            interleave(views, width, frames, into(out));
+        }
+        return out;
+    });
+
     m.def("lin2lin", [](nb::bytes data, long long width, long long new_width, bool nearest) {
         std::string_view s = str(data);
         nb::object out;
@@ -374,11 +459,14 @@ NB_MODULE(_pydub2, m) {
         return out;
     });
 
-    m.def("avg", [](nb::bytes data, long long width) {
+    m.def("avg", [](nb::bytes data, long long width, long long step, long long first) {
+        if (step < 1 || first < 0) {
+            throw std::invalid_argument("step should be >= 1 and first >= 0");
+        }
         std::string_view s = str(data);
         nb::gil_scoped_release g;
-        return avg(s, width);
-    });
+        return avg(s, width, step, first);
+    }, nb::arg("data"), nb::arg("width"), nb::arg("step") = 1, nb::arg("first") = 0);
 
     m.def("bias", [](nb::bytes data, long long width, int bias_) {
         std::string_view s = str(data);
@@ -386,6 +474,16 @@ NB_MODULE(_pydub2, m) {
         {
             nb::gil_scoped_release g;
             bias(s, width, bias_, into(out));
+        }
+        return out;
+    });
+
+    m.def("bias_pairs", [](nb::bytes data, long long width, int even, int odd) {
+        std::string_view s = str(data);
+        nb::object out;
+        {
+            nb::gil_scoped_release g;
+            bias_pairs(s, width, even, odd, into(out));
         }
         return out;
     });

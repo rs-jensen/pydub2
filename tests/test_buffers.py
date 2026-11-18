@@ -69,7 +69,8 @@ def test_array_typecodes_like_pydub(width, channels, override):
     assert np.asarray(got[0]).dtype == np.asarray(got[1]).dtype
 
 
-@pytest.mark.parametrize("frames", [[400, 400], [400, 399], [400, 397], [400, 384], [399, 400], [400, 400, 400], [400]])
+@pytest.mark.parametrize("frames", [[400, 400], [400, 399], [400, 397], [400, 384], [399, 400], [400, 400, 400], [400],
+                                    [400, 0], [0, 400], [400, 0, 400], [400, 0, 0, 400], [400, 397, 0]])
 @pytest.mark.parametrize("width", [1, 2, 4])
 def test_from_mono_audiosegments_like_pydub(frames, width):
     got = [outcome(lambda lib=lib: lib.AudioSegment.from_mono_audiosegments(*[seg(lib, width, 1, n) for n in frames]))
