@@ -162,12 +162,11 @@ def test_a_fade_over_the_whole_file_is_not_a_loop_per_millisecond():
     fast = clip(AudioSegment, 2, 2, 44100 * 30, 44100)
     slow = clip(Stepped, 2, 2, 44100 * 30, 44100)
 
-    def best(seg):
-        out = float("inf")
-        for _ in range(3):
+    # in turns, so a slow spell of the machine falls on both
+    best = [float("inf")] * 2
+    for _ in range(5):
+        for i, seg in enumerate((fast, slow)):
             start = time.perf_counter()
             seg.fade(to_gain=-20, start=0, duration=len(seg))
-            out = min(out, time.perf_counter() - start)
-        return out
-
-    assert best(fast) * 3 < best(slow)
+            best[i] = min(best[i], time.perf_counter() - start)
+    assert best[0] * 3 < best[1], best

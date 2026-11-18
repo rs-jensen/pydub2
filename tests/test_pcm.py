@@ -123,12 +123,14 @@ def test_a_factor_that_is_not_a_number_fails_a_conversion_with_samples(width, ca
     assert call(b"", width, nan) == b""
 
 
-def speed_of(f):
-    best = float("inf")
-    for _ in range(5):
-        start = time.perf_counter()
-        f()
-        best = min(best, time.perf_counter() - start)
+def fastest(*calls, rounds=9):
+    # the calls take turns, so a slow spell of the machine falls on all of them
+    best = [float("inf")] * len(calls)
+    for _ in range(rounds):
+        for i, call in enumerate(calls):
+            start = time.perf_counter()
+            call()
+            best[i] = min(best[i], time.perf_counter() - start)
     return best
 
 
@@ -140,9 +142,8 @@ def test_sample_loops_take_no_more_than_audioop():
     buf = random.Random(1).randbytes(5_000_000)
     for name, args in (("mul", (0.7,)), ("reverse", ()), ("lin2lin", (4,)), ("tomono", (0.5, 0.5)), ("tostereo", (1, 1)), ("rms", ()),
                        ("max", ())):
-        ours = speed_of(lambda: getattr(core, name)(buf, 2, *args))
-        theirs = speed_of(lambda: getattr(audioop, name)(buf, 2, *args))
-        assert ours < 2 * theirs, name
+        ours, theirs = fastest(lambda: getattr(core, name)(buf, 2, *args), lambda: getattr(audioop, name)(buf, 2, *args))
+        assert ours < 2 * theirs, (name, ours, theirs)
 
 
 @pytest.mark.parametrize("width", WIDTHS)
