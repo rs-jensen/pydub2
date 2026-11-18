@@ -79,6 +79,7 @@ What changed in each release.
 - `scipy_effects.eq` with a `gain_dB` of `nan` raises `ValueError`. It returned `None`, or raised `AttributeError` in the mid-side modes.
 - `AudioSegment.from_file(..., format="wav")` reads a wav that pydub reads itself and the decoder refuses, like an odd sized chunk without its pad byte, where it raised `CouldntDecodeError`.
 - A file that ffmpeg turns into a wav with a rate the decoder refuses, like 1.3 MHz, loads like in pydub, where `from_file` raised `RuntimeError`.
+- `python -m pydub2 doctor --scan` lists a file with a very long chain of attributes (`a.b.c...`) as before and no longer stops with `RecursionError`.
 
 ## [0.0.1] - 2026-11-16
 
