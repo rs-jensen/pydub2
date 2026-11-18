@@ -146,6 +146,13 @@ def register_pydub_effect(fn, name=None):
     return fn
 
 
+def overrides(seg, *names):
+    """True when seg is not a plain pydub2 AudioSegment as far as these names go, so pydub's own calls have to be made"""
+    from .audio_segment import AudioSegment
+    cls = type(seg)
+    return not isinstance(seg, AudioSegment) or any(getattr(cls, n) is not getattr(AudioSegment, n) for n in names)
+
+
 def make_chunks(audio_segment, chunk_length):
     """
     Breaks an AudioSegment into chunks that are <chunk_length> milliseconds
