@@ -52,21 +52,23 @@ What changed in each release.
 - On Linux and macOS `ffmpeg_timeout` and Ctrl-C stop the whole process group, so an ffmpeg behind a wrapper script (snap, conda, docker) is no longer left running.
 - `CouldntEncodeError` and `CouldntDecodeError` from ffmpeg have pydub's text again, with the return code, the command for an export and all of ffmpeg's output. A decode error ends with the line `ffmpeg said: ...` as before.
 - Writing ogg or opus with 3 to 8 channels puts the channels in the order vorbis and opus use, as ffmpeg does. Before, the center and right channels of 5.1 came back swapped and the low frequency channel in the wrong place.
-- A bitrate that ffmpeg cannot read, like `"k"` or `"1e400k"`, raises `CouldntEncodeError` on export, as with pydub, and not `ValueError` or `OverflowError`.
+- A bitrate that ffmpeg cannot read, like `""`, `"k"`, `"-64k"`, `"1e30k"` or `"1e400k"`, raises `CouldntEncodeError` on export of ogg, opus, mp3 and flac, as with pydub. Before, ogg raised `ValueError`, `IndexError` or `TypeError`, and the others took it. An opus bitrate under 500 or over 256000 per channel raises it too.
 - `export` with a `bitrate`, `codec` or `parameters` that is not text raises `TypeError` like pydub, where a `bitrate` like `[1]` raised `CouldntEncodeError`. `utils.mediainfo` of something that is not a path or file raises `TypeError`, where it raised `AttributeError`.
 - A `bitrate` with spaces around it, like `" 64k "`, works for ogg and opus export as in pydub, where it raised `ValueError`.
+- A bitrate of `"64m"` is 0.064 bits, as in ffmpeg, where it was 64 million. `0x40k`, `64Ki` and `64kB` are read like ffmpeg reads them.
+- A bitrate with a null byte raises `ValueError` on export of flac, as with pydub, where flac took it.
 - `AudioSegment.stream` takes a `start_second` or `duration` under 0.0001 (written `1e-05` by Python) and cuts it like a longer one, where it raised `ValueError`.
 - An ffmpeg that exits with 0 and writes no file gives an empty export, as with pydub, and not `FileNotFoundError`.
 - `export` of an empty segment to mp3 or opus, of mp3 from a rate as low as 10 Hz, and of opus below 100 Hz give what pydub gives, where they raised `RuntimeError` or `CouldntEncodeError`. Opus below 100 Hz goes through ffmpeg.
 - `AudioSegment.from_file` and `AudioSegment.stream` read a named pipe (fifo) once and decode the bytes, where they opened it a second time and waited for ever for a second writer or said they could not read the file.
-- `export` with a `cover` that is a string but not a picture, or a `cover` that is not a string in an mp3 export, raises the error of pydub with its text.
+- `export` with a `cover` that is not an mp3 picture raises the `AttributeError` of pydub with its text. A `cover` that is not a string raises what pydub raises on every format, like `AttributeError` for an int and `TypeError` for bytes. Before, flac, ogg and the other formats gave the text about mp3 for both.
 - A missing attribute on an `AudioSegment` says `'AudioSegment' object has no attribute 'x'` like pydub, where it said only `x`. An `AttributeError` inside a property of a subclass keeps its own message.
 - `overlay` with a `times` that is not a number works when the overlaid audio is as long as the rest, and raises `TypeError` when it has to loop, as pydub does. It raised `TypeError` every time.
 - `detect_silence` with a `silence_thresh` that is not a number raises `ValueError` for a string like `"x"`, as pydub does, and not `TypeError`.
 - `detect_silence`, `detect_nonsilent`, `split_on_silence`, `strip_silence`, `speedup`, `compress_dynamic_range`, `low_pass_filter` and `high_pass_filter` call what a subclass of `AudioSegment` overrides (`rms`, `max_possible_amplitude`, `_spawn`, `get_array_of_samples`, `append` and the others pydub calls there), where they went round it.
 - `AudioSegment.from_file` with a `start_second` or `duration` that is negative, `nan`, infinite or too large for ffmpeg does what pydub does: a short wav with `start_second=-1` is loaded through ffmpeg, and the others raise `CouldntDecodeError`, where they raised `TooManyMissingFrames`, `ValueError`, `OverflowError` or `TypeError` or gave a wrong cut.
 - `AudioSegment.from_file` with a `start_second` that is a string like `"1.5"`, or a `Decimal` for a wav, loads like pydub does, where it raised `TypeError`.
-- `AudioSegment.from_file_using_temporary_files` gives 16 bit audio for ogg, opus, flac of more than 16 bit and the other formats that go through ffmpeg, as pydub does, where it gave 32 bit. A wav and raw data keep their width.
+- `AudioSegment.from_file_using_temporary_files` gives 16 bit audio for ogg, opus, flac of more than 16 bit, float and a-law wav and the other formats that go through ffmpeg, as pydub does, where it gave 32 bit and a float64 wav raised `ValueError`. Float is rounded as ffmpeg does, and a value exactly halfway between two steps can be one step off. A wav that pydub reads itself (named `.wav` or given `format="wav"`) and raw data keep their width.
 - mp3 from `lame -p` (with crc) and mp3 with a VBRI frame decode to the same length as with ffmpeg. The Info or VBRI frame was decoded as a frame of silence and the encoder delay was not skipped.
 - mp3 with frames missing or cut short in the middle, or a frame too short for its own data, decodes the frames after it like ffmpeg. They were off by up to the full scale for a frame.
 - mp3 with more frames than its Info tag counts, from a doubled frame or a damaged header, has the length ffmpeg gives. ffmpeg drops the encoder padding where the tag says the audio ends, also in the middle of the file.
@@ -75,7 +77,7 @@ What changed in each release.
 - `detect_silence`, `detect_nonsilent` and `split_on_silence` with a `seek_step` of 2**31 or more give the ranges pydub gives, where they raised `TypeError`.
 - `set_frame_rate` and `set_sample_width` with an int that does not fit in a C int raise `OverflowError` like pydub, where they raised `TypeError` and `ValueError`.
 - `scipy_effects.eq` with a `gain_dB` of `nan` raises `ValueError`. It returned `None`, or raised `AttributeError` in the mid-side modes.
-- `AudioSegment.from_file(..., format="wav")` reads a wav that pydub reads itself and the decoder refuses, like an odd sized chunk without its pad byte, where it raised `CouldntDecodeError`.
+- `AudioSegment.from_file(..., format="wav")` reads an integer pcm wav that the decoder refuses, like one with an odd sized chunk without its pad byte, where it raised `CouldntDecodeError`.
 - A file that ffmpeg turns into a wav with a rate the decoder refuses, like 1.3 MHz, loads like in pydub, where `from_file` raised `RuntimeError`.
 - mp3 tags written by `pydub2_mp3` raise `ValueError` for a null byte, like pydub, where they were cut at it. A lone surrogate like `\udc80` and a key that is not a string work as in pydub, where they raised `UnicodeEncodeError` and `AttributeError`.
 - `AudioSegment.stream` with a `start_second` or `duration` of 1e12 or more raises `ValueError` like a negative or `nan` one, where a huge `start_second` gave no audio and a huge `duration` gave the whole file.
