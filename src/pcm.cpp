@@ -81,24 +81,6 @@ static int scale(double val, size_t width) {
     return (int)floor(fbound(val, minvals[width], maxvals[width]));
 }
 
-double sumsq(std::string_view data, size_t width, bool fused) {
-    check(data, width);
-    double sum = 0;
-    for (size_t i = 0; i < data.size(); i += width) {
-        double val = get(&data[i], width);
-        sum = fused ? std::fma(val, val, sum) : sum + val * val;
-    }
-    return sum;
-}
-
-long long rms(std::string_view data, size_t width, bool fused) {
-    double sum = sumsq(data, width, fused);
-    if (data.empty()) {
-        return 0;
-    }
-    return (unsigned int)sqrt(sum / (double)(data.size() / width));
-}
-
 template <class F>
 static void by_width(size_t width, F f) {
     if (width == 1) {
@@ -110,6 +92,50 @@ static void by_width(size_t width, F f) {
     } else {
         f(std::integral_constant<size_t, 4>());
     }
+}
+
+double sumsq(std::string_view data, size_t width, bool fused) {
+    check(data, width);
+    size_t n = data.size() / width, i = 0;
+    double sum = 0;
+    // a double adds squares of up to 24 bits exactly while the sum stays within 2^53, so there the integer sum is the same
+    // number, and it vectorises. Past that the sum rounds as it goes and has to be walked in order
+    if (width < 4) {
+        by_width(width, [&](auto w) {
+            constexpr size_t W = decltype(w)::value;
+            if constexpr (W < 4) {
+                constexpr uint64_t top = (uint64_t)1 << 53;
+                uint64_t exact = 0;
+                while (i < n) {
+                    size_t m = std::min<size_t>(n - i, 4096);
+                    uint64_t block = 0;
+                    for (size_t k = 0; k < m; k++) {
+                        int64_t v = get(&data[(i + k) * W], W);
+                        block += (uint64_t)(v * v);
+                    }
+                    if (block > top - exact) {
+                        break;
+                    }
+                    exact += block;
+                    i += m;
+                }
+                sum = (double)exact;
+            }
+        });
+    }
+    for (; i < n; i++) {
+        double val = get(&data[i * width], width);
+        sum = fused ? std::fma(val, val, sum) : sum + val * val;
+    }
+    return sum;
+}
+
+long long rms(std::string_view data, size_t width, bool fused) {
+    double sum = sumsq(data, width, fused);
+    if (data.empty()) {
+        return 0;
+    }
+    return (unsigned int)sqrt(sum / (double)(data.size() / width));
 }
 
 long long max(std::string_view data, size_t width) {

@@ -132,11 +132,13 @@ def speed_of(f):
     return best
 
 
-# 5 MB of 16 bit audio, the time of the module over the time of audioop. The module was built for size and took
-# 2.3 times audioop for mul, 9.5 for reverse, 5.7 for lin2lin, 3.3 for tomono and 2.6 for tostereo on x86 Linux, now 0.2, 0.4, 0.3, 0.7 and 0.8
+# 5 MB of 16 bit audio, the time of the module over the time of audioop. The module was built for size and took 2.2 times
+# audioop for mul, 10.8 for reverse, 5.4 for lin2lin, 3.2 for tomono, 2.9 for tostereo, 3.9 for rms and 7.0 for max on x86 Linux,
+# now 0.25, 0.46, 0.27, 0.68, 0.78, 0.41 and 0.51
 def test_sample_loops_take_no_more_than_audioop():
     buf = random.Random(1).randbytes(5_000_000)
-    for name, args in (("mul", (0.7,)), ("reverse", ()), ("lin2lin", (4,)), ("tomono", (0.5, 0.5)), ("tostereo", (1, 1))):
+    for name, args in (("mul", (0.7,)), ("reverse", ()), ("lin2lin", (4,)), ("tomono", (0.5, 0.5)), ("tostereo", (1, 1)), ("rms", ()),
+                       ("max", ())):
         ours = speed_of(lambda: getattr(core, name)(buf, 2, *args))
         theirs = speed_of(lambda: getattr(audioop, name)(buf, 2, *args))
         assert ours < 2 * theirs, name
@@ -157,6 +159,20 @@ def test_add(width):
 def test_lin2lin(width, new):
     for buf in buffers(width):
         same(core.lin2lin(buf, width, new), audioop.lin2lin(buf, width, new))
+
+
+@pytest.mark.parametrize("width", [2, 3])
+def test_rms_where_the_sum_of_squares_passes_2_to_the_53_like_audioop(width):
+    # below that the sum is added up as integers, past it audioop's double rounds with every sample
+    lo, hi = LIMITS[width]
+    pattern = [hi, lo, hi - 1, hi // 2, 3, -lo // 3]
+    # 128 samples of full scale reach it at 24 bits, 8.4 million at 16 bits
+    reach = {2: 1 << 23, 3: 128}[width]
+    for samples in (reach - 1, reach, reach + 1, reach + 4095, reach + 4097, 2 * reach + 9):
+        body = pack(width, pattern) * (samples // len(pattern) + 1)
+        for tail in ([], [1] * 50, [lo, 3, -5]):
+            buf = body[:samples * width] + pack(width, tail)
+            same(core.rms(buf, width), audioop.rms(buf, width))
 
 
 def test_rms_32_bit_sum_like_audioop():
