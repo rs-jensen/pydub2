@@ -156,6 +156,15 @@ def test_export_argument_types_raise(kw):
         pydub2.AudioSegment.silent(100).export(io.BytesIO(), format="flac", **kw)
 
 
+@pytest.mark.parametrize("arg", [None, 5, [1], 1.5])
+def test_mediainfo_of_a_non_path_like_pydub(arg):
+    pydub = pytest.importorskip("pydub")
+    import pydub.utils
+    got = bad_call("pydub2", lambda AS: pydub2.utils.mediainfo(arg))
+    assert got is not None and got[0] == "TypeError"
+    assert got == bad_call("pydub", lambda AS: pydub.utils.mediainfo(arg))
+
+
 def test_missing_attribute_like_pydub():
     def call(AS):
         AS.silent(100).nope
