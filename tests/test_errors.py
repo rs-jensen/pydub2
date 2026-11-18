@@ -73,3 +73,24 @@ def test_load_from_fifo(tmp_path, format):
     code = "import pydub2; print(len(pydub2.AudioSegment.from_file(%r)))" % fifo
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
     assert out.stdout.strip() == str(len(pydub2.AudioSegment.from_file(io.BytesIO(data)))), out.stderr
+
+
+def bad_call(module, call):
+    pydub = pytest.importorskip("pydub")
+    lib = pydub if module == "pydub" else pydub2
+    try:
+        call(lib.AudioSegment)
+    except Exception as e:
+        return type(e).__name__, str(e)
+
+
+COVERS = [dict(format="ogg", cover="x.jpg"), dict(format="mp3", cover="x.txt"), dict(format="mp3", cover=5),
+          dict(format="flac", cover="x.png"), dict(format="mp3", cover="x.JPG.gif")]
+
+
+@pytest.mark.parametrize("kw", COVERS)
+def test_cover_errors_like_pydub(kw):
+    def call(AS):
+        AS.silent(100).export(io.BytesIO(), **kw)
+    got = bad_call("pydub2", call)
+    assert got is not None and got == bad_call("pydub", call)
