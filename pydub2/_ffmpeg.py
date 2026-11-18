@@ -153,6 +153,9 @@ def from_wav(converter, wav, format, codec=None, bitrate=None, parameters=None, 
             raise tagged(CouldntEncodeError(
                 "Encoding failed. ffmpeg/avlib returned error code: {0}\n\nCommand:{1}\n\nOutput from ffmpeg/avlib:\n\n{2}"
                 .format(p.returncode, p.args, p.stderr.decode(errors="ignore"))), format, "cant_encode")
+        # pydub makes the file before ffmpeg runs, so no output at all is an empty export there
+        if not os.path.exists(name):
+            return b""
         with open(name, "rb") as f:
             return f.read()
     finally:

@@ -1,4 +1,5 @@
 import shutil
+import sys
 
 import pytest
 
@@ -39,3 +40,14 @@ def test_stream_small_floats(tmp_path, kind, value):
     want = pydub.AudioSegment.from_file(str(tmp_path / "a.flac"), **{kind: Plain(value)}).raw_data
     got = b"".join(c.raw_data for c in pydub2.AudioSegment.stream(str(tmp_path / "a.flac"), **{kind: value}))
     assert got == want
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a shell script as converter")
+@pytest.mark.parametrize("format", ["mp3", "m4a", "ogg"])
+def test_converter_writes_nothing(tmp_path, monkeypatch, format):
+    script = tmp_path / "quiet"
+    script.write_text("#!/bin/sh\nexit 0\n")
+    script.chmod(0o755)
+    seg = pydub2.AudioSegment.silent(100)
+    monkeypatch.setattr(pydub2.AudioSegment, "converter", str(script))
+    assert seg.export(format=format, codec="x").read() == b""
