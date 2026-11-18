@@ -68,6 +68,10 @@ What changed in each release.
 - A bitrate with a null byte raises `ValueError` on export of flac, as with pydub, where flac took it.
 - `AudioSegment.stream` takes a `start_second` or `duration` under 0.0001 (written `1e-05` by Python) and cuts it like a longer one, where it raised `ValueError`.
 - `export` to flac of a rate over 65535 that is not a multiple of 10, like 67685 Hz, writes the file as ffmpeg does, where it raised `CouldntEncodeError`.
+- Part of a wav loaded with `start_second` and `duration` ends at `(start_second + duration) * 1000` ms as in pydub, where it ended at `start_second * 1000 + duration * 1000` and could be a frame off.
+- `export` to wav or flac with a `codec` or `parameters` of a segment with a partial last frame leaves that frame out like ffmpeg, where it raised `ValueError`.
+- `export` to mp3 of a segment with a sample width other than 1 to 4 raises `ValueError` with pydub2-mp3 too, as pydub raises, where it wrote a file.
+- `detect_silence`, `detect_nonsilent` and `split_on_silence` of a segment with a partial last frame raise like pydub when a window reaches that frame, where they left it out.
 - `detect_silence`, `detect_nonsilent` and `split_on_silence` of an empty segment with a `frame_rate` of 2**31 or more return `[]` as in pydub, where they raised `TypeError`.
 - A float wav (or another float source) read as 16 bit rounds a sample that falls exactly between two values to the even one, as ffmpeg does, where it rounded up and was 1 off in about 1 sample in 256.
 - A `start_second` or `duration` that is a `Fraction`, a `bool` or under 0.0001 works when `from_file` hands the file to ffmpeg (a-law wav, a `codec`, a negative start), and a `Fraction` or `bool` works in `AudioSegment.stream` of flac, mp3, ogg and opus. ffmpeg was given text like `1/2` or `1e-05` and refused it.

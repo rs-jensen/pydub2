@@ -19,12 +19,14 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - `stream` leaves out a partial last frame of a wav, where `from_file` keeps the stray bytes like pydub.
 - `stream` raises `CouldntDecodeError` for a wav with an odd chunk that has no pad byte after it. `from_file` reads such a file like pydub does.
 - ffmpeg cannot read some wav from a pipe that has no whole frame and an odd chunk without its pad byte or a chunk after the data, so pydub raises `CouldntDecodeError` for them. pydub2 reads them.
-- A wav with a sample rate or a channel count of 0 raises `CouldntDecodeError`, where pydub reads it into a segment that `len` cannot measure.
+- A wav with a sample rate or a channel count of 0 raises `CouldntDecodeError`. pydub reads such a wav path whole into a segment that `len` cannot measure, and otherwise raises, not always `CouldntDecodeError`.
 
 ### How the samples differ
 
 - mp3 decodes to the same length as ffmpeg. A few samples in 1000 are off by 1 LSB (up to 1.5 in 100 against an x86 ffmpeg), because minimp3 does its float synthesis a little differently from ffmpeg's mp3float.
 - ogg vorbis has the same length as ffmpeg. Samples differ by under 1024 at 32 bit scale, from float rounding in a different decoder.
+- `from_file_using_temporary_files` of a 32 bit float wav rounds the samples to 32 bit and then to 16 bit. A quiet sample (under 128 at 16 bit scale) very close to halfway between two values can be 1 off from ffmpeg, which rounds once. Quiet noise has a few such samples in a million.
+- `from_file_using_temporary_files` of a float wav with a sample of 65536 times full scale or more, inf or nan, which only a damaged file has: ffmpeg wraps it around in an int or makes it -32768 or 0, and pydub2 clips it to full scale. nan, and a 32 bit float of 2**32 times full scale or more, give -32768.
 - opus goes through libopus, where ffmpeg uses its own opus decoder. The length is the same, but samples can differ a lot, up to about a quarter of full scale at low bitrates.
 - Chained opus (several opus streams one after the other) decodes without ffmpeg. libopus starts each link fresh where ffmpeg's decoder carries its state across, so a few samples after each join can differ.
 - A chain whose links have another channel count needs ffmpeg.
