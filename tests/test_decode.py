@@ -594,7 +594,8 @@ def test_mp3_garbage_like_ffmpeg(tmp_path, channels, args, cases):
         same_as_ffmpeg(tmp_path, "bad.mp3", damage(m, kind, k))
 
 
-# ffmpeg on x86 turns a sample past the int32 range into -32768 when it converts to 16 bit, the C code and arm clip it
+# ffmpeg on x86 turns a sample past the int32 range into -32768 when it converts to 16 bit with sse, and wraps it
+# from a long to an int in the C code for the end of a frame
 def test_mp3_far_too_loud(tmp_path):
     m = bytearray(open(make(tmp_path, "a.mp3", 1, "-c:a", "libmp3lame", "-b:a", "64k", samples=CLICKS), "rb").read())
     # global gain 255 in both granules, mono side info has it at bit 39 and 98
@@ -602,8 +603,14 @@ def test_mp3_far_too_loud(tmp_path):
         for p in [(at + 4) * 8 + g + i for g in (39, 98) for i in range(8)]:
             m[p // 8] |= 128 >> p % 8
     p = save(tmp_path, "loud.mp3", bytes(m))
+    # a fake frame in front of the third last one decodes far too loud into the last frame, which the padding cuts
+    s = open(make(tmp_path, "b.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k", samples=CLICKS), "rb").read()
+    k = mp3_frames(s)[-3]
+    q = save(tmp_path, "end.mp3", s[:k] + s[k:k + 4] + b"\xff" + s[k:])
     if platform.machine().lower() in ("x86_64", "amd64"):
         close(*both(p), 1)
+        # one sample is 2 off there, float noise in a frame far past full scale. A wrong conversion is 65535 off
+        close(*both(q), 2)
     else:
         assert len(_pydub2.decode(bytes(m))[0]) == len(AudioSegment.from_file(p).raw_data)
 
