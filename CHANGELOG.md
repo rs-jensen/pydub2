@@ -42,6 +42,7 @@ What changed in each release.
 - A wav export of 8 or 24 bit audio with an odd number of bytes is what the `wave` module of the running Python writes, so there is no pad byte before Python 3.15.
 - A damaged flac file whose header says the maximum block size is 0 no longer makes the seek compute an infinite byte offset, which is undefined in C.
 - A damaged ogg vorbis file whose last granule position is close to the 64 bit limits no longer overflows a signed integer when its length is worked out, which is undefined in C++.
+- Starting an mp3 export no longer rewrites the quantizer tables that the mp3 exports running in other threads are reading. pydub2-mp3 patches LAME 3.100 at build time to fill them once.
 - The Windows wheels no longer need the Visual C++ redistributable. `import pydub2` failed with "DLL load failed" on a machine without it.
 - On Windows, Ctrl-C reaches ffmpeg again when you run from a console, and ffmpeg is stopped when a call is interrupted or times out.
 - `export` no longer fails on Windows when a virus scanner still holds the temporary file ffmpeg wrote.
@@ -71,6 +72,10 @@ What changed in each release.
 - `overlay` with a `times` that is not a number works when the overlaid audio is as long as the rest, and raises `TypeError` when it has to loop, as pydub does. It raised `TypeError` every time.
 - `detect_silence` with a `silence_thresh` that is not a number raises `ValueError` for a string like `"x"`, as pydub does, and not `TypeError`.
 - `detect_silence`, `detect_nonsilent`, `split_on_silence`, `strip_silence`, `speedup`, `compress_dynamic_range`, `low_pass_filter` and `high_pass_filter` call what a subclass of `AudioSegment` overrides (`rms`, `max_possible_amplitude`, `_spawn`, `get_array_of_samples`, `append` and the others pydub calls there), where they went round it.
+- `AudioSegment.from_file` with a `start_second` or `duration` that is negative, `nan`, infinite or too large for ffmpeg does what pydub does: a short wav with `start_second=-1` is loaded through ffmpeg, and the others raise `CouldntDecodeError`, where they raised `TooManyMissingFrames`, `ValueError`, `OverflowError` or `TypeError` or gave a wrong cut.
+- `AudioSegment.from_file_using_temporary_files` gives 16 bit audio for ogg, opus, flac of more than 16 bit and the other formats that go through ffmpeg, as pydub does, where it gave 32 bit. A wav and raw data keep their width.
+- `AudioSegment.stream` reads a named pipe (fifo) once like `from_file` does, where it opened it a second time and waited for ever or said it could not read the file.
+- `AudioSegment(data=file)` with a file whose `read()` gives `None` raises `TypeError` as pydub does when `max_file_size` is set, where it raised `CouldntDecodeError`.
 - mp3 from `lame -p` (with crc) and mp3 with a VBRI frame decode to the same length as with ffmpeg. The Info or VBRI frame was decoded as a frame of silence and the encoder delay was not skipped.
 - mp3 with frames missing or cut short in the middle, or a frame too short for its own data, decodes the frames after it like ffmpeg. They were off by up to the full scale for a frame.
 - mp3 with more frames than its Info tag counts, from a doubled frame or a damaged header, has the length ffmpeg gives. ffmpeg drops the encoder padding where the tag says the audio ends, also in the middle of the file.

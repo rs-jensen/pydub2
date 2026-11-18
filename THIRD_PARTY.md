@@ -56,8 +56,8 @@ On arm64 (not MSVC) libopusenc 0.3 is built with `USE_NEON`, so `resample.c` inc
   that starts in the bit reservoir reads zeros past it like ffmpeg
 
 The mp3 encoder is not part of this package. It is in the separate package pydub2-mp3 (LAME 3.100,
-LGPL-2.0-or-later) and is loaded at runtime. It is its own shared library, built from the unmodified
-release tarball, and its LICENSE has the full LGPL text, the source and how to replace it.
+LGPL-2.0-or-later) and is loaded at runtime. It is its own shared library, built from the release tarball with one patch, `mp3/lame_patch.cmake`, which
+fills the quantizer tables once and not at every `lame_init_params`. Its LICENSE has the full LGPL text, the source and how to replace it.
 
 The test audio in `tests/pydub_suite` is made when the tests run. No audio from pydub's repo is kept.
 `tests/pydub_suite/test_pydub.py` is pydub's test code (MIT, licenses/pydub.txt).
