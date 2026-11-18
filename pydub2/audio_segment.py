@@ -3,6 +3,7 @@ from __future__ import division
 import array
 import numbers
 import os
+import re
 from tempfile import TemporaryFile, NamedTemporaryFile
 import subprocess
 import sys
@@ -312,6 +313,18 @@ def _slice_frames(n, rate, start, end):
     # the frames AudioSegment[start:end] takes out of n frames
     ms = round(1000 * (n / rate))
     return int(min(start, ms) * (rate / 1000.0)), int(min(end, ms) * (rate / 1000.0))
+
+
+class _Refused(Exception):
+    pass
+
+
+def _ffmpeg_time(v):
+    # a value that ffmpeg reads as given and the decoder here cuts the same, anything else is left to ffmpeg
+    if v is None:
+        return True
+    return isinstance(v, numbers.Real) and not isinstance(v, bool) and 0 <= v < 1e12 and \
+        re.fullmatch(r"-?[0-9.]+", str(v)) is not None
 
 
 def _span(d, wav, start_second, duration):
@@ -858,7 +871,8 @@ class AudioSegment(object):
             head[27 + head[26]:][:7] == b"\x01vorbis" and _ffmpeg.find(cls.converter)
 
         # pydub hands anything else to ffmpeg
-        plain = all(v is None or isinstance(v, numbers.Real) for v in (start_second, duration))
+        plain = all(v is None or isinstance(v, numbers.Real) for v in (start_second, duration)) if own else \
+            _ffmpeg_time(start_second) and _ffmpeg_time(duration)
         tried = False
         if not pydub2.strict and (own or (codec is None and parameters is None)) and not cut and plain:
             tried = True
@@ -882,23 +896,35 @@ class AudioSegment(object):
                     finally:
                         if fh is not None:
                             fh.close()
-                span = None if stray else _span(d, own, start_second, duration)
+                try:
+                    span = None if stray else _span(d, own, start_second, duration)
+                except (ArithmeticError, ValueError):
+                    # pydub slices the wav and hands it to ffmpeg when that fails
+                    raise _Refused()
                 if span:
                     start, n, final = span
                     if start:
                         d.seek(start)
                     pcm = read_capped(d, n, lim)
                     fw = d.channels * d.width
-                    return cls._segment(d, _fit(pcm, len(pcm) // fw, final(len(pcm) // fw), fw, d.rate))
+                    try:
+                        return cls._segment(d, _fit(pcm, len(pcm) // fw, final(len(pcm) // fw), fw, d.rate))
+                    except TooManyMissingFrames:
+                        raise _Refused()
                 obj = cls._segment(d, read_capped(d, -1, lim) + stray)
-                if start_second is None and duration is None:
-                    return obj
-                elif start_second is not None and duration is None:
-                    return obj[start_second*1000:]
-                elif start_second is None and duration is not None:
-                    return obj[:duration*1000]
-                else:
-                    return obj[start_second*1000:(start_second+duration)*1000]
+                try:
+                    if start_second is None and duration is None:
+                        return obj
+                    elif start_second is not None and duration is None:
+                        return obj[start_second*1000:]
+                    elif start_second is None and duration is not None:
+                        return obj[:duration*1000]
+                    else:
+                        return obj[start_second*1000:(start_second+duration)*1000]
+                except Exception:
+                    raise _Refused()
+            except _Refused:
+                tried = False
             except RuntimeError:
                 pass
 

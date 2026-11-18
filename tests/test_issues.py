@@ -513,3 +513,33 @@ def test_ffmpeg_errors_carry_the_command_and_output_like_pydub():
     assert "-f', 'nosuchfmt'" in new_enc and "nosuchfmt" in new_enc.split("Output from ffmpeg/avlib:\n\n")[1]
     assert new_dec.split("ffmpeg version")[0] == old_dec.split("ffmpeg version")[0]
     assert old_dec.splitlines()[-1] in new_dec
+
+
+def outcome(lib, path, **kw):
+    try:
+        seg = lib.AudioSegment.from_file(path, **kw)
+    except Exception as e:
+        return type(e).__name__
+    return len(seg), seg.frame_rate, seg.sample_width, seg.channels, len(seg.raw_data)
+
+
+ODD_TIMES = [-1, -0.5, -1e-9, 1e-5, 1e12, 1e300, -1e300, float("nan"), float("inf"), float("-inf"), True]
+
+
+@needs_ff
+@pytest.mark.parametrize("fmt", ["wav", "mp3", "flac", "ogg", "opus"])
+@pytest.mark.parametrize("kind", ["start_second", "duration"])
+@pytest.mark.parametrize("value", ODD_TIMES)
+def test_odd_start_second_and_duration_match_pydub(tmp_path, fmt, kind, value):
+    path = str(tmp_path / ("a." + fmt))
+    pydub2.AudioSegment(*noise(1000, rate=48000)[:1], sample_width=2, frame_rate=48000, channels=1).export(path, format=fmt)
+    assert outcome(pydub2, path, **{kind: value}) == outcome(pydub, path, **{kind: value})
+
+
+@needs_ff
+@pytest.mark.parametrize("ms", [1, 3, 10, 200])
+@pytest.mark.parametrize("value", [-1, -0.5, -1e300])
+def test_negative_start_second_of_a_short_wav_matches_pydub(tmp_path, ms, value):
+    path = str(tmp_path / "a.wav")
+    pydub2.AudioSegment(*noise(ms, rate=44100)[:1], sample_width=2, frame_rate=44100, channels=1).export(path, format="wav")
+    assert outcome(pydub2, path, start_second=value) == outcome(pydub, path, start_second=value)
