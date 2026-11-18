@@ -21,7 +21,7 @@ What changed in each release.
 - Loading through ffmpeg needs a third less memory: the peak for 200 MB of aiff went from 629 MB to 425 MB.
 - `detect_speech` needs a fixed amount of extra memory, not 3 times the audio. On 40 minutes it went from 1.3 GB to 19 MB. The ranges are the same.
 - Writing ogg, opus and mp3 needs a third of the memory it did. 10 minutes of 16 bit stereo peaked at 3.2, 3.1 and 3.4 times the size of the audio, now 1.2 times. The files are the same.
-- Writing flac to a file needs 1.7 times the size of the audio where it needed 2.5. The encoded file is kept in blocks that go back to the system as they are copied into the bytes you get.
+- Writing flac to a file needs 1.7 times the size of the audio where it needed 2.5. The encoded file is kept in blocks that go back to the system as they are written out. A path or a temporary file gets the blocks one at a time, a file object you pass still gets one write.
 - `set_frame_rate` without `resample_quality` needs a third less memory and is up to 2 times faster on 10 minutes of audio. Going from 44.1 to 48 kHz peaked at 3.2 times the size of the audio and now peaks at 2.1.
 - `overlay` with `loop=True` needs half the memory or less and is up to 1.6 times faster. On 10 minutes it peaked at 4.0 times the size of the audio, 5.0 with `gain_during_overlay`, and now peaks at 2.0 for both. Overlaying at a `position` no longer copies the audio before and after it.
 - `fade`, `fade_in` and `fade_out` do not copy the parts of the audio they leave alone. A fade of 2 seconds in 10 minutes peaked at 3.0 times the size of the audio and now peaks at 2.0, and is twice as fast.
