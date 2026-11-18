@@ -759,7 +759,14 @@ class AudioSegment(object):
         def decoded(data):
             if pydub2.strict:
                 return cls(data=data)
-            data, frame_rate, channels, sample_width = _pydub2.decode(data)
+            try:
+                data, frame_rate, channels, sample_width = _pydub2.decode(data)
+            except RuntimeError:
+                # a header the decoder refuses, like a rate of a few GHz, that pydub reads
+                try:
+                    return cls(data=data)
+                except struct.error:
+                    raise tagged(CouldntDecodeError("cant read this file"), "wav", "cant_decode")
             return cls(data=data, metadata={
                 'sample_width': sample_width,
                 'frame_rate': frame_rate,
@@ -906,7 +913,13 @@ class AudioSegment(object):
                 else:
                     return obj[start_second*1000:(start_second+duration)*1000]
             except RuntimeError:
-                pass
+                if own:
+                    obj = cls._pydub_wav_segment(filename, data, head, lim)
+                    if obj is not None:
+                        if start_second is None and duration is None:
+                            return obj
+                        return obj[None if start_second is None else start_second * 1000:
+                                   None if duration is None else ((start_second or 0) + duration) * 1000]
 
         if tried and _ffmpeg.find(cls.converter) is None and any(is_format(f) for f in ("wav", "flac", "mp3", "ogg", "opus")):
             raise tagged(CouldntDecodeError("cant read this file"), sniff(head), "cant_decode")
@@ -925,6 +938,25 @@ class AudioSegment(object):
             return obj[:duration * 1000]
         else:
             return obj[0:duration * 1000]
+
+    @classmethod
+    def _pydub_wav_segment(cls, filename, data, head, lim):
+        # a wav the decoder refuses and pydub reads on its own, like an odd chunk without its pad byte
+        try:
+            h = extract_wav_headers(head)
+            w = read_wav_audio(head, h)
+        except (CouldntDecodeError, struct.error):
+            return None
+        if w.bits_per_sample not in (8, 16, 24, 32) or w.channels < 1 or w.sample_rate < 1:
+            return None
+        fw = w.channels * (4 if w.bits_per_sample == 24 else w.bits_per_sample // 8)
+        size = os.path.getsize(filename) if data is None else len(data)
+        # the header gives the length, so a wav over the limits fails before it is read
+        check_duration(max(0, min(h[-1].size, size - h[-1].position - 8)) // fw, w.sample_rate, fw, lim)
+        if data is None:
+            with open(filename, "rb") as f:
+                data = read_file(f, lim)
+        return cls(data=data)
 
     @classmethod
     def _segment(cls, d, data):

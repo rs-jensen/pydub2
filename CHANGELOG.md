@@ -77,6 +77,8 @@ What changed in each release.
 - `detect_silence`, `detect_nonsilent` and `split_on_silence` with a `seek_step` of 2**31 or more give the ranges pydub gives, where they raised `TypeError`.
 - `set_frame_rate` and `set_sample_width` with an int that does not fit in a C int raise `OverflowError` like pydub, where they raised `TypeError`.
 - `scipy_effects.eq` with a `gain_dB` of `nan` raises `ValueError`. It returned `None`, or raised `AttributeError` in the mid-side modes.
+- `AudioSegment.from_file(..., format="wav")` reads a wav that pydub reads itself and the decoder refuses, like an odd sized chunk without its pad byte, where it raised `CouldntDecodeError`.
+- A file that ffmpeg turns into a wav with a rate the decoder refuses, like 1.3 MHz, loads like in pydub, where `from_file` raised `RuntimeError`.
 
 ## [0.0.1] - 2026-11-16
 

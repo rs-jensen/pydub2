@@ -227,3 +227,36 @@ def test_eq_with_nan_gain():
     for mode in ("L+R", "M+S"):
         with pytest.raises(ValueError):
             scipy_effects.eq(seg, 1000, 100, mode, "peak", float("nan"))
+
+
+def wav_bytes(before_data=b"", rate=8000, pcm=bytes(range(256)) * 4):
+    fmt = struct.pack("<HHIIHH", 1, 1, rate, rate * 2, 2, 16)
+    body = b"WAVEfmt " + struct.pack("<I", 16) + fmt + before_data + b"data" + struct.pack("<I", len(pcm)) + pcm
+    return b"RIFF" + struct.pack("<I", len(body)) + body, pcm
+
+
+@pytest.mark.parametrize("size", [1, 3, 5])
+def test_wav_chunk_without_pad_byte_with_format(size):
+    wav, pcm = wav_bytes(b"junk" + struct.pack("<I", size) + b"x" * size)
+    seg = pydub2.AudioSegment.from_file(io.BytesIO(wav), format="wav")
+    assert (seg.raw_data, seg.frame_rate) == (pcm, 8000)
+
+
+def test_wav_chunk_without_pad_byte_with_format_and_part():
+    wav, pcm = wav_bytes(b"junk" + struct.pack("<I", 3) + b"xxx", rate=1000)
+    seg = pydub2.AudioSegment.from_file(io.BytesIO(wav), format="wav", start_second=0.25, duration=0.25)
+    assert seg.raw_data == pcm[500:1000]
+
+
+def test_wav_chunk_without_pad_byte_with_limit(monkeypatch):
+    wav, pcm = wav_bytes(b"junk" + struct.pack("<I", 3) + b"xxx")
+    monkeypatch.setattr(pydub2, "max_bytes", 100)
+    with pytest.raises(pydub2.exceptions.CouldntDecodeError):
+        pydub2.AudioSegment.from_file(io.BytesIO(wav), format="wav")
+
+
+@needs_ff
+def test_wav_at_a_rate_the_decoder_refuses_from_ffmpeg():
+    wav, pcm = wav_bytes(rate=1332770)
+    seg = pydub2.AudioSegment.from_file(io.BytesIO(wav))
+    assert (seg.raw_data, seg.frame_rate) == (pcm, 1332770)
