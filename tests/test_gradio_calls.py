@@ -53,3 +53,31 @@ def test_stream_encoder():
     b = pydub2.AudioSegment.from_file(io.BytesIO(wav)).set_sample_width(2)
     same(a, b)
     assert (a.raw_data, a.frame_rate, a.channels) == (b.raw_data, b.frame_rate, b.channels)
+
+
+# processing_utils.audio_from_file with crop_min and crop_max, which slice by float milliseconds
+@pytest.mark.parametrize("crop", [(10, 75), (33.3, 66.6), (0, 0.5)])
+def test_audio_from_file_float_crop(tmp_path, crop):
+    path = tmp_path / "x.wav"
+    path.write_bytes(make_wav(2, 2, rate=44100))
+    out = []
+    for S in (pydub.AudioSegment, pydub2.AudioSegment):
+        audio = S.from_file(str(path))
+        audio = audio[len(audio) * crop[0] / 100:len(audio) * crop[1] / 100]
+        out.append((audio.frame_rate, audio.channels, len(audio), audio.get_array_of_samples()))
+    assert out[0] == out[1]
+
+
+# AudioSegment.from_file(path).export(Path, format=...) when a stream is saved as another format
+@pytest.mark.skipif(not os.path.exists(ff), reason="no ffmpeg")
+@pytest.mark.parametrize("format", ["wav", "ogg", "flac"])
+def test_stream_saved_as_other_format(tmp_path, format):
+    src = tmp_path / "in.mp3"
+    pydub2.AudioSegment(make_wav(2, 2, rate=44100)).export(str(src), format="mp3").close()
+    out = []
+    for S in (pydub.AudioSegment, pydub2.AudioSegment):
+        target = tmp_path / (S.__module__ + "." + format)
+        S.from_file(str(src)).export(target, format=format)
+        audio = S.from_file(str(target))
+        out.append((audio.frame_rate, audio.channels, audio.sample_width, abs(len(audio) - 1000) < 80))
+    assert out[0] == out[1]
