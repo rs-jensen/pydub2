@@ -159,6 +159,8 @@ static std::string flac(const Audio &a, const Tags &tags, const Cancel &cancel) 
     FLAC__stream_encoder_set_bits_per_sample(enc, bits);
     FLAC__stream_encoder_set_blocksize(enc, block);
     FLAC__stream_encoder_set_sample_rate(enc, (uint32_t)a.rate);
+    // rates over 65535 that are not a multiple of 10 are outside the subset, ffmpeg writes them
+    FLAC__stream_encoder_set_streamable_subset(enc, false);
     FLAC__stream_encoder_set_total_samples_estimate(enc, frames);
     Sink s;
     bool ok = FLAC__stream_encoder_init_stream(enc, flac_write, flac_seek, flac_tell, nullptr, &s) ==

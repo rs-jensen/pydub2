@@ -73,6 +73,16 @@ def test_flac_roundtrip(channels):
 
 
 @needs_ff
+@pytest.mark.parametrize("rate", [65535, 65536, 67685, 655351, 1048575])
+def test_flac_rates_outside_the_subset(rate):
+    data = sine(rate, 1, 2, secs=0.05)
+    out = _pydub2.encode(data, rate, 1, 2, "flac")
+    p = subprocess.run([ff, "-v", "error", "-i", "-", "-f", "s16le", "-"], input=out, capture_output=True, check=True)
+    assert p.stdout == data
+    assert pydub2.AudioSegment.from_file(io.BytesIO(out), format="flac").frame_rate == rate
+
+
+@needs_ff
 @pytest.mark.parametrize("fmt", ["ogg", "opus"])
 @pytest.mark.parametrize("channels", [1, 2])
 @pytest.mark.parametrize("rate", [44100, 22050])
