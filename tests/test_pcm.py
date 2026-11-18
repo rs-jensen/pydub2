@@ -3,6 +3,7 @@ import platform
 import random
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -50,6 +51,59 @@ def test_mul_bias_reverse(width):
             same(core.mul(buf, width, f), audioop.mul(buf, width, f))
         for b in (0, 1, -1, 100, -70000, 2**31 - 1, -2**31):
             same(core.bias(buf, width, b), audioop.bias(buf, width, b))
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_mul_of_a_long_buffer_like_audioop(width):
+    # long enough that samples of one and two bytes are scaled through a table, with the lengths each side of the switch
+    rnd = random.Random(width)
+    for samples in (511, 512, 131071, 131072, 140001):
+        buf = rnd.randbytes(samples * width)
+        for f in FACTORS + [-1e300, 1e300, 0.9999999, 1.0000001, 1e-300]:
+            same(core.mul(buf, width, f), audioop.mul(buf, width, f))
+
+
+@pytest.mark.parametrize("width", [1, 2])
+@pytest.mark.parametrize("factor", [float("nan"), float("inf"), float("-inf")])
+def test_mul_of_a_long_buffer_fails_where_a_product_is_not_a_number(width, factor):
+    # zero times infinity is not a number, so the buffer fails if and only if it has a zero in it
+    lo, hi = LIMITS[width]
+    rnd = random.Random(0)
+    nonzero = [v for v in range(lo, hi + 1, 3) if v]
+    vals = [rnd.choice(nonzero) for _ in range(140000)]
+    buf = pack(width, vals)
+    if factor == factor:
+        same(core.mul(buf, width, factor), audioop.mul(buf, width, factor))
+    else:
+        with pytest.raises(ValueError):
+            core.mul(buf, width, factor)
+    with pytest.raises(ValueError):
+        core.mul(pack(width, vals[:70000] + [0] + vals[70000:]), width, factor)
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_reverse_of_any_length_like_audioop(width):
+    rnd = random.Random(width)
+    for samples in list(range(70)) + [1001, 4099]:
+        buf = rnd.randbytes(samples * width)
+        same(core.reverse(buf, width), audioop.reverse(buf, width))
+
+
+def speed_of(f):
+    best = float("inf")
+    for _ in range(5):
+        start = time.perf_counter()
+        f()
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
+# 5 MB of 16 bit audio. The module was built for size and mul took 1.9 times audioop and reverse 3.6 times
+# on x86 Linux, now 0.4 and 0.8 times
+def test_mul_and_reverse_take_no_more_than_audioop():
+    buf = random.Random(1).randbytes(5_000_000)
+    assert speed_of(lambda: core.mul(buf, 2, 0.7)) < 1.5 * speed_of(lambda: audioop.mul(buf, 2, 0.7))
+    assert speed_of(lambda: core.reverse(buf, 2)) < 2 * speed_of(lambda: audioop.reverse(buf, 2))
 
 
 @pytest.mark.parametrize("width", WIDTHS)

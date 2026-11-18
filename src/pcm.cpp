@@ -125,18 +125,57 @@ long long max(std::string_view data, size_t width) {
     return m;
 }
 
+// audioop's mul for one sample: the floor of the product, held to the sample range. nan is set when the product is not a number
+template <size_t W>
+static inline int gain1(int x, double factor, bool &nan) {
+    double v = (double)x * factor;
+    bool bad = v != v;
+    nan |= bad;
+    v = v > maxvals[W] ? (double)maxvals[W] : v;
+    v = v < minvals[W] + 1.0 ? (double)minvals[W] : v;
+    v = bad ? 0.0 : v;
+    // v is within the range of an int, so the cast cannot overflow
+    int i = (int)v;
+    return i - (v < (double)i);
+}
+
+// count samples scaled from in to out, they may be the same memory. true if one of them came out not a number
+template <size_t W>
+static bool gain_run(const char *in, char *out, size_t count, double factor) {
+    bool nan = false;
+    if constexpr (W < 3) {
+        // one and two byte samples take few values, so each is worked out once
+        if (count >= (size_t)2 << (8 * W)) {
+            using T = std::conditional_t<W == 1, int8_t, int16_t>;
+            std::vector<T> table((size_t)1 << (8 * W));
+            bool bad = false;
+            for (size_t u = 0; u < table.size(); u++) {
+                table[u] = (T)gain1<W>(W == 1 ? (int8_t)(uint8_t)u : (int16_t)(uint16_t)u, factor, bad);
+            }
+            if (!bad) {
+                for (size_t k = 0; k < count; k++) {
+                    std::conditional_t<W == 1, uint8_t, uint16_t> u;
+                    memcpy(&u, in + k * W, W);
+                    T v = table[u];
+                    memcpy(out + k * W, &v, W);
+                }
+                return false;
+            }
+        }
+    }
+    for (size_t k = 0; k < count; k++) {
+        put(out + k * W, W, gain1<W>(get(in + k * W, W), factor, nan));
+    }
+    return nan;
+}
+
 void mul(std::string_view data, size_t width, double factor, const Alloc &alloc) {
     check(data, width);
     char *out = alloc(data.size());
     bool nan = false;
     by_width(width, [&](auto w) {
         constexpr size_t W = decltype(w)::value;
-        for (size_t i = 0; i < data.size(); i += W) {
-            double v = get(&data[i], W) * factor;
-            bool bad = std::isnan(v);
-            nan |= bad;
-            put(out + i, W, bad ? 0 : (int)floor(fbound(v, minvals[W], maxvals[W])));
-        }
+        nan = gain_run<W>(data.data(), out, data.size() / W, factor);
     });
     if (nan) {
         throw std::invalid_argument("not a number");
@@ -187,10 +226,7 @@ void mix(std::string_view head, std::string_view tail, std::string_view over, si
             }
             int x = get(&tail[i], W);
             if (gain) {
-                double v = x * factor;
-                bool bad = std::isnan(v);
-                nan |= bad;
-                x = bad ? 0 : (int)floor(fbound(v, minvals[W], maxvals[W]));
+                x = gain1<W>(x, factor, nan);
             }
             long long sum = (long long)x + get(&over[j], W);
             put(out + i, W, (int)std::min<long long>(std::max<long long>(sum, minvals[W]), maxvals[W]));
@@ -298,9 +334,13 @@ void downmix(std::string_view data, size_t width, size_t channels, const Alloc &
 void reverse(std::string_view data, size_t width, const Alloc &alloc) {
     check(data, width);
     char *out = alloc(data.size());
-    for (size_t i = 0; i < data.size(); i += width) {
-        memcpy(out + data.size() - width - i, &data[i], width);
-    }
+    by_width(width, [&](auto w) {
+        constexpr size_t W = decltype(w)::value;
+        size_t count = data.size() / W;
+        for (size_t k = 0; k < count; k++) {
+            memcpy(out + (count - 1 - k) * W, &data[k * W], W);
+        }
+    });
 }
 
 int avg(std::string_view data, size_t width, size_t step, size_t first) {
