@@ -1000,7 +1000,10 @@ class AudioSegment(object):
         if data is None:
             with open(filename, "rb") as f:
                 data = read_file(f, lim)
-        return cls(data=data)
+        obj = cls(data=data)
+        # 24 bit data grows to 32 bit, so the header check above can be short
+        check_duration(obj.frame_count(), obj.frame_rate, obj.frame_width, lim)
+        return obj
 
     @classmethod
     def _segment(cls, d, data, narrow=None):

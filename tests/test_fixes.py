@@ -280,3 +280,15 @@ def test_stream_start_and_duration_just_under_the_limit():
 def test_empty_segment_takes_a_huge_rate():
     seg = pydub2.AudioSegment.empty().set_frame_rate(2 ** 40)
     assert (seg.frame_rate, len(seg)) == (2 ** 40, 0)
+
+
+def test_wav_chunk_without_pad_byte_with_24_bit_limit(monkeypatch):
+    # 24 bit data is 4 bytes a sample once it is read, 24000 bytes become 32000
+    fmt = struct.pack("<HHIIHH", 1, 1, 8000, 24000, 3, 24)
+    body = b"WAVEfmt " + struct.pack("<I", 16) + fmt + b"junk" + struct.pack("<I", 3) + b"xxx"
+    body += b"data" + struct.pack("<I", 24000) + bytes(range(240)) * 100
+    wav = b"RIFF" + struct.pack("<I", len(body)) + body
+    assert len(pydub2.AudioSegment.from_file(io.BytesIO(wav), format="wav").raw_data) == 32000
+    monkeypatch.setattr(pydub2, "max_bytes", 28000)
+    with pytest.raises(pydub2.exceptions.CouldntDecodeError):
+        pydub2.AudioSegment.from_file(io.BytesIO(wav), format="wav")
