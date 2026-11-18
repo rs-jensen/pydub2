@@ -1535,7 +1535,7 @@ class AudioSegment(object):
         output = []
 
         # original data - up until the crossfade portion, as is
-        before_fade = self[:start]._data
+        before_fade = self._piece(None, start)
         if from_gain != 0:
             before_fade = _pydub2.mul(before_fade,
                                       self.sample_width,
@@ -1574,7 +1574,7 @@ class AudioSegment(object):
                 output.append(sample)
 
         # original data after the crossfade portion, at the new volume
-        after_fade = self[end:]._data
+        after_fade = self._piece(end, None)
         if to_gain != 0:
             after_fade = _pydub2.mul(after_fade,
                                      self.sample_width,

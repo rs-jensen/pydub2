@@ -38,3 +38,9 @@ def test_set_frame_rate_writes_the_result_in_place():
 # 5.8 before and 2.0 after at this size, the audio and the result
 def test_overlay_loop_with_gain_makes_one_copy():
     assert peak_x("seg.overlay(seg[:1000], position=5000, loop=True, gain_during_overlay=-6)") < 3.0
+
+
+# 3.0 before and 2.0 after: the audio and the result, the parts that are not faded were copied once more
+@pytest.mark.parametrize("call", ["fade_in(2000)", "fade_out(2000)"])
+def test_fade_does_not_copy_what_it_leaves_alone(call):
+    assert peak_x("seg." + call) < 2.5
