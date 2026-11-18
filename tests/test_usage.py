@@ -221,3 +221,63 @@ def test_corrupt_mp3_message():
     assert msgs[0].splitlines()[0] == str(old.value).splitlines()[0]
     assert msgs[0].splitlines()[-1].startswith("ffmpeg said: ") and "0x" not in msgs[0].splitlines()[-1]
     assert "Output from ffmpeg/avlib:" in msgs[0] and "mp3" in msgs[0]
+
+
+# root and Windows ignore the file mode
+needs_mode = pytest.mark.skipif(os.name == "nt" or os.geteuid() == 0, reason="the file mode does not stop root or Windows")
+
+
+def error_of(call):
+    try:
+        call()
+    except Exception as e:
+        return type(e)
+
+
+@need_ffmpeg
+@needs_mode
+@pytest.mark.parametrize("ext", ["wav", "flac", "mp3", "ogg", "opus"])
+@pytest.mark.parametrize("hide", ["file", "folder"])
+def test_unreadable_input_raises_what_pydub_raises(tmp_path, ext, hide):
+    folder = tmp_path / "in"
+    folder.mkdir()
+    path = folder / ("x." + ext)
+    make(path)
+    target = path if hide == "file" else folder
+    target.chmod(0)
+    try:
+        old = error_of(lambda: pydub.AudioSegment.from_file(str(path)))
+        assert old is PermissionError
+        for arg in (str(path), path, str(path).encode()):
+            assert error_of(lambda: AudioSegment.from_file(arg)) is old
+            assert error_of(lambda: AudioSegment.from_file(arg, format=ext)) is old
+            assert error_of(lambda: AudioSegment.from_file_using_temporary_files(arg)) is old
+    finally:
+        target.chmod(0o700)
+
+
+@need_ffmpeg
+@needs_mode
+@pytest.mark.parametrize("fmt", ["wav", "flac", "mp3", "ogg", "opus", "raw"])
+@pytest.mark.parametrize("target", ["new file in a folder", "existing file"])
+def test_unwritable_output_raises_what_pydub_raises(tmp_path, fmt, target):
+    kw = dict(data=noise(2), sample_width=2, frame_rate=8000, channels=2)
+    old, new = pydub.AudioSegment(**kw), AudioSegment(**kw)
+    folder = tmp_path / "out"
+    folder.mkdir()
+    path = folder / "x"
+    if target == "existing file":
+        path.write_bytes(b"keep")
+        path.chmod(0o400)
+    else:
+        folder.chmod(0o500)
+    try:
+        expected = error_of(lambda: old.export(str(path), format=fmt))
+        assert expected is PermissionError
+        for arg in (str(path), path):
+            assert error_of(lambda: new.export(arg, format=fmt)) is expected
+    finally:
+        folder.chmod(0o700)
+        path.chmod(0o600) if path.exists() else None
+    # nothing was written
+    assert [(p.name, p.read_bytes()) for p in folder.iterdir()] == ([("x", b"keep")] if path.exists() else [])

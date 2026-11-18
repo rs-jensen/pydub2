@@ -40,6 +40,20 @@ static std::vector<float> floats(const Audio &a) {
     return out;
 }
 
+// the wav order of 3 to 8 channels is not the order vorbis and opus expect
+static void vorbis_order(std::vector<float> &pcm, size_t c) {
+    if (c < 3 || c > 8) {
+        return;
+    }
+    float f[8];
+    for (size_t i = 0; i < pcm.size() / c; i++) {
+        for (size_t j = 0; j < c; j++) {
+            f[order[c - 1][j]] = pcm[i * c + j];
+        }
+        memcpy(&pcm[i * c], f, c * sizeof(float));
+    }
+}
+
 static void put32(std::string &s, size_t v) {
     for (int i = 0; i < 4; i++) {
         s += (char)(v >> (8 * i));
@@ -214,6 +228,7 @@ static void blocks(vorbis_dsp_state *vd, vorbis_block *vb, ogg_stream_state *os,
 
 static std::string ogg(const Audio &a, int bitrate, const Tags &tags, const Cancel &cancel) {
     std::vector<float> pcm = floats(a);
+    vorbis_order(pcm, a.channels);
     vorbis_info vi;
     vorbis_info_init(&vi);
     // q 3 like ffmpeg when no bitrate is given, and with a bitrate ffmpeg turns the slow rate management off
@@ -299,6 +314,7 @@ static int opus_close(void *) {
 static std::string opus(const Audio &a, int bitrate, const Tags &tags, const Cancel &cancel) {
     std::string out;
     std::vector<float> pcm = floats(a);
+    vorbis_order(pcm, a.channels);
     OpusEncCallbacks cb = {opus_write, opus_close};
     OggOpusComments *com = ope_comments_create();
     for (auto &t : tags) {
