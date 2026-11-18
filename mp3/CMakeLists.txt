@@ -15,7 +15,8 @@ endif()
 include(FetchContent)
 FetchContent_Declare(lame
     URL https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz
-    URL_HASH SHA256=ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e)
+    URL_HASH SHA256=ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e
+    PATCH_COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_LIST_DIR}/lame_patch.cmake)
 FetchContent_MakeAvailable(lame)
 
 # lame only ships autotools, this is the part of config.h the encoder needs
