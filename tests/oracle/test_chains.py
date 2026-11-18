@@ -555,7 +555,10 @@ def compare(spec, steps, seed):
     ra, hung = timed(PD, spec, steps, seed)
     if hung:
         return "skip", steps[min(len(ra), len(steps)) - 1][0] if ra else "init"
-    rb, hung = timed(P2, spec, steps, seed, 5 * TIMEOUT)
+    # nothing after a known pydub crash is compared, and pydub2 goes on from a different segment
+    stop = next((i for i, a in enumerate(ra) if i and a.get("exc") and (
+        (steps[i - 1][0], a["exc"]) in FIXED or a["empty24"])), None)
+    rb, hung = timed(P2, spec, steps[:stop], seed, 5 * TIMEOUT)
     if hung:
         return "bad", ((len(rb), "pydub2 hang", None, None))
     d = diff(ra, rb, steps)
