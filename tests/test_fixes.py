@@ -187,3 +187,11 @@ def test_partial_frame_filter(name):
     seg = partial_frame()
     out = getattr(seg, name)(100)
     assert len(out.raw_data) == 424 and out.raw_data[-2:] == seg.raw_data[-2:]
+
+
+def test_partial_frame_compress():
+    assert len(partial_frame().compress_dynamic_range().raw_data) == 420
+
+
+def test_partial_frame_detect_silence():
+    assert silence.detect_nonsilent(partial_frame(), min_silence_len=10, silence_thresh=-90) == [[0, 70]]
