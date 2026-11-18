@@ -1,8 +1,10 @@
+import math
 import os
 import platform
 import random
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -53,6 +55,98 @@ def test_mul_bias_reverse(width):
 
 
 @pytest.mark.parametrize("width", WIDTHS)
+def test_mul_of_a_long_buffer_like_audioop(width):
+    # long enough that samples of one and two bytes are scaled through a table, with the lengths each side of the switch
+    rnd = random.Random(width)
+    for samples in (511, 512, 131071, 131072, 140001):
+        buf = rnd.randbytes(samples * width)
+        for f in FACTORS + [-1e300, 1e300, 0.9999999, 1.0000001, 1e-300]:
+            same(core.mul(buf, width, f), audioop.mul(buf, width, f))
+
+
+@pytest.mark.parametrize("width", [1, 2])
+@pytest.mark.parametrize("factor", [float("nan"), float("inf"), float("-inf")])
+def test_mul_of_a_long_buffer_fails_where_a_product_is_not_a_number(width, factor):
+    # zero times infinity is not a number, so the buffer fails if and only if it has a zero in it
+    lo, hi = LIMITS[width]
+    rnd = random.Random(0)
+    nonzero = [v for v in range(lo, hi + 1, 3) if v]
+    vals = [rnd.choice(nonzero) for _ in range(140000)]
+    buf = pack(width, vals)
+    if factor == factor:
+        same(core.mul(buf, width, factor), audioop.mul(buf, width, factor))
+    else:
+        with pytest.raises(ValueError):
+            core.mul(buf, width, factor)
+    with pytest.raises(ValueError):
+        core.mul(pack(width, vals[:70000] + [0] + vals[70000:]), width, factor)
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_reverse_of_any_length_like_audioop(width):
+    rnd = random.Random(width)
+    for samples in list(range(70)) + [1001, 4099]:
+        buf = rnd.randbytes(samples * width)
+        same(core.reverse(buf, width), audioop.reverse(buf, width))
+
+
+def samples_of(buf, width):
+    return [int.from_bytes(buf[i:i + width], "little", signed=True) for i in range(0, len(buf), width)]
+
+
+def floored(val, width):
+    lo, hi = LIMITS[width]
+    return math.floor(hi if val > hi else lo if val < lo + 1 else val)
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_width_and_channel_conversions_of_any_length(width):
+    rnd = random.Random(width)
+    for frames in list(range(40)) + [1001, 4099]:
+        buf = rnd.randbytes(frames * 2 * width)
+        for new in WIDTHS:
+            same(core.lin2lin(buf, width, new), audioop.lin2lin(buf, width, new))
+        for l, r in [(1, 1), (1, 0), (0.5, 2), (-1.3, 3.1), (100, -100), (1e10, -1e10)]:
+            same(core.tostereo(buf, width, l, r), audioop.tostereo(buf, width, l, r))
+            vals = samples_of(buf, width)
+            # as plain double math, some audioop builds fuse the two products
+            want = [floored(vals[i] * l + vals[i + 1] * r, width) for i in range(0, len(vals), 2)]
+            same(core.tomono(buf, width, l, r), pack(width, want))
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+@pytest.mark.parametrize("call", [lambda b, w, f: core.tostereo(b, w, f, 1), lambda b, w, f: core.tomono(b, w, f, 1)])
+def test_a_factor_that_is_not_a_number_fails_a_conversion_with_samples(width, call):
+    nan = float("nan")
+    with pytest.raises(ValueError):
+        call(bytes(8 * width), width, nan)
+    assert call(b"", width, nan) == b""
+
+
+def fastest(*calls, rounds=9):
+    # the calls take turns, so a slow spell of the machine falls on all of them
+    best = [float("inf")] * len(calls)
+    for _ in range(rounds):
+        for i, call in enumerate(calls):
+            start = time.perf_counter()
+            call()
+            best[i] = min(best[i], time.perf_counter() - start)
+    return best
+
+
+# 5 MB of 16 bit audio, the time of the module over the time of audioop. The module was built for size and took 2.2 times
+# audioop for mul, 10.8 for reverse, 5.4 for lin2lin, 3.2 for tomono, 2.9 for tostereo, 3.9 for rms and 7.0 for max on x86 Linux,
+# now 0.25, 0.46, 0.27, 0.68, 0.78, 0.41 and 0.51
+@pytest.mark.skipif(any(k in os.environ for k in ("ASAN_OPTIONS", "UBSAN_OPTIONS", "TSAN_OPTIONS")), reason="runs under a sanitizer")
+def test_sample_loops_take_no_more_than_audioop():
+    buf = random.Random(1).randbytes(5_000_000)
+    for name, args in (("mul", (0.7,)), ("reverse", ()), ("lin2lin", (4,)), ("tomono", (0.5, 0.5)), ("tostereo", (1, 1)), ("rms", ()),
+                       ("max", ())):
+        ours, theirs = fastest(lambda: getattr(core, name)(buf, 2, *args), lambda: getattr(audioop, name)(buf, 2, *args))
+        assert ours < 2 * theirs, (name, ours, theirs)
+
+
+@pytest.mark.parametrize("width", WIDTHS)
 def test_add(width):
     for a, b in zip(buffers(width, seed=1), buffers(width, seed=2)):
         n = min(len(a), len(b))
@@ -67,6 +161,26 @@ def test_add(width):
 def test_lin2lin(width, new):
     for buf in buffers(width):
         same(core.lin2lin(buf, width, new), audioop.lin2lin(buf, width, new))
+
+
+@pytest.mark.parametrize("width", [2, 3])
+def test_rms_where_the_sum_of_squares_passes_2_to_the_53_like_audioop(width):
+    # below that the sum is added up as integers, past it audioop's double rounds with every sample
+    lo, hi = LIMITS[width]
+    pattern = [hi, lo, hi - 1, hi // 2, 3, -lo // 3]
+    # 128 samples of full scale reach it at 24 bits, 8.4 million at 16 bits
+    reach = {2: 1 << 23, 3: 128}[width]
+    for samples in (reach - 1, reach, reach + 1, reach + 4095, reach + 4097, 2 * reach + 9):
+        body = pack(width, pattern) * (samples // len(pattern) + 1)
+        for tail in ([], [1] * 50, [lo, 3, -5]):
+            buf = body[:samples * width] + pack(width, tail)
+            same(core.rms(buf, width), audioop.rms(buf, width))
+
+
+def test_rms_drops_what_a_double_drops_past_2_to_the_53():
+    # 2^23 squares of full scale make 2^53, then a double drops each square of 1. Added up exactly the result is 29620
+    buf = pack(2, [-32768]) * (1 << 23) + pack(2, [1]) * 1877827
+    assert core.rms(buf, 2) == audioop.rms(buf, 2) == 29619
 
 
 def test_lin2lin_nearest_rounds_ties_to_even_and_clips():
