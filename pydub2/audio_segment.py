@@ -832,7 +832,9 @@ class AudioSegment(object):
             # pydub rewinds a wav
             file.seek(0)
         # a name goes to the decoder as it is, so the file never sits in memory
-        data = None if close_file else bytes(file.read())
+        # a pipe gives its bytes once, so the decoder and ffmpeg get them from here and not by name
+        piped = close_file and not os.path.isfile(filename)
+        data = None if close_file and not piped else bytes(file.read())
         # pydub reads pcm wav itself, without codec or parameters, and cuts it in python
         head = file.read(65536) if data is None else data[:65536]
         own = wav and _pydub_wav(head)
@@ -890,7 +892,7 @@ class AudioSegment(object):
         if tried and _ffmpeg.find(cls.converter) is None and any(is_format(f) for f in ("wav", "flac", "mp3", "ogg", "opus")):
             raise tagged(CouldntDecodeError("cant read this file"), sniff(head), "cant_decode")
         try:
-            wav = _ffmpeg.to_wav(cls.converter, filename, data, format, codec, parameters, start_second, duration, lim)
+            wav = _ffmpeg.to_wav(cls.converter, None if piped else filename, data, format, codec, parameters, start_second, duration, lim)
         except (CouldntDecodeError, FileNotFoundError) as e:
             e.format = sniff(head) or getattr(e, "format", None)
             raise

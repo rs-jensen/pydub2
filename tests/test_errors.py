@@ -1,5 +1,9 @@
+import io
+import os
 import shutil
+import subprocess
 import sys
+import threading
 
 import pytest
 
@@ -51,3 +55,21 @@ def test_converter_writes_nothing(tmp_path, monkeypatch, format):
     seg = pydub2.AudioSegment.silent(100)
     monkeypatch.setattr(pydub2.AudioSegment, "converter", str(script))
     assert seg.export(format=format, codec="x").read() == b""
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs fifos")
+@pytest.mark.parametrize("format", ["flac", "ogg", "opus"])
+def test_load_from_fifo(tmp_path, format):
+    seg = pydub2.generators.Sine(440, sample_rate=48000).to_audio_segment(duration=300)
+    data = seg.export(format=format).read()
+    fifo = str(tmp_path / ("pipe." + format))
+    os.mkfifo(fifo)
+
+    def feed():
+        with open(fifo, "wb") as f:
+            f.write(data)
+    threading.Thread(target=feed, daemon=True).start()
+    # the fifo holds the file once, a second open by name waits for ever
+    code = "import pydub2; print(len(pydub2.AudioSegment.from_file(%r)))" % fifo
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
+    assert out.stdout.strip() == str(len(pydub2.AudioSegment.from_file(io.BytesIO(data)))), out.stderr

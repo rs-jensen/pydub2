@@ -51,6 +51,7 @@ What changed in each release.
 - A bitrate that ffmpeg cannot read, like `"k"` or `"1e400k"`, raises `CouldntEncodeError` on export, as with pydub, and not `ValueError` or `OverflowError`.
 - `AudioSegment.stream` takes a `start_second` or `duration` under 0.0001 (written `1e-05` by Python) and cuts it like a longer one, where it raised `ValueError`.
 - An ffmpeg that exits with 0 and writes no file gives an empty export, as with pydub, and not `FileNotFoundError`.
+- `AudioSegment.from_file` reads a named pipe (fifo) once and decodes the bytes, where it waited for ever for a second writer.
 
 ### Security
 
