@@ -131,8 +131,8 @@ def from_wav(converter, wav, format, codec=None, bitrate=None, parameters=None, 
         args += ["-protocol_whitelist", "file", "-i", "file:" + cover, "-map", "0", "-map", "1", "-c:v", "mjpeg"]
     if codec:
         args += ["-acodec", codec]
-    if bitrate:
-        args += ["-b:a", str(bitrate)]
+    if bitrate is not None:
+        args += ["-b:a", os.fsdecode(bitrate) if isinstance(bitrate, bytes) else str(bitrate)]
     args += parameters or []
     for k, v in (tags or {}).items():
         args += ["-metadata", "%s=%s" % (k, v)]

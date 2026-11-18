@@ -53,7 +53,9 @@ What changed in each release.
 - `CouldntEncodeError` and `CouldntDecodeError` from ffmpeg have pydub's text again, with the return code, the command for an export and all of ffmpeg's output. A decode error ends with the line `ffmpeg said: ...` as before.
 - `playback.play_async` called from two threads at once no longer raises `RuntimeError: Set changed size during iteration`.
 - Writing ogg or opus with 3 to 8 channels puts the channels in the order vorbis and opus use, as ffmpeg does. Before, the center and right channels of 5.1 came back swapped and the low frequency channel in the wrong place.
-- A bitrate that ffmpeg cannot read, like `"k"` or `"1e400k"`, raises `CouldntEncodeError` on export, as with pydub, and not `ValueError` or `OverflowError`.
+- A bitrate that ffmpeg cannot read, like `""`, `"k"`, `"-64k"`, `"1e30k"` or `"1e400k"`, raises `CouldntEncodeError` on export of ogg, opus, mp3 and flac, as with pydub. Before, ogg raised `ValueError`, `IndexError` or `TypeError`, and the others took it. An opus bitrate under 500 or over 256000 per channel raises it too.
+- A bitrate of `"64m"` is 0.064 bits, as in ffmpeg, where it was 64 million. `0x40k`, `64Ki` and `64kB` are read like ffmpeg reads them.
+- A bitrate with a null byte raises `ValueError` on export of flac, as with pydub, where flac took it.
 - `AudioSegment.stream` takes a `start_second` or `duration` under 0.0001 (written `1e-05` by Python) and cuts it like a longer one, where it raised `ValueError`.
 - An ffmpeg that exits with 0 and writes no file gives an empty export, as with pydub, and not `FileNotFoundError`.
 - `AudioSegment.from_file` reads a named pipe (fifo) once and decodes the bytes, where it waited for ever for a second writer.

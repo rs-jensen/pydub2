@@ -9,6 +9,7 @@ import pytest
 
 import pydub2
 import pydub2.generators
+from pydub2 import _mp3
 from pydub2.exceptions import CouldntEncodeError
 
 needs_ff = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="no ffmpeg")
@@ -19,6 +20,80 @@ needs_ff = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="no ffmpeg"
 def test_bad_bitrate_native(format, bitrate):
     with pytest.raises(CouldntEncodeError):
         pydub2.AudioSegment.silent(500).export(format=format, bitrate=bitrate)
+
+
+BAD_BITRATES = ["", " ", "k", "1e30k", "-64k", "nan", "inf", "64kk", "1e400k", "6_4k", "64k;", -64, 10 ** 30]
+
+
+@pytest.fixture(params=["no ffmpeg", "ffmpeg"])
+def converter(request, monkeypatch, tmp_path):
+    if request.param == "no ffmpeg":
+        monkeypatch.setattr(pydub2.AudioSegment, "converter", str(tmp_path / "missing"))
+    elif shutil.which("ffmpeg") is None:
+        pytest.skip("no ffmpeg")
+
+
+@pytest.mark.parametrize("format", ["ogg", "opus", "mp3", "flac"])
+@pytest.mark.parametrize("bitrate", BAD_BITRATES)
+def test_bad_bitrate_is_an_encode_error(converter, format, bitrate):
+    with pytest.raises(CouldntEncodeError):
+        pydub2.AudioSegment.silent(500, frame_rate=44100).export(io.BytesIO(), format=format, bitrate=bitrate)
+
+
+@pytest.mark.parametrize("format", ["ogg", "opus", "flac"])
+@pytest.mark.parametrize("bitrate", ["64 k", "6.4e1k", "+64k", "64K", " 64k\n", "0x40k", b"64k", 64000])
+def test_bitrate_in_other_forms_is_64k(converter, format, bitrate):
+    seg = pydub2.AudioSegment.silent(500, frame_rate=44100)
+    want = io.BytesIO()
+    seg.export(want, format=format, bitrate="64k")
+    got = io.BytesIO()
+    seg.export(got, format=format, bitrate=bitrate)
+    # opus has a random stream serial, the length is the same
+    assert len(got.getvalue()) == len(want.getvalue())
+
+
+@pytest.mark.parametrize("format", ["ogg", "opus", "flac"])
+@pytest.mark.parametrize("bitrate", ["0", "0k", "-0", "64m"])
+def test_bitrate_of_nothing_is_the_default(converter, format, bitrate):
+    seg = pydub2.AudioSegment.silent(500, frame_rate=44100)
+    want = io.BytesIO()
+    seg.export(want, format=format)
+    got = io.BytesIO()
+    seg.export(got, format=format, bitrate=bitrate)
+    # opus has a random stream serial, the length is the same
+    assert len(got.getvalue()) == len(want.getvalue())
+
+
+@pytest.mark.parametrize("format", ["ogg", "opus", "flac"])
+def test_bitrate_with_a_null_byte_is_a_value_error(format):
+    with pytest.raises(ValueError):
+        pydub2.AudioSegment.silent(500).export(io.BytesIO(), format=format, bitrate="64\0k")
+
+
+@pytest.mark.parametrize("channels, bitrate, good", [(1, "499", False), (1, "500", True), (1, "256000", True),
+                                                      (1, "256001", False), (2, "512000", True), (2, "512001", False),
+                                                      (2, "1", False), (2, "1e6", False)])
+def test_opus_bitrate_range(converter, channels, bitrate, good):
+    seg = pydub2.AudioSegment.silent(500, frame_rate=48000).set_channels(channels)
+    if good:
+        seg.export(io.BytesIO(), format="opus", bitrate=bitrate)
+    else:
+        with pytest.raises(CouldntEncodeError):
+            seg.export(io.BytesIO(), format="opus", bitrate=bitrate)
+
+
+@pytest.mark.parametrize("text, bps", [("64k", 64000), ("1.5k", 1500), ("64Ki", 65536), ("64kB", 512000), ("0x40k", 64000),
+                                       ("6.4e1k", 64000), (" 6 4\tk ", 64000), ("64m", 0), ("1M", 1000000), ("--64k", 64000),
+                                       ("9223372036854775808", 2 ** 63), (b"64k", 64000), (128000, 128000), ("-0", 0)])
+def test_rate_of(text, bps):
+    assert _mp3.rate_of(text) == bps
+
+
+@pytest.mark.parametrize("text", ["", " ", "k", "1e", "nan", "inf", "-64k", "+-64k", "64kk", "6_4k", "\u0666\u0664k", "0x", "1e30k",
+                                  "9.3e18", "64E", "64mi", "1,5k"])
+def test_rate_of_refuses(text):
+    with pytest.raises(ValueError):
+        _mp3.rate_of(text)
 
 
 @needs_ff

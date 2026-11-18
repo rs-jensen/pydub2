@@ -65,9 +65,10 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 
 - wav, flac, ogg and opus are written without ffmpeg.
 - `export` takes the format from the extension of the path when `format` is left out (mp3 when the extension is unknown or the target is a file object).
-- `format="pcm"` is the same as `"raw"`, and `"m4a"` and `"aac"` work. `bitrate` can be an int and `cover` can be a `pathlib.Path`.
+- `format="pcm"` is the same as `"raw"`, and `"m4a"` and `"aac"` work. `bitrate` can be an int and `cover` can be a `pathlib.Path`. An int that ffmpeg would refuse as text, like `-64`, raises `CouldntEncodeError`, where pydub raises `TypeError` for any int.
 - `export` of wav and flac is done without ffmpeg when `codec` is pcm_s16le, pcm_s24le or pcm_s32le (flac: none or flac), and `parameters` is only `-sample_fmt s16` or `s32`, `-ar` and `-ac` with the current rate and channels. The samples are the same as ffmpeg's.
 - Anything else, such as a new rate or a new channel count, still goes to ffmpeg.
+- The built in encoders read `bitrate` as ffmpeg reads a number: signs, `k`, `M`, `Ki` and the other suffixes, `0x` and exponents. ffmpeg also takes expressions like `2*32k`. They go to ffmpeg when it is installed, and raise `CouldntEncodeError` when it is not.
 - A wav export leaves out a partial last frame (data from `_spawn` that is not a whole number of frames). pydub writes the stray bytes into the data chunk, so its size is not a multiple of the block align and ffmpeg reports an invalid PCM packet. pydub2 writes a file that every reader accepts.
 - 24 bit wav gets a plain PCM header, where ffmpeg writes WAVE_FORMAT_EXTENSIBLE and a LIST chunk.
 - flac export writes 8 bit audio as 16 bit and 32 bit audio as 24 bit (the low byte is dropped), like ffmpeg. A file read back has `sample_width` 2 and 4. Flac with `-sample_fmt s32` is 24 bit too.
