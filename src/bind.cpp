@@ -373,6 +373,20 @@ NB_MODULE(_pydub2, m) {
         return out;
     });
 
+    m.def("fade", [](nb::object before, std::optional<double> before_gain, nb::object data, long long width, long long channels,
+                     double per_ms, long long start, long long count, double from_power, double step, nb::object after,
+                     std::optional<double> after_gain) {
+        View b(before), d(data), a(after);
+        std::string_view bs = b.get(), ds = d.get(), as = a.get();
+        nb::object out;
+        bool done;
+        {
+            nb::gil_scoped_release g;
+            done = fade(bs, before_gain, ds, width, channels, per_ms, start, count, from_power, step, as, after_gain, into(out));
+        }
+        return done ? out : nb::object(nb::none());
+    });
+
     m.def("widen24", [](nb::bytes data, long long width) {
         std::string_view s = str(data);
         nb::object out;

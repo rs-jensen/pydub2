@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <new>
 #include <numeric>
+#include <optional>
 #include <stdexcept>
 #include <type_traits>
 
@@ -235,6 +236,101 @@ void mix(std::string_view head, std::string_view tail, std::string_view over, si
     if (nan) {
         throw std::invalid_argument("not a number");
     }
+}
+
+bool fade(std::string_view before, std::optional<double> before_gain, std::string_view data, size_t width, size_t channels,
+          double per_ms, long long start, long long count, double from_power, double step, std::string_view after,
+          std::optional<double> after_gain, const Alloc &alloc) {
+    check(before, width);
+    check(after, width);
+    check(data, width, channels);
+    size_t fw = width * channels, frames = data.size() / fw;
+    // positions are exact in a double and a sum of two cannot wrap
+    constexpr long long exact = 1LL << 53;
+    if (start < 0 || start > exact || count < 0 || count > exact || !(per_ms >= 0.5)) {
+        return false;
+    }
+    // where the frames of the chunk for millisecond ms start, the way AudioSegment works them out
+    auto at = [&](long long ms, long long &frame) {
+        double v = (double)ms * per_ms;
+        if (!(v < 4e18)) {
+            return false;
+        }
+        frame = (long long)v;
+        return true;
+    };
+    // a chunk short of frames at the end of the data is filled with silence, but not more than 2 ms of it
+    struct Chunk {
+        size_t from, have, fill;
+    };
+    auto chunk = [&](long long i, Chunk &c) {
+        long long a, b;
+        if (!at(start + i, a) || !at(start + i + 1, b) || b < a) {
+            return false;
+        }
+        size_t first = std::min<unsigned long long>(a, frames), last = std::min<unsigned long long>(b, frames);
+        size_t missing = (size_t)(b - a) - (last - first);
+        if ((double)missing > 2 * per_ms) {
+            return false;
+        }
+        c.from = first;
+        c.have = last - first;
+        c.fill = c.have ? missing : 0;
+        return true;
+    };
+    size_t total = before.size();
+    if (after.size() > SIZE_MAX - total) {
+        throw std::bad_alloc();
+    }
+    total += after.size();
+    for (long long i = 0; i < count; i++) {
+        Chunk c;
+        if (!chunk(i, c)) {
+            return false;
+        }
+        // from here on the chunks are empty
+        if (c.from == frames) {
+            break;
+        }
+        size_t n = (c.have + c.fill) * fw;
+        if (n > SIZE_MAX - total) {
+            throw std::bad_alloc();
+        }
+        total += n;
+    }
+    char *out = alloc(total);
+    bool nan = false;
+    by_width(width, [&](auto w) {
+        constexpr size_t W = decltype(w)::value;
+        auto copy = [&](std::string_view src, std::optional<double> gain) {
+            if (gain) {
+                nan |= gain_run<W>(src.data(), out, src.size() / W, *gain);
+            } else if (!src.empty()) {
+                memcpy(out, src.data(), src.size());
+            }
+            out += src.size();
+        };
+        copy(before, before_gain);
+        for (long long i = 0; i < count; i++) {
+            Chunk c;
+            chunk(i, c);
+            if (c.from == frames) {
+                break;
+            }
+            double factor = from_power + step * (double)i;
+            size_t bytes = c.have * fw, pad = c.fill * fw;
+            nan |= gain_run<W>(data.data() + c.from * fw, out, bytes / W, factor);
+            // silence times a factor that is not finite is not a number either
+            nan |= pad && !std::isfinite(factor);
+            memset(out + bytes, 0, pad);
+            out += bytes + pad;
+        }
+        copy(after, after_gain);
+    });
+    if (nan) {
+        throw std::invalid_argument("not a number");
+    }
+    return true;
 }
 
 void channel(std::string_view data, size_t width, size_t channels, size_t index, const Alloc &alloc) {

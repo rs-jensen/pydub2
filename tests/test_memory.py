@@ -86,6 +86,11 @@ def test_fade_does_not_copy_what_it_leaves_alone(call):
     assert peak_x("seg." + call) < 2.5
 
 
+# 3.8 before and 2.0 after: a bytes object per millisecond was held next to the audio and then joined
+def test_a_fade_over_the_whole_file_makes_the_result_once():
+    assert peak_x("seg.fade(to_gain=-20, start=0, duration=len(seg))") < 2.5
+
+
 # 3.4 before and 2.0 after at this size: the audio and the channels, there was an array of the whole audio as well
 def test_split_to_mono_copies_each_sample_once():
     assert peak_x("seg.split_to_mono()") < 2.7
