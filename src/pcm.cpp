@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <new>
 #include <numeric>
+#include <optional>
 #include <stdexcept>
 #include <type_traits>
 
@@ -80,24 +81,6 @@ static int scale(double val, size_t width) {
     return (int)floor(fbound(val, minvals[width], maxvals[width]));
 }
 
-double sumsq(std::string_view data, size_t width, bool fused) {
-    check(data, width);
-    double sum = 0;
-    for (size_t i = 0; i < data.size(); i += width) {
-        double val = get(&data[i], width);
-        sum = fused ? std::fma(val, val, sum) : sum + val * val;
-    }
-    return sum;
-}
-
-long long rms(std::string_view data, size_t width, bool fused) {
-    double sum = sumsq(data, width, fused);
-    if (data.empty()) {
-        return 0;
-    }
-    return (unsigned int)sqrt(sum / (double)(data.size() / width));
-}
-
 template <class F>
 static void by_width(size_t width, F f) {
     if (width == 1) {
@@ -109,6 +92,49 @@ static void by_width(size_t width, F f) {
     } else {
         f(std::integral_constant<size_t, 4>());
     }
+}
+
+double sumsq(std::string_view data, size_t width, bool fused) {
+    check(data, width);
+    size_t n = data.size() / width, i = 0;
+    double sum = 0;
+    // up to 2^53 a double adds the squares exactly, so an integer sum is the same and vectorises. Past it they go in order
+    if (width < 4) {
+        by_width(width, [&](auto w) {
+            constexpr size_t W = decltype(w)::value;
+            if constexpr (W < 4) {
+                constexpr uint64_t top = (uint64_t)1 << 53;
+                uint64_t exact = 0;
+                while (i < n) {
+                    size_t m = std::min<size_t>(n - i, 4096);
+                    uint64_t block = 0;
+                    for (size_t k = 0; k < m; k++) {
+                        int64_t v = get(&data[(i + k) * W], W);
+                        block += (uint64_t)(v * v);
+                    }
+                    if (block > top - exact) {
+                        break;
+                    }
+                    exact += block;
+                    i += m;
+                }
+                sum = (double)exact;
+            }
+        });
+    }
+    for (; i < n; i++) {
+        double val = get(&data[i * width], width);
+        sum = fused ? std::fma(val, val, sum) : sum + val * val;
+    }
+    return sum;
+}
+
+long long rms(std::string_view data, size_t width, bool fused) {
+    double sum = sumsq(data, width, fused);
+    if (data.empty()) {
+        return 0;
+    }
+    return (unsigned int)sqrt(sum / (double)(data.size() / width));
 }
 
 long long max(std::string_view data, size_t width) {
@@ -125,18 +151,61 @@ long long max(std::string_view data, size_t width) {
     return m;
 }
 
+// the floor of a product held to the sample range, the way audioop's mul and tomono end. nan is set when it is not a number
+template <size_t W>
+static inline int floored(double v, bool &nan) {
+    bool bad = v != v;
+    nan |= bad;
+    v = v > maxvals[W] ? (double)maxvals[W] : v;
+    v = v < minvals[W] + 1.0 ? (double)minvals[W] : v;
+    v = bad ? 0.0 : v;
+    // v is within the range of an int, so the cast cannot overflow
+    int i = (int)v;
+    return i - (v < (double)i);
+}
+
+template <size_t W>
+static inline int gain1(int x, double factor, bool &nan) {
+    return floored<W>((double)x * factor, nan);
+}
+
+// count samples scaled from in to out, they may be the same memory. true if one of them came out not a number
+template <size_t W>
+static bool gain_run(const char *in, char *out, size_t count, double factor) {
+    bool nan = false;
+    if constexpr (W < 3) {
+        // one and two byte samples take few values, so each is worked out once
+        if (count >= (size_t)2 << (8 * W)) {
+            using T = std::conditional_t<W == 1, int8_t, int16_t>;
+            std::vector<T> table((size_t)1 << (8 * W));
+            bool bad = false;
+            for (size_t u = 0; u < table.size(); u++) {
+                table[u] = (T)gain1<W>(W == 1 ? (int8_t)(uint8_t)u : (int16_t)(uint16_t)u, factor, bad);
+            }
+            if (!bad) {
+                for (size_t k = 0; k < count; k++) {
+                    std::conditional_t<W == 1, uint8_t, uint16_t> u;
+                    memcpy(&u, in + k * W, W);
+                    T v = table[u];
+                    memcpy(out + k * W, &v, W);
+                }
+                return false;
+            }
+        }
+    }
+    for (size_t k = 0; k < count; k++) {
+        put(out + k * W, W, gain1<W>(get(in + k * W, W), factor, nan));
+    }
+    return nan;
+}
+
 void mul(std::string_view data, size_t width, double factor, const Alloc &alloc) {
     check(data, width);
     char *out = alloc(data.size());
     bool nan = false;
     by_width(width, [&](auto w) {
         constexpr size_t W = decltype(w)::value;
-        for (size_t i = 0; i < data.size(); i += W) {
-            double v = get(&data[i], W) * factor;
-            bool bad = std::isnan(v);
-            nan |= bad;
-            put(out + i, W, bad ? 0 : (int)floor(fbound(v, minvals[W], maxvals[W])));
-        }
+        nan = gain_run<W>(data.data(), out, data.size() / W, factor);
     });
     if (nan) {
         throw std::invalid_argument("not a number");
@@ -169,24 +238,33 @@ void lin2lin(std::string_view data, size_t width, size_t new_width, const Alloc 
     check("", new_width);
     char *out = alloc(data.size() / width * new_width);
     bool narrow = nearest && new_width < width;
+    if (!narrow) {
+        by_width(width, [&](auto w) {
+            constexpr size_t W = decltype(w)::value;
+            by_width(new_width, [&](auto nw) {
+                constexpr size_t N = decltype(nw)::value;
+                size_t count = data.size() / W;
+                for (size_t k = 0; k < count; k++) {
+                    put32(out + k * N, N, get32(&data[k * W], W));
+                }
+            });
+        });
+        return;
+    }
     int64_t top = ((int64_t)1 << (8 * new_width - 1)) - 1;
     int shift = 32 - 8 * (int)new_width;
     for (size_t i = 0, j = 0; i < data.size(); i += width, j += new_width) {
-        if (narrow) {
-            int64_t v;
-            if (wide) {
-                // the high half, with its lowest bit set when the low half is not 0, rounds like the whole sample
-                memcpy(&v, &data[i], 8);
-                v = (v >> 32) | ((v & 0xFFFFFFFF) != 0);
-            } else {
-                v = get32(&data[i], width);
-            }
-            // ties go to the even sample like lrintf, where ffmpeg rounds a float
-            v = (v + ((int64_t)1 << (shift - 1)) - 1 + ((v >> shift) & 1)) >> shift;
-            put(out + j, new_width, (int)std::min(top, std::max(-top - 1, v)));
+        int64_t v;
+        if (wide) {
+            // the high half, with its lowest bit set when the low half is not 0, rounds like the whole sample
+            memcpy(&v, &data[i], 8);
+            v = (v >> 32) | ((v & 0xFFFFFFFF) != 0);
         } else {
-            put32(out + j, new_width, get32(&data[i], width));
+            v = get32(&data[i], width);
         }
+        // ties go to the even sample like lrintf, where ffmpeg rounds a float
+        v = (v + ((int64_t)1 << (shift - 1)) - 1 + ((v >> shift) & 1)) >> shift;
+        put(out + j, new_width, (int)std::min(top, std::max(-top - 1, v)));
     }
 }
 
@@ -210,10 +288,7 @@ void mix(std::string_view head, std::string_view tail, std::string_view over, si
             }
             int x = get(&tail[i], W);
             if (gain) {
-                double v = x * factor;
-                bool bad = std::isnan(v);
-                nan |= bad;
-                x = bad ? 0 : (int)floor(fbound(v, minvals[W], maxvals[W]));
+                x = gain1<W>(x, factor, nan);
             }
             long long sum = (long long)x + get(&over[j], W);
             put(out + i, W, (int)std::min<long long>(std::max<long long>(sum, minvals[W]), maxvals[W]));
@@ -222,6 +297,103 @@ void mix(std::string_view head, std::string_view tail, std::string_view over, si
     if (nan) {
         throw std::invalid_argument("not a number");
     }
+}
+
+bool fade(std::string_view before, std::optional<double> before_gain, std::string_view data, size_t width, size_t channels,
+          double per_ms, long long start, long long count, double from_power, double step, std::string_view after,
+          std::optional<double> after_gain, const Alloc &alloc) {
+    check(before, width);
+    check(after, width);
+    check(data, width, channels);
+    size_t fw = width * channels, frames = data.size() / fw;
+    // positions are exact in a double and a sum of two cannot wrap
+    constexpr long long exact = 1LL << 53;
+    if (start < 0 || start > exact || count < 0 || count > exact || !(per_ms >= 0.5)) {
+        return false;
+    }
+    // where the frames of the chunk for millisecond ms start, the way AudioSegment works them out
+    auto at = [&](long long ms, long long &frame) {
+        double v = (double)ms * per_ms;
+        if (!(v < 4e18)) {
+            return false;
+        }
+        frame = (long long)v;
+        return true;
+    };
+    // a chunk short of frames at the end of the data is filled with silence, but not more than 2 ms of it
+    struct Chunk {
+        size_t from, have, fill;
+    };
+    auto chunk = [&](long long i, Chunk &c) {
+        long long a, b;
+        if (!at(start + i, a) || !at(start + i + 1, b) || b < a) {
+            return false;
+        }
+        size_t first = std::min<unsigned long long>((unsigned long long)a, frames);
+        size_t last = std::min<unsigned long long>((unsigned long long)b, frames);
+        size_t missing = (size_t)(b - a) - (last - first);
+        if ((double)missing > 2 * per_ms) {
+            return false;
+        }
+        c.from = first;
+        c.have = last - first;
+        c.fill = c.have ? missing : 0;
+        return true;
+    };
+    size_t total = before.size();
+    if (after.size() > SIZE_MAX - total) {
+        throw std::bad_alloc();
+    }
+    total += after.size();
+    for (long long i = 0; i < count; i++) {
+        Chunk c{};
+        if (!chunk(i, c)) {
+            return false;
+        }
+        // from here on the chunks are empty
+        if (c.from == frames) {
+            break;
+        }
+        size_t n = (c.have + c.fill) * fw;
+        if (n > SIZE_MAX - total) {
+            throw std::bad_alloc();
+        }
+        total += n;
+    }
+    char *out = alloc(total);
+    bool nan = false;
+    by_width(width, [&](auto w) {
+        constexpr size_t W = decltype(w)::value;
+        auto copy = [&](std::string_view src, std::optional<double> gain) {
+            if (gain) {
+                // msvc does not take W of the enclosing lambda as a constant here
+                nan |= gain_run<decltype(w)::value>(src.data(), out, src.size() / decltype(w)::value, *gain);
+            } else if (!src.empty()) {
+                memcpy(out, src.data(), src.size());
+            }
+            out += src.size();
+        };
+        copy(before, before_gain);
+        for (long long i = 0; i < count; i++) {
+            Chunk c{};
+            chunk(i, c);
+            if (c.from == frames) {
+                break;
+            }
+            double factor = from_power + step * (double)i;
+            size_t bytes = c.have * fw, pad = c.fill * fw;
+            nan |= gain_run<W>(data.data() + c.from * fw, out, bytes / W, factor);
+            // silence times a factor that is not finite is not a number either
+            nan |= pad && !std::isfinite(factor);
+            memset(out + bytes, 0, pad);
+            out += bytes + pad;
+        }
+        copy(after, after_gain);
+    });
+    if (nan) {
+        throw std::invalid_argument("not a number");
+    }
+    return true;
 }
 
 void channel(std::string_view data, size_t width, size_t channels, size_t index, const Alloc &alloc) {
@@ -282,19 +454,33 @@ void widen24(std::string_view data, size_t width, const Alloc &alloc) {
 void tomono(std::string_view data, size_t width, double lfac, double rfac, const Alloc &alloc) {
     check(data, width, 2);
     char *out = alloc(data.size() / 2);
-    for (size_t i = 0; i < data.size(); i += width * 2) {
-        double val = (double)get(&data[i], width) * lfac + (double)get(&data[i + width], width) * rfac;
-        put(out + i / 2, width, scale(val, width));
+    bool nan = false;
+    by_width(width, [&](auto w) {
+        constexpr size_t W = decltype(w)::value;
+        for (size_t i = 0; i < data.size(); i += W * 2) {
+            double val = (double)get(&data[i], W) * lfac + (double)get(&data[i + W], W) * rfac;
+            put(out + i / 2, W, floored<W>(val, nan));
+        }
+    });
+    if (nan) {
+        throw std::invalid_argument("not a number");
     }
 }
 
 void tostereo(std::string_view data, size_t width, double lfac, double rfac, const Alloc &alloc) {
     check(data, width);
     char *out = alloc(data.size() * 2);
-    for (size_t i = 0; i < data.size(); i += width) {
-        double val = get(&data[i], width);
-        put(out + i * 2, width, scale(val * lfac, width));
-        put(out + i * 2 + width, width, scale(val * rfac, width));
+    bool nan = false;
+    by_width(width, [&](auto w) {
+        constexpr size_t W = decltype(w)::value;
+        for (size_t i = 0; i < data.size(); i += W) {
+            int val = get(&data[i], W);
+            put(out + i * 2, W, gain1<W>(val, lfac, nan));
+            put(out + i * 2 + W, W, gain1<W>(val, rfac, nan));
+        }
+    });
+    if (nan) {
+        throw std::invalid_argument("not a number");
     }
 }
 
@@ -321,9 +507,13 @@ void downmix(std::string_view data, size_t width, size_t channels, const Alloc &
 void reverse(std::string_view data, size_t width, const Alloc &alloc) {
     check(data, width);
     char *out = alloc(data.size());
-    for (size_t i = 0; i < data.size(); i += width) {
-        memcpy(out + data.size() - width - i, &data[i], width);
-    }
+    by_width(width, [&](auto w) {
+        constexpr size_t W = decltype(w)::value;
+        size_t count = data.size() / W;
+        for (size_t k = 0; k < count; k++) {
+            memcpy(out + (count - 1 - k) * W, &data[k * W], W);
+        }
+    });
 }
 
 int avg(std::string_view data, size_t width, size_t step, size_t first) {
