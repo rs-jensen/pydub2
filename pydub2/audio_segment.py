@@ -975,7 +975,7 @@ class AudioSegment(object):
 
     @classmethod
     def stream(cls, file, chunk_ms=10000, start_second=None, duration=None):
-        """Yields the file in chunk_ms pieces without loading all of it. wav, flac, mp3, ogg and opus only."""
+        """Yields the file in chunk_ms pieces. wav, flac, mp3, ogg and opus only. A path is not loaded whole, a file object or a fifo is."""
         lim = limits()
         filename = None if hasattr(file, "read") else fsdecode(file)
         data = read_file(file, lim) if filename is None else None
