@@ -56,6 +56,7 @@ What changed in each release.
 - `export` with a `cover` that is not mp3 and a picture, or not a string, raises the `AttributeError` of pydub with its text.
 - A missing attribute on an `AudioSegment` says `'AudioSegment' object has no attribute 'x'` like pydub, where it said only `x`. An `AttributeError` inside a property of a subclass keeps its own message.
 - `overlay` with a `times` that is not a number works when the overlaid audio is as long as the rest, and raises `TypeError` when it has to loop, as pydub does. It raised `TypeError` every time.
+- `detect_silence` with a `silence_thresh` that is not a number raises `ValueError` for a string like `"x"`, as pydub does, and not `TypeError`.
 
 ### Security
 

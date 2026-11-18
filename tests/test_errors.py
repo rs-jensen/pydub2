@@ -125,3 +125,12 @@ def test_overlay_times_not_a_number(times, length):
         except Exception as e:
             results.append(type(e).__name__)
     assert results[0] == results[1]
+
+
+@pytest.mark.parametrize("thresh", ["x", None, [1], "-20", 3j])
+def test_detect_silence_threshold_type(thresh):
+    def call(AS):
+        pydub = pytest.importorskip("pydub")
+        mod = pydub.silence if AS.__module__.startswith("pydub.") else pydub2.silence
+        return mod.detect_silence(AS.silent(1000), 100, thresh)
+    assert bad_call("pydub2", call) == bad_call("pydub", call)
