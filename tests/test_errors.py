@@ -111,3 +111,17 @@ def test_property_error_is_kept():
             return self.missing_thing
     with pytest.raises(AttributeError, match="no attribute 'missing_thing'"):
         Sub.silent(10).broken
+
+
+@pytest.mark.parametrize("times", ["x", [1], b"2", object(), [], "", 3j, 2.5])
+@pytest.mark.parametrize("length", [100, 1000, 3000])
+def test_overlay_times_not_a_number(times, length):
+    pydub = pytest.importorskip("pydub")
+    results = []
+    for lib in (pydub, pydub2):
+        base = lib.AudioSegment.silent(2000)
+        try:
+            results.append(base.overlay(lib.AudioSegment.silent(length), times=times).raw_data)
+        except Exception as e:
+            results.append(type(e).__name__)
+    assert results[0] == results[1]
