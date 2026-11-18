@@ -1,3 +1,4 @@
+import fractions
 import io
 import math
 import os
@@ -7,6 +8,7 @@ import subprocess
 import sys
 import wave
 
+import numpy as np
 import pytest
 
 import pathlib
@@ -254,3 +256,80 @@ def test_replaced_lookups_still_work(tmp_path, monkeypatch, m4a, name, args):
     playback._play_with_ffplay(AudioSegment.silent(100))
     assert calls[0][0] == (path if name == "get_player_name" else str(folder / "ffplay"))
     assert all(x is None for x in seen)
+
+
+@pytest.mark.parametrize("kind", ["start_second", "duration"])
+@pytest.mark.parametrize("value, plain", [(fractions.Fraction(1, 2), 0.5), (True, 1), (fractions.Fraction(1, 4), 0.25), (np.float32(0.25), 0.25)])
+def test_ffmpeg_gets_seconds_as_plain_text(tmp_path, kind, value, plain):
+    path = str(tmp_path / "a.flac")
+    AudioSegment.silent(3000, 8000).export(path, "flac")
+    got = AudioSegment.from_file(path, codec="flac", **{kind: value})
+    assert got.raw_data == AudioSegment.from_file(path, codec="flac", **{kind: plain}).raw_data
+
+
+@pytest.mark.parametrize("codec", [None, "flac"])
+@pytest.mark.parametrize("value", [np.float16(0.1), np.float16(0.3)])
+def test_seconds_go_to_ffmpeg_as_pydub_writes_them(tmp_path, codec, value):
+    path = str(tmp_path / "a.flac")
+    AudioSegment(np.arange(96000, dtype="<i2").tobytes(), sample_width=2, frame_rate=48000, channels=1).export(path, "flac")
+    got = AudioSegment.from_file(path, codec=codec, start_second=value)
+    assert got.raw_data == pydub.AudioSegment.from_file(path, codec=codec, start_second=value).raw_data
+
+
+@pytest.mark.parametrize("fmt, kw", [("wav", {"codec": "pcm_s24le"}), ("wav", {"parameters": ["-ac", "2"]}), ("flac", {"codec": "flac"})])
+def test_export_with_codec_or_parameters_drops_a_partial_frame_like_ffmpeg(fmt, kw):
+    def export(cls):
+        seg = cls(b"", sample_width=2, frame_rate=8000, channels=2)._spawn(bytes(range(256)) * 8 + b"\3")
+        out = io.BytesIO()
+        seg.export(out, format=fmt, **kw)
+        back = pydub.AudioSegment.from_file(io.BytesIO(out.getvalue()), format=fmt)
+        return back.sample_width, back.raw_data
+    assert export(AudioSegment) == export(pydub.AudioSegment)
+
+
+def test_ffmpeg_gets_a_negative_start_as_plain_text(tmp_path):
+    path = str(tmp_path / "a.flac")
+    AudioSegment.silent(3000, 8000).export(path, "flac")
+    got = AudioSegment.from_file(path, codec="flac", start_second=fractions.Fraction(-1, 2))
+    assert got.raw_data == AudioSegment.from_file(path, codec="flac", start_second=-0.5).raw_data
+
+
+def test_ffmpeg_gets_tiny_seconds_as_plain_text(tmp_path):
+    path = str(tmp_path / "a.flac")
+    AudioSegment.silent(3000, 8000).export(path, "flac")
+    for value in (1e-5, np.float64(1e-5), np.float32(1e-9)):
+        assert AudioSegment.from_file(path, codec="flac", start_second=value) == AudioSegment.from_file(path)
+
+
+@pytest.mark.parametrize("kind", [str, pathlib.Path])
+def test_temporary_files_know_a_wav_by_the_name_of_a_str_only(tmp_path, kind):
+    path = tmp_path / "a.wav"
+    AudioSegment.silent(100, 8000).set_sample_width(1).export(str(path), "wav")
+    got = AudioSegment.from_file_using_temporary_files(kind(path))
+    want = pydub.AudioSegment.from_file_using_temporary_files(kind(path))
+    assert (got.sample_width, got.raw_data) == (want.sample_width, want.raw_data)
+
+
+def test_float_wav_ties_round_to_even_like_ffmpeg(tmp_path):
+    samples = np.array([0.5, 1.5, 2.5, -0.5, -1.5, -2.5, 32758.5, 32759.5], "<f4") / 32768
+    data = samples.tobytes()
+    fmt = struct.pack("<HHIIHH", 3, 1, 8000, 32000, 4, 32)
+    body = b"WAVEfmt " + struct.pack("<I", 16) + fmt + b"data" + struct.pack("<I", len(data)) + data
+    path = tmp_path / "a.wav"
+    path.write_bytes(b"RIFF" + struct.pack("<I", len(body)) + body)
+    got = AudioSegment.from_file_using_temporary_files(str(path))
+    want = pydub.AudioSegment.from_file_using_temporary_files(str(path))
+    assert got.sample_width == 2 and got.raw_data == want.raw_data
+
+
+def test_double_wav_near_a_tie_rounds_like_ffmpeg(tmp_path):
+    ties = np.array([0.5, 1.5, 2.5, 100.5, -0.5, -1.5, -2.5, -100.5])
+    samples = (np.concatenate([ties + 2.0 ** -25, ties - 2.0 ** -25]) / 32768).astype("<f8")
+    data = samples.tobytes()
+    fmt = struct.pack("<HHIIHH", 3, 1, 8000, 64000, 8, 64)
+    body = b"WAVEfmt " + struct.pack("<I", 16) + fmt + b"data" + struct.pack("<I", len(data)) + data
+    path = tmp_path / "a.wav"
+    path.write_bytes(b"RIFF" + struct.pack("<I", len(body)) + body)
+    got = AudioSegment.from_file_using_temporary_files(str(path))
+    want = pydub.AudioSegment.from_file_using_temporary_files(str(path))
+    assert got.sample_width == 2 and got.raw_data == want.raw_data

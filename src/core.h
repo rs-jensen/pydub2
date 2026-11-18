@@ -74,7 +74,7 @@ long long rms(std::string_view data, size_t width, bool fused);
 long long max(std::string_view data, size_t width);
 void mul(std::string_view data, size_t width, double factor, const Alloc &alloc);
 void add(std::string_view a, std::string_view b, size_t width, const Alloc &alloc);
-void lin2lin(std::string_view data, size_t width, size_t new_width, const Alloc &alloc);
+void lin2lin(std::string_view data, size_t width, size_t new_width, const Alloc &alloc, bool nearest = false);
 // head and tail joined, with over added to the first n bytes of the tail and repeated to fill them. gain scales the tail first
 void mix(std::string_view head, std::string_view tail, std::string_view over, size_t width, size_t n, bool gain, double factor,
          const Alloc &alloc);

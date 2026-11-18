@@ -8,6 +8,8 @@ import wave
 import numpy as np
 import pytest
 
+from pydub2 import AudioSegment
+
 data = os.path.join(os.path.dirname(__file__), "data")
 
 notes = [220, 262, 330, 294, 247, 196, 349, 440]
@@ -116,3 +118,11 @@ def make():
 def audio():
     if not os.path.exists(os.path.join(data, "test-192khz-64bit.wav")):
         make()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def converter():
+    # the suite sets the converter to a full path, other tests expect the default
+    before = AudioSegment.__dict__["converter"]
+    yield
+    AudioSegment.converter = before

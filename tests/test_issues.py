@@ -565,7 +565,8 @@ def test_temporary_files_give_16_bit_like_pydub(tmp_path, fmt, rate, channels, k
     if fmt == "opus":
         # libopus and ffmpeg decode opus differently, so the samples are checked against the 32 bit load
         wide = np.frombuffer(pydub2.AudioSegment.from_file(path, **kw).raw_data, "<i4").astype(np.int64)
-        want = np.clip((wide + 0x8000) >> 16, -32768, 32767)
+        # a tie goes to the even sample, as lrintf in ffmpeg does
+        want = np.clip((wide + 0x7FFF + ((wide >> 16) & 1)) >> 16, -32768, 32767)
     else:
         want = np.frombuffer(old.raw_data, "<i2").astype(int)
     got = np.frombuffer(new.raw_data, "<i2").astype(int)

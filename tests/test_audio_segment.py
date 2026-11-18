@@ -266,3 +266,32 @@ def test_get_sample_slice_with_floats():
         pydub.AudioSegment(wav).get_sample_slice(0.0, 12)
     with pytest.raises(TypeError):
         pydub2.AudioSegment(wav).get_sample_slice(0.0, 12)
+
+
+def test_split_to_mono_of_a_width_without_array_type_raises_like_pydub():
+    def split(lib):
+        seg = lib.AudioSegment.from_file(io.BytesIO(b""), format="pcm", sample_width=0, frame_rate=8000, channels=0)
+        try:
+            return seg.split_to_mono()
+        except Exception as e:
+            return type(e).__name__
+    assert split(pydub2) == split(pydub) == "KeyError"
+
+
+@pytest.mark.parametrize("rate, start, duration", [(5, 0.05, 0.35), (410, 0.1, 0.2), (20, 0.05, 2.3)])
+def test_part_of_a_wav_ends_where_pydub_ends_it(tmp_path, rate, start, duration):
+    path = str(tmp_path / "a.wav")
+    pydub2.AudioSegment(bytes(range(256)) * (rate // 16 + 1), sample_width=2, frame_rate=rate, channels=1).export(path, "wav")
+    for how in ("from_file", "from_file_using_temporary_files"):
+        got = getattr(pydub2.AudioSegment, how)(path, start_second=start, duration=duration)
+        assert got.raw_data == getattr(pydub.AudioSegment, how)(path, start_second=start, duration=duration).raw_data
+
+
+def test_split_to_mono_of_no_channels_and_a_part_sample_raises_like_pydub():
+    def split(lib):
+        seg = lib.AudioSegment.from_file(io.BytesIO(b"\0" * 3), format="pcm", sample_width=2, frame_rate=8000, channels=0)
+        try:
+            return seg.split_to_mono()
+        except Exception as e:
+            return type(e).__name__
+    assert split(pydub2) == split(pydub) == "ValueError"

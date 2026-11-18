@@ -87,7 +87,7 @@ def encode(data, rate, channels, width, bitrate=None, tags=None, id3v2_version="
            converter="ffmpeg"):
     out_rate, out_channels, quality = rate, channels, None
     params = list(parameters or [])
-    if len(params) % 2 or channels > 2:
+    if len(params) % 2 or channels > 2 or width not in (1, 2, 3, 4):
         return None
     try:
         for k, v in zip(params[::2], params[1::2]):
