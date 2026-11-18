@@ -279,3 +279,12 @@ def test_ffmpeg_gets_tiny_seconds_as_plain_text(tmp_path):
     AudioSegment.silent(3000, 8000).export(path, "flac")
     for value in (1e-5, np.float64(1e-5), np.float32(1e-9)):
         assert AudioSegment.from_file(path, codec="flac", start_second=value) == AudioSegment.from_file(path)
+
+
+@pytest.mark.parametrize("kind", [str, pathlib.Path])
+def test_temporary_files_know_a_wav_by_the_name_of_a_str_only(tmp_path, kind):
+    path = tmp_path / "a.wav"
+    AudioSegment.silent(100, 8000).set_sample_width(1).export(str(path), "wav")
+    got = AudioSegment.from_file_using_temporary_files(kind(path))
+    want = pydub.AudioSegment.from_file_using_temporary_files(kind(path))
+    assert (got.sample_width, got.raw_data) == (want.sample_width, want.raw_data)

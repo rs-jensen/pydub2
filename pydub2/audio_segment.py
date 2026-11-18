@@ -814,6 +814,8 @@ class AudioSegment(object):
             filename = fsdecode(file)
         except TypeError:
             filename = None
+        # from_file_using_temporary_files in pydub only looks at the name of a str or bytes path
+        named = filename if not tmp or isinstance(file, (str, bytes)) else None
         if isinstance(file, bytes):
             file = filename
         file, close_file = _fd_or_path_or_tempfile(file, 'rb', tempfile=False)
@@ -826,8 +828,8 @@ class AudioSegment(object):
             if format == f:
                 return True
 
-            if filename:
-                return filename.lower().endswith(".{0}".format(f))
+            if named:
+                return named.lower().endswith(".{0}".format(f))
 
             return False
 
