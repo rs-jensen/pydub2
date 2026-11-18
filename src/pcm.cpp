@@ -201,6 +201,42 @@ void mix(std::string_view head, std::string_view tail, std::string_view over, si
     }
 }
 
+void channel(std::string_view data, size_t width, size_t channels, size_t index, const Alloc &alloc) {
+    check(data, width, 1);
+    check({}, width, channels);
+    // a partial last frame counts, the channels it reaches are one sample longer
+    size_t samples = data.size() / width;
+    size_t count = index < samples ? (samples - index + channels - 1) / channels : 0;
+    char *out = alloc(count * width);
+    by_width(width, [&](auto w) {
+        constexpr size_t W = decltype(w)::value;
+        for (size_t k = 0; k < count; k++) {
+            memcpy(out + k * W, &data[(index + k * channels) * W], W);
+        }
+    });
+}
+
+void interleave(const std::vector<std::string_view> &parts, size_t width, size_t frames, const Alloc &alloc) {
+    check({}, width, parts.size());
+    for (auto &p : parts) {
+        check(p, width);
+        if (p.size() / width > frames) {
+            throw std::invalid_argument("channel longer than the frames");
+        }
+    }
+    size_t channels = parts.size();
+    char *out = alloc(frames * channels * width);
+    memset(out, 0, frames * channels * width);
+    by_width(width, [&](auto w) {
+        constexpr size_t W = decltype(w)::value;
+        for (size_t c = 0; c < channels; c++) {
+            for (size_t k = 0; k < parts[c].size() / W; k++) {
+                memcpy(out + (k * channels + c) * W, &parts[c][k * W], W);
+            }
+        }
+    });
+}
+
 void tomono(std::string_view data, size_t width, double lfac, double rfac, const Alloc &alloc) {
     check(data, width, 2);
     char *out = alloc(data.size() / 2);

@@ -716,17 +716,16 @@ class AudioSegment(object):
         frame_rate = segs[0].frame_rate
 
         frame_count = max(int(seg.frame_count()) for seg in segs)
-        data = array.array(
-            segs[0].array_type,
-            b'\0' * (frame_count * sample_width * channels)
-        )
-
-        for i, seg in enumerate(segs):
-            samples = seg.get_array_of_samples()
-            data[i:len(samples) * channels if fill_up else None:channels] = samples
+        parts = []
+        for seg in segs:
+            part = seg._data
+            samples = len(part) // sample_width
+            if channels > 1 and samples != frame_count and not fill_up:
+                raise ValueError("attempt to assign array of size %d to extended slice of size %d" % (samples, frame_count))
+            parts.append(part)
 
         return cls(
-            data,
+            _pydub2.interleave(parts, sample_width, frame_count),
             channels=channels,
             sample_width=sample_width,
             frame_rate=frame_rate,
@@ -1262,22 +1261,11 @@ class AudioSegment(object):
         if self.channels == 1:
             return [self]
 
-        samples = self.get_array_of_samples()
-
-        mono_channels = []
-        for i in range(self.channels):
-            samples_for_current_channel = samples[i::self.channels]
-
-            try:
-                mono_data = samples_for_current_channel.tobytes()
-            except AttributeError:
-                mono_data = samples_for_current_channel.tostring()
-
-            mono_channels.append(
-                self._spawn(mono_data, overrides={"channels": 1, "frame_width": self.sample_width})
-            )
-
-        return mono_channels
+        return [
+            self._spawn(_pydub2.channel(self._data, self.sample_width, self.channels, i),
+                        overrides={"channels": 1, "frame_width": self.sample_width})
+            for i in range(self.channels)
+        ]
 
     @property
     def rms(self):

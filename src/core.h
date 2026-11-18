@@ -77,6 +77,10 @@ void lin2lin(std::string_view data, size_t width, size_t new_width, const Alloc 
 // head and tail joined, with over added to the first n bytes of the tail and repeated to fill them. gain scales the tail first
 void mix(std::string_view head, std::string_view tail, std::string_view over, size_t width, size_t n, bool gain, double factor,
          const Alloc &alloc);
+// samples index, index + channels, index + 2 * channels and so on, the way a python array slices them
+void channel(std::string_view data, size_t width, size_t channels, size_t index, const Alloc &alloc);
+// one mono part per channel, the frames a part does not have are 0
+void interleave(const std::vector<std::string_view> &parts, size_t width, size_t frames, const Alloc &alloc);
 void tomono(std::string_view data, size_t width, double lfac, double rfac, const Alloc &alloc);
 void tostereo(std::string_view data, size_t width, double lfac, double rfac, const Alloc &alloc);
 // pydubs set_channels(1) from 3 or more channels: each channel floor divided by the count, added up in the sample type

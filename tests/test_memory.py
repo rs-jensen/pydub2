@@ -8,10 +8,14 @@ SAW = "bytes(range(256)) * %d" % (PCM // 256)
 NOISE = "os.urandom(%d)" % PCM
 
 
-def peak_x(code, data=SAW):
-    """Peak of a fresh process over a bare import of pydub2, as a multiple of the PCM, the segment included."""
+def peak_x(code, data=SAW, mono=False):
+    """Peak of a fresh process over a bare import of pydub2, as a multiple of the PCM, the audio included."""
     setup = "import os, tempfile\nfrom pydub2 import AudioSegment\n" \
         "seg = AudioSegment(%s, sample_width=2, frame_rate=44100, channels=2)\n" % data
+    if mono:
+        # two mono segments that share nothing, half the PCM each
+        setup = "from pydub2 import AudioSegment\n" \
+            "mono = [AudioSegment(bytes(range(256)) * %d, sample_width=2, frame_rate=44100, channels=1) for _ in range(2)]\n" % (PCM // 512)
     return (peak_mb("import pydub2\n" + setup + code) - peak_mb("import pydub2")) * 1e6 / PCM
 
 
@@ -44,3 +48,13 @@ def test_overlay_loop_with_gain_makes_one_copy():
 @pytest.mark.parametrize("call", ["fade_in(2000)", "fade_out(2000)"])
 def test_fade_does_not_copy_what_it_leaves_alone(call):
     assert peak_x("seg." + call) < 2.5
+
+
+# 3.4 before and 2.0 after at this size: the audio and the channels, there was an array of the whole audio as well
+def test_split_to_mono_copies_each_sample_once():
+    assert peak_x("seg.split_to_mono()") < 2.7
+
+
+# 3.9 before and 2.0 after at this size: the channels and the result, there was an array of the whole result as well
+def test_from_mono_audiosegments_copies_each_sample_once():
+    assert peak_x("AudioSegment.from_mono_audiosegments(*mono)", mono=True) < 2.7

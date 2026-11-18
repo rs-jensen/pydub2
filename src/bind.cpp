@@ -355,6 +355,29 @@ NB_MODULE(_pydub2, m) {
         return out;
     });
 
+    m.def("channel", [](nb::bytes data, long long width, long long channels, long long index) {
+        std::string_view s = str(data);
+        nb::object out;
+        {
+            nb::gil_scoped_release g;
+            channel(s, width, channels, index, into(out));
+        }
+        return out;
+    });
+
+    m.def("interleave", [](nb::list parts, long long width, size_t frames) {
+        std::vector<std::string_view> views;
+        for (nb::handle h : parts) {
+            views.push_back(str(nb::cast<nb::bytes>(h)));
+        }
+        nb::object out;
+        {
+            nb::gil_scoped_release g;
+            interleave(views, width, frames, into(out));
+        }
+        return out;
+    });
+
     m.def("lin2lin", [](nb::bytes data, long long width, long long new_width) {
         std::string_view s = str(data);
         nb::object out;
