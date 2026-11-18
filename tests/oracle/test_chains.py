@@ -372,7 +372,7 @@ def sp_load(L, s, variant, how, src, **kw):
         except Exception as e:
             name = type(e).__name__
             # a wav with a rate or a channel count of 0 is damaged to pydub2, and pydub cannot cut it or ffmpeg refuses it, see docs/differences.md
-            if (s.frame_rate < 1 or s.channels < 1) and (L is PD or name == "CouldntDecodeError"):
+            if (s.frame_rate < 1 or s.channels < 1) and kw.get("format") not in ("raw", "pcm") and (L is PD or name == "CouldntDecodeError"):
                 return ["rate 0"]
             if L is not PD:
                 raise
@@ -390,7 +390,7 @@ def sp_load(L, s, variant, how, src, **kw):
                     seg = seg.set_sample_width(2)
             else:
                 raise
-    if L is PD and (s.frame_rate < 1 or s.channels < 1):
+    if L is PD and (s.frame_rate < 1 or s.channels < 1) and kw.get("format") not in ("raw", "pcm"):
         return ["rate 0"]
     if params_only:
         return ["load", seg.frame_rate, seg.channels, int(seg.frame_count())]
