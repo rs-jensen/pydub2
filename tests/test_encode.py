@@ -112,11 +112,40 @@ def test_lossy_keeps_the_channel_order(fmt, channels):
     heard = [loudest(ffdecode(out, 48000, channels).tobytes(), channels)]
     pcm, _, ch, width = _pydub2.decode(out)
     heard.append(loudest((np.frombuffer(pcm, "<i%d" % width) >> (8 * width - 16)).astype("<i2").tobytes(), ch))
-    # ffmpeg's libopus does not keep the order of 5 and 7 channels
-    if not (fmt == "opus" and channels in (5, 7)):
-        heard.append(loudest(ffdecode(pydub_export(data, 48000, channels, 2, fmt), 48000, channels).tobytes(), channels))
     for got in heard:
         assert np.abs(np.array(got) - TONES[:channels]).max() < 30, (got, TONES[:channels])
+
+
+# ffmpeg's libopus encoder does not keep the order of 5 and 7 channels, so those are not compared for opus
+LIKE_PYDUB = [("ogg", c) for c in (2, 5, 6, 7, 8)] + [("opus", c) for c in (2, 6, 8)]
+
+
+@needs_ff
+@pytest.mark.parametrize("fmt,channels", LIKE_PYDUB)
+def test_lossy_channel_order_like_pydub(fmt, channels):
+    data = (tone_per_channel(channels) * 32767).astype("<i2").tobytes()
+    got = loudest(ffdecode(pydub_export(data, 48000, channels, 2, fmt), 48000, channels).tobytes(), channels)
+    assert np.abs(np.array(got) - TONES[:channels]).max() < 30, (got, TONES[:channels])
+
+
+# streams, coupled streams and channel mapping of RFC 7845 family 1
+OPUS_FAMILY_1 = {
+    3: (2, 1, [0, 2, 1]),
+    4: (2, 2, [0, 1, 2, 3]),
+    5: (3, 2, [0, 4, 1, 2, 3]),
+    6: (4, 2, [0, 4, 1, 2, 3, 5]),
+    7: (4, 3, [0, 4, 1, 2, 3, 5, 6]),
+    8: (5, 3, [0, 6, 1, 2, 3, 4, 5, 7]),
+}
+
+
+@pytest.mark.parametrize("channels", sorted(OPUS_FAMILY_1))
+def test_opus_header_is_mapping_family_1(channels):
+    out = _pydub2.encode(b"\0\0" * channels * 4800, 48000, channels, 2, "opus")
+    head = out[out.index(b"OpusHead"):]
+    streams, coupled, mapping = OPUS_FAMILY_1[channels]
+    assert head[9] == channels and head[18] == 1
+    assert (head[19], head[20], list(head[21:21 + channels])) == (streams, coupled, mapping)
 
 
 @pytest.mark.parametrize("fmt", ["ogg", "opus"])

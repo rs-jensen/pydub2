@@ -128,6 +128,14 @@ def test_error_attributes(tmp_path, monkeypatch):
     assert CouldntDecodeError("x").reason is None and CouldntDecodeError("x").format is None
 
 
+def test_doctor_names_both_size_limits(capsys, tmp_path, monkeypatch):
+    good = tone(tmp_path / "a.flac")
+    monkeypatch.setattr(pydub2, "max_file_size", 100)
+    code, out = run(capsys, str(good))
+    assert code == 1
+    assert out == "%s: larger than max_bytes or max_file_size: refused\n" % good
+
+
 def test_sniff():
     assert utils.sniff(b"RIFF\0\0\0\0WAVEfmt ") == "wav"
     assert utils.sniff(b"fLaC") == "flac"
