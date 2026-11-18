@@ -46,11 +46,11 @@ def run(converter, args, data, what):
 
 
 def to_wav(converter, path=None, data=None, format=None, codec=None, parameters=None,
-           start_second=None, duration=None, lim=None):
+           start_second=None, duration=None, lim=None, probe=True):
     lim = lim or limits()
     timeout()
     try:
-        return _to_wav(converter, path, data, format, codec, parameters, start_second, duration, lim)
+        return _to_wav(converter, path, data, format, codec, parameters, start_second, duration, lim, probe)
     except json.JSONDecodeError:
         raise tagged(CouldntDecodeError("cant decode this file: ffprobe gave no usable answer"), format, "cant_decode")
     except (KeyError, TypeError, ValueError, TimeoutError, struct.error) as e:
@@ -58,12 +58,12 @@ def to_wav(converter, path=None, data=None, format=None, codec=None, parameters=
                      "timeout" if isinstance(e, TimeoutError) else "cant_decode")
 
 
-def _to_wav(converter, path, data, format, codec, parameters, start_second, duration, lim):
+def _to_wav(converter, path, data, format, codec, parameters, start_second, duration, lim, probe):
     format = {"m4a": "mp4", "wave": "wav", "wma": "asf"}.get(format, format)
     opts = (["-f", format] if format else []) + (["-acodec", codec] if codec else [])
     inp = source(path if path is not None else BytesIO(data), exe=find(converter))[0]
     out = ["-vn", "-f", "wav"]
-    if not codec:
+    if not codec and probe:
         with _using(converter):
             info = mediainfo_json(path if path is not None else BytesIO(data))
         streams = [x for x in info.get("streams", []) if x.get("codec_type") == "audio"]

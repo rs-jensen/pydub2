@@ -347,6 +347,17 @@ def _span(d, wav, start_second, duration):
     return a, n, lambda m: _slice_frames(m, d.rate, 0, end)[1]
 
 
+def _to_16bit(data, width, rounding):
+    # what ffmpeg makes of 8 and 32 bit samples, a float source is rounded and an integer one is cut
+    if width == 4 and rounding:
+        half = (0x8000).to_bytes(4, "little") * (1 << 18)
+        step = len(half)
+        data = b"".join(_pydub2.lin2lin(_pydub2.add(data[i:i + step], half[:len(data[i:i + step])], 4), 4, 2)
+                        for i in range(0, len(data), step))
+        return data
+    return _pydub2.lin2lin(data, width, 2)
+
+
 def _fit(data, m, want, fw, rate):
     # m frames to want frames like pydub slicing: cut, or fill up to 2 ms with silence
     if want < m:
@@ -737,10 +748,15 @@ class AudioSegment(object):
 
     @classmethod
     def from_file_using_temporary_files(cls, file, format=None, codec=None, parameters=None, start_second=None, duration=None, **kwargs):
-        return cls.from_file(file, format, codec, parameters, start_second, duration, **kwargs)
+        # pydub gives 16 bit for what it hands to ffmpeg here, as it does not ask ffprobe for the width
+        return cls._load(True, file, format, codec, parameters, start_second, duration, **kwargs)
 
     @classmethod
     def from_file(cls, file, format=None, codec=None, parameters=None, start_second=None, duration=None, **kwargs):
+        return cls._load(False, file, format, codec, parameters, start_second, duration, **kwargs)
+
+    @classmethod
+    def _load(cls, tmp, file, format, codec, parameters, start_second, duration, **kwargs):
         lim = limits()
         try:
             filename = fsdecode(file)
@@ -864,6 +880,8 @@ class AudioSegment(object):
         # pydub reads pcm wav itself, without codec or parameters, and cuts it in python
         head = file.read(65536) if data is None else data[:65536]
         own = wav and _pydub_wav(head)
+        # the native decoders give 32 bit for what ffmpeg converts to 16 bit, rounded from float and cut from integers
+        narrow = None if not tmp or own else "round" if sniff(head) in ("ogg", "opus") else "cut"
         if close_file:
             file.close()
         # ffmpeg cuts vorbis by packet times that drift from the sample count, only ffmpeg lands on the same sample
@@ -908,10 +926,10 @@ class AudioSegment(object):
                     pcm = read_capped(d, n, lim)
                     fw = d.channels * d.width
                     try:
-                        return cls._segment(d, _fit(pcm, len(pcm) // fw, final(len(pcm) // fw), fw, d.rate))
+                        return cls._segment(d, _fit(pcm, len(pcm) // fw, final(len(pcm) // fw), fw, d.rate), narrow)
                     except TooManyMissingFrames:
                         raise _Refused()
-                obj = cls._segment(d, read_capped(d, -1, lim) + stray)
+                obj = cls._segment(d, read_capped(d, -1, lim) + stray, narrow)
                 try:
                     if start_second is None and duration is None:
                         return obj
@@ -931,7 +949,8 @@ class AudioSegment(object):
         if tried and _ffmpeg.find(cls.converter) is None and any(is_format(f) for f in ("wav", "flac", "mp3", "ogg", "opus")):
             raise tagged(CouldntDecodeError("cant read this file"), sniff(head), "cant_decode")
         try:
-            wav = _ffmpeg.to_wav(cls.converter, None if piped else filename, data, format, codec, parameters, start_second, duration, lim)
+            wav = _ffmpeg.to_wav(cls.converter, None if piped else filename, data, format, codec, parameters, start_second, duration, lim,
+                                 not tmp)
         except (CouldntDecodeError, FileNotFoundError) as e:
             e.format = sniff(head) or getattr(e, "format", None)
             raise
@@ -947,12 +966,15 @@ class AudioSegment(object):
             return obj[0:duration * 1000]
 
     @classmethod
-    def _segment(cls, d, data):
+    def _segment(cls, d, data, narrow=None):
+        width = d.width
+        if narrow and width != 2:
+            data, width = _to_16bit(data, width, narrow == "round"), 2
         return cls(data=data, metadata={
-            'sample_width': d.width,
+            'sample_width': width,
             'frame_rate': d.rate,
             'channels': d.channels,
-            'frame_width': d.channels * d.width
+            'frame_width': d.channels * width
         })
 
     @classmethod
