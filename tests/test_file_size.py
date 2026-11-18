@@ -112,6 +112,29 @@ def test_an_endless_stream_stops_at_the_limit(cap, format):
         assert f.taken == (1 << 20) + 1
 
 
+class Grows(Counted):
+    """Says it is small when asked for its size, then gives more."""
+
+    def __init__(self, data, said):
+        super().__init__(data)
+        self.said = said
+
+    def seek(self, pos, whence=0):
+        at = super().seek(pos, whence)
+        return min(at, self.said) if whence == 2 else at
+
+
+@pytest.mark.parametrize("format", ["flac", "ogg"])
+def test_a_file_that_grows_after_its_size_is_read_stops(cap, format):
+    data = audio(format) * 3
+    cap(len(data) // 3)
+    for load in (lambda f: AudioSegment.from_file(f, format), AudioSegment.stream):
+        f = Grows(data, len(data) // 3)
+        with pytest.raises(CouldntDecodeError, match=TOO_BIG):
+            load(f)
+        assert f.taken == len(data) // 3 + 1
+
+
 def test_a_float_limit_stops_a_pipe(cap):
     cap(1e6)
     f = Pipe(audio("flac"), True)

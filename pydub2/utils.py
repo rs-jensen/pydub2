@@ -248,12 +248,11 @@ def file_size(f):
 
 
 def read_file(f, lim):
-    # a file that can seek is only read when it is under max_file_size, anything else stops one byte past it
+    # a file can grow after its size was read, so with a limit the read stops one byte past it either way
     if lim[2] is None:
         return bytes(f.read())
-    size = file_size(f)
-    check_size(size or 0, lim)
-    return bytes(f.read()) if size is not None else read_upto(f, lim)
+    check_size(file_size(f) or 0, lim)
+    return read_upto(f, lim)
 
 
 def read_upto(f, lim, n=-1):
