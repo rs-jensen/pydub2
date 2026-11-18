@@ -4,6 +4,14 @@
 #include <new>
 #include <stdexcept>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#endif
+
 #include <FLAC/stream_encoder.h>
 #include <vorbis/vorbisenc.h>
 #include <opusenc.h>
@@ -108,21 +116,85 @@ static void wav(const Audio &a, const Alloc &alloc) {
     }
 }
 
-// the file is written straight into the bytes python gets, sized for the worst case and cut to length when done
+// pages straight from the system, malloc can keep a freed block and the peak would not go down as they are copied out
+static char *map(size_t n) {
+#ifdef _WIN32
+    void *p = VirtualAlloc(nullptr, n, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (!p) {
+        throw std::bad_alloc();
+    }
+#else
+    void *p = mmap(nullptr, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        throw std::bad_alloc();
+    }
+#endif
+    return (char *)p;
+}
+
+static void unmap(char *p, size_t n) {
+#ifdef _WIN32
+    (void)n;
+    VirtualFree(p, 0, MEM_RELEASE);
+#else
+    munmap(p, n);
+#endif
+}
+
+// the encoded file in blocks, a string that grows is copied over and over and then once more into the bytes python gets
 struct Sink {
-    char *buf;
-    size_t cap, pos = 0, size = 0;
+    static constexpr size_t block = 1 << 20;
+    std::vector<char *> blocks;
+    size_t pos = 0, size = 0;
+
+    Sink() = default;
+    Sink(const Sink &) = delete;
+    ~Sink() {
+        for (char *b : blocks) {
+            if (b) {
+                unmap(b, block);
+            }
+        }
+    }
+
+    void write(const char *buf, size_t len) {
+        while (blocks.size() * block < pos + len) {
+            blocks.reserve(blocks.size() + 1);
+            blocks.push_back(map(block));
+        }
+        for (size_t done = 0; done < len;) {
+            size_t at = (pos + done) % block, n = std::min(len - done, block - at);
+            memcpy(blocks[(pos + done) / block] + at, buf + done, n);
+            done += n;
+        }
+        pos += len;
+        size = std::max(size, pos);
+    }
+
+    // bytes from to to, each block is let go once it has been copied
+    char *drain(char *out, size_t from, size_t to) {
+        while (from < to) {
+            size_t at = from % block, n = std::min(to - from, block - at);
+            char *&b = blocks[from / block];
+            memcpy(out, b + at, n);
+            out += n;
+            from += n;
+            if (from % block == 0) {
+                unmap(b, block);
+                b = nullptr;
+            }
+        }
+        return out;
+    }
 };
 
 static FLAC__StreamEncoderWriteStatus flac_write(const FLAC__StreamEncoder *, const FLAC__byte buf[], size_t len,
                                                  uint32_t, uint32_t, void *user) {
-    Sink *s = (Sink *)user;
-    if (len > s->cap - s->pos) {
+    try {
+        ((Sink *)user)->write((const char *)buf, len);
+    } catch (...) {
         return FLAC__STREAM_ENCODER_WRITE_STATUS_FATAL_ERROR;
     }
-    memcpy(s->buf + s->pos, buf, len);
-    s->pos += len;
-    s->size = std::max(s->size, s->pos);
     return FLAC__STREAM_ENCODER_WRITE_STATUS_OK;
 }
 
@@ -136,7 +208,7 @@ static FLAC__StreamEncoderTellStatus flac_tell(const FLAC__StreamEncoder *, FLAC
     return FLAC__STREAM_ENCODER_TELL_STATUS_OK;
 }
 
-static void flac(const Audio &a, const Tags &tags, const Cancel &cancel, const Alloc &alloc, const Shrink &shrink) {
+static void flac(const Audio &a, const Tags &tags, const Cancel &cancel, const Alloc &alloc) {
     if (a.channels > 8) {
         throw std::runtime_error("cant encode this");
     }
@@ -172,9 +244,6 @@ static void flac(const Audio &a, const Tags &tags, const Cancel &cancel, const A
         comment += (char)c.size();
         comment += c;
     }
-    size_t blocks = frames / block + 1;
-    size_t cap = frames * a.channels * (bits / 8) + blocks * (a.channels + 40) + comment.size() + (64 << 10);
-    char *out = alloc(cap);
     std::vector<FLAC__int32> buf(block * a.channels);
     FLAC__StreamEncoder *enc = FLAC__stream_encoder_new();
     FLAC__stream_encoder_set_channels(enc, (uint32_t)a.channels);
@@ -182,7 +251,7 @@ static void flac(const Audio &a, const Tags &tags, const Cancel &cancel, const A
     FLAC__stream_encoder_set_blocksize(enc, block);
     FLAC__stream_encoder_set_sample_rate(enc, (uint32_t)a.rate);
     FLAC__stream_encoder_set_total_samples_estimate(enc, frames);
-    Sink s{out, cap};
+    Sink s;
     bool ok = FLAC__stream_encoder_init_stream(enc, flac_write, flac_seek, flac_tell, nullptr, &s) ==
               FLAC__STREAM_ENCODER_INIT_STATUS_OK;
     try {
@@ -204,20 +273,23 @@ static void flac(const Audio &a, const Tags &tags, const Cancel &cancel, const A
     if (!ok) {
         throw std::runtime_error("cant encode this");
     }
+    size_t at = s.size, old = 0;
     if (!tags.empty()) {
         // libflac wrote its own comment block after the stream info, ours takes its place
         if (s.size < 46) {
             throw std::runtime_error("cant encode this");
         }
-        size_t old = 4 + ((uint8_t)out[43] << 16 | (uint8_t)out[44] << 8 | (uint8_t)out[45]);
-        if (s.size < 42 + old) {
+        const char *b = s.blocks[0];
+        at = 42;
+        old = 4 + ((uint8_t)b[43] << 16 | (uint8_t)b[44] << 8 | (uint8_t)b[45]);
+        if (s.size < at + old) {
             throw std::runtime_error("cant encode this");
         }
-        memmove(out + 42 + comment.size(), out + 42 + old, s.size - 42 - old);
-        memcpy(out + 42, comment.data(), comment.size());
-        s.size = s.size - old + comment.size();
     }
-    shrink(s.size);
+    char *out = alloc(s.size - old + comment.size());
+    out = s.drain(out, 0, at);
+    memcpy(out, comment.data(), comment.size());
+    s.drain(out + comment.size(), at + old, s.size);
 }
 
 static void pages(ogg_stream_state *os, std::string &out, bool flush) {
@@ -384,7 +456,7 @@ static void copy(const std::string &s, const Alloc &alloc) {
 }
 
 void encode(const Audio &a, const std::string &format, int bitrate, const Tags &tags, const Cancel &cancel,
-            const Alloc &alloc, const Shrink &shrink) {
+            const Alloc &alloc) {
     if (a.width < 1 || a.width > 4) {
         throw std::invalid_argument("bad sample width");
     }
@@ -392,7 +464,7 @@ void encode(const Audio &a, const std::string &format, int bitrate, const Tags &
         return wav(a, alloc);
     }
     if (format == "flac") {
-        return flac(a, tags, cancel, alloc, shrink);
+        return flac(a, tags, cancel, alloc);
     }
     if (format == "ogg") {
         return copy(ogg(a, bitrate, tags, cancel), alloc);

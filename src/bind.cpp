@@ -118,18 +118,6 @@ static Alloc into(nb::object &out) {
     };
 }
 
-// cuts the bytes into() made, in place
-static Shrink trim(nb::object &out) {
-    return [&out](size_t n) {
-        nb::gil_scoped_acquire g;
-        PyObject *p = out.release().ptr();
-        if (_PyBytes_Resize(&p, (Py_ssize_t)n) < 0) {
-            throw nb::python_error();
-        }
-        out = nb::steal(p);
-    };
-}
-
 static Audio audio(nb::bytes data, int rate, int channels, int width) {
     if (rate < 1 || channels < 1 || channels > 65535 || width < 1 || width > 4) {
         throw std::invalid_argument("bad rate, channels or sample width");
@@ -274,7 +262,7 @@ NB_MODULE(_pydub2, m) {
         nb::object out;
         {
             nb::gil_scoped_release g;
-            encode(a, format, bitrate, t, interrupt(), into(out), trim(out));
+            encode(a, format, bitrate, t, interrupt(), into(out));
         }
         return out;
     }, nb::arg("data"), nb::arg("rate"), nb::arg("channels"), nb::arg("width"), nb::arg("format"), nb::arg("bitrate") = 0,

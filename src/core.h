@@ -37,8 +37,6 @@ typedef std::function<void()> Cancel;
 
 // the result goes into memory the caller hands out, n bytes, so nothing is copied again
 typedef std::function<char *(size_t)> Alloc;
-// cuts what Alloc gave out down to n bytes, the memory stays where it is
-typedef std::function<void(size_t)> Shrink;
 
 // decode.cpp
 // wav, flac, mp3, ogg vorbis and opus, a piece at a time. open throws std::runtime_error on anything else
@@ -64,9 +62,8 @@ std::unique_ptr<Decoder> open(const std::filesystem::path &path);
 // tags are written as vorbis comments to flac, ogg and opus, wav has none
 // the 44 bytes in front of the samples, so a writer can send the samples as they are
 std::string wav_head(const Audio &a);
-// flac asks for the size it could need at the most and cuts it to the file with shrink
 void encode(const Audio &a, const std::string &format, int bitrate, const Tags &tags, const Cancel &cancel,
-            const Alloc &alloc, const Shrink &shrink);
+            const Alloc &alloc);
 
 // pcm.cpp
 // these do the same math as the old audioop module so the numbers match pydub
