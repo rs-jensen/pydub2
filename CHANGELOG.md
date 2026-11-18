@@ -54,6 +54,7 @@ What changed in each release.
 - `AudioSegment.from_file` reads a named pipe (fifo) once and decodes the bytes, where it waited for ever for a second writer.
 - `PYDUB2_STRICT=y` and `t` turn strict mode on, and a value that is neither a yes nor a no gives a warning at import, where strict mode stayed off without a word.
 - `export` with a `cover` that is not mp3 and a picture, or not a string, raises the `AttributeError` of pydub with its text.
+- A missing attribute on an `AudioSegment` says `'AudioSegment' object has no attribute 'x'` like pydub, where it said only `x`. An `AttributeError` inside a property of a subclass keeps its own message.
 
 ### Security
 

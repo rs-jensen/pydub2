@@ -448,7 +448,8 @@ class AudioSegment(object):
         d = self.__dict__
         # another thread can have joined since the lookup failed
         if name != "_data" or not ("_parts" in d or "_data" in d):
-            raise AttributeError(name)
+            # gives pydub's message, and a property that raised AttributeError says why
+            return object.__getattribute__(self, name)
         return self._join()
 
     def _join(self):

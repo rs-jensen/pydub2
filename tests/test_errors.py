@@ -94,3 +94,20 @@ def test_cover_errors_like_pydub(kw):
         AS.silent(100).export(io.BytesIO(), **kw)
     got = bad_call("pydub2", call)
     assert got is not None and got == bad_call("pydub", call)
+
+
+def test_missing_attribute_like_pydub():
+    def call(AS):
+        AS.silent(100).nope
+    got = bad_call("pydub2", call)
+    assert got == ("AttributeError", "'AudioSegment' object has no attribute 'nope'")
+    assert got == bad_call("pydub", call)
+
+
+def test_property_error_is_kept():
+    class Sub(pydub2.AudioSegment):
+        @property
+        def broken(self):
+            return self.missing_thing
+    with pytest.raises(AttributeError, match="no attribute 'missing_thing'"):
+        Sub.silent(10).broken
