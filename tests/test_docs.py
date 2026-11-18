@@ -13,21 +13,24 @@ from pydub2 import _mp3
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
+# pages whose python blocks are run, the README first
+PAGES = [README, ROOT / "docs" / "features.md", ROOT / "docs" / "untrusted-files.md"]
 
 # what the snippets in the README take for granted, they are pieces of one session
 PRELUDE = """\
 from pydub2 import AudioSegment
 seg = AudioSegment.from_file("song.wav")
+intro = seg[:2000]
 upload = "song.wav"
 """
-GIVEN = {"AudioSegment", "seg", "upload"}
+GIVEN = {"AudioSegment", "seg", "intro", "upload"}
 
 
-def blocks():
-    if not README.exists():
+def blocks(page=README):
+    if not page.exists():
         return []
     out = []
-    text = README.read_text(encoding="utf-8")
+    text = page.read_text(encoding="utf-8")
     for m in re.finditer(r"^```python\n(.*?)^```", text, re.S | re.M):
         out.append((text.count("\n", 0, m.start()) + 2, m.group(1)))
     return out
@@ -53,17 +56,21 @@ def has_mp3_writer():
     return _mp3.available() or shutil.which("ffmpeg") is not None
 
 
-CASES = blocks()
+def imports_pydub(code):
+    return re.search(r"^\s*(import|from) pydub\b(?!2)", code, re.M) is not None
+
+
+CASES = [(p.relative_to(ROOT).as_posix(), line, code) for p in PAGES for line, code in blocks(p)]
 
 
 def test_readme_has_python_blocks():
     if not README.exists():
         pytest.skip("not run from a source checkout")
-    assert len(CASES) >= 5
+    assert len(blocks()) >= 5
 
 
-@pytest.mark.parametrize("line,code", CASES, ids=["README.md:%d" % c[0] for c in CASES])
-def test_readme_block_runs(line, code, tmp_path):
+@pytest.mark.parametrize("page,line,code", CASES, ids=["%s:%d" % c[:2] for c in CASES])
+def test_readme_block_runs(page, line, code, tmp_path):
     if free_names(code) - GIVEN:
         pytest.skip("not self-contained")
     if "play_async" in code:
@@ -78,10 +85,20 @@ def test_readme_block_runs(line, code, tmp_path):
     tone = Sine(440).to_audio_segment(duration=2000)
     tone.export(str(tmp_path / "song.wav"), format="wav").close()
     tone.export(str(tmp_path / "long.flac"), format="flac").close()
-    (tmp_path / "block.py").write_text(PRELUDE + code, encoding="utf-8")
+    path = [p for p in sys.path if p]
+    prelude, check = PRELUDE, ""
+    if imports_pydub(code):
+        if not (ROOT / "compat" / "pydub2_compat.py").exists():
+            pytest.skip("needs the compat folder of a source checkout")
+        # the block shows pydub2-compat, load its hook the way its .pth file does
+        path.insert(0, str(ROOT / "compat"))
+        prelude = "import pydub2_compat\n" + PRELUDE
+        check = "\nimport pydub, pydub2\nassert pydub.AudioSegment is pydub2.AudioSegment\n"
+    (tmp_path / "block.py").write_text(prelude + code + check, encoding="utf-8")
 
-    env = dict(os.environ, PYTHONPATH=os.pathsep.join(p for p in sys.path if p))
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(path))
     env.pop("PYDUB2_STRICT", None)
+    env.pop("PYDUB2_COMPAT", None)
     done = subprocess.run([sys.executable, "block.py"], cwd=str(tmp_path), env=env,
                           capture_output=True, text=True, timeout=120)
-    assert done.returncode == 0, "README.md:%d\n%s" % (line, done.stderr[-2000:])
+    assert done.returncode == 0, "%s:%d\n%s" % (page, line, done.stderr[-2000:])
