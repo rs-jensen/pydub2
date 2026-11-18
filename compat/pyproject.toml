@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pydub2-compat"
-version = "0.0.2"
+version = "0.1.0"
 description = "Makes import pydub use pydub2, even when the real pydub is installed"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.9"
-dependencies = ["pydub2"]
+dependencies = ["pydub2>=0.1.0"]
 authors = [{ name = "Rasmus Stisen" }]
 classifiers = [
     "Development Status :: 3 - Alpha",
