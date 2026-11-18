@@ -4,10 +4,7 @@ Only the latest release gets security fixes.
 
 ## Reporting a problem
 
-Please do not open a public issue for a security problem. Report it in one of these ways:
-
-- Email rasmus@schwponaco.org
-- Use GitHub private vulnerability reporting, under the Security tab of this repository
+Please do not open a public issue for a security problem. Use GitHub's private vulnerability reporting instead: open the Security tab of this repository and click "Report a vulnerability". Only the maintainer can read what you send there.
 
 Say which version you use, what you did and what happened. A file that triggers the problem helps a lot.
 
