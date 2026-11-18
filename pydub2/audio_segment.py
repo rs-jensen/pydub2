@@ -983,6 +983,11 @@ class AudioSegment(object):
         lim = limits()
         filename = None if hasattr(file, "read") else fsdecode(file)
         data = read_file(file, lim) if filename is None else None
+        named = filename
+        if filename is not None and os.path.exists(filename) and not os.path.isfile(filename) and not os.path.isdir(filename):
+            # a fifo or a device gives its bytes once, so they are read here and not by name
+            with open(filename, "rb") as f:
+                data, filename = read_file(f, lim), None
         try:
             d = _pydub2.Decoder(data if filename is None else filename)
         except RuntimeError:
@@ -991,7 +996,7 @@ class AudioSegment(object):
                 with open(filename, "rb") as f:
                     data = f.read(4096)
             if sniff(data[:4096]) in ("wav", "flac", "mp3", "ogg", "opus") or \
-                    (filename or "").lower().endswith((".wav", ".flac", ".mp3", ".ogg", ".opus")):
+                    (named or "").lower().endswith((".wav", ".flac", ".mp3", ".ogg", ".opus")):
                 raise CouldntDecodeError("cant read this file")
             raise CouldntDecodeError("stream only reads wav, flac, mp3, ogg and opus")
         if filename is not None and lim[2] is not None:
@@ -1003,9 +1008,12 @@ class AudioSegment(object):
             except RuntimeError:
                 raise CouldntDecodeError("cant read this file")
         own = False
-        if filename is not None and filename.lower().endswith(".wav"):
-            with open(filename, "rb") as f:
-                own = _pydub_wav(f.read(65536))
+        if named is not None and named.lower().endswith(".wav"):
+            if filename is None:
+                own = _pydub_wav(data[:65536])
+            else:
+                with open(filename, "rb") as f:
+                    own = _pydub_wav(f.read(65536))
         span = _span(d, own, start_second, duration)
         if not span:
             raise ValueError("start_second and duration have to be plain numbers, 0 or more")

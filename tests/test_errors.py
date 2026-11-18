@@ -97,6 +97,28 @@ def test_load_from_fifo(tmp_path, format):
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs fifos")
+@pytest.mark.parametrize("format", ["wav", "flac", "mp3", "ogg", "opus"])
+@pytest.mark.parametrize("kw", [{}, {"start_second": 0.1, "duration": 0.15}])
+def test_stream_from_fifo(tmp_path, format, kw):
+    seg = pydub2.generators.Sine(440, sample_rate=48000).to_audio_segment(duration=300)
+    data = seg.export(format=format).read()
+    plain = tmp_path / ("plain." + format)
+    plain.write_bytes(data)
+    fifo = str(tmp_path / ("pipe." + format))
+    os.mkfifo(fifo)
+
+    def feed():
+        with open(fifo, "wb") as f:
+            f.write(data)
+    threading.Thread(target=feed, daemon=True).start()
+    # the fifo holds the file once, a second open by name waits for ever, so a child process that can be killed reads it
+    code = "import sys, pydub2\nfor c in pydub2.AudioSegment.stream(sys.argv[1], chunk_ms=100, **%r): sys.stdout.buffer.write(c.raw_data)" % kw
+    out = subprocess.run([sys.executable, "-c", code, fifo], capture_output=True, timeout=30)
+    want = b"".join(c.raw_data for c in pydub2.AudioSegment.stream(str(plain), chunk_ms=100, **kw))
+    assert out.stdout == want, out.stderr
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs fifos")
 @pytest.mark.parametrize("format", ["flac", "ogg"])
 def test_fifo_over_max_bytes_like_a_file(tmp_path, monkeypatch, format):
     seg = pydub2.generators.Sine(440, sample_rate=48000).to_audio_segment(duration=1000)
