@@ -285,3 +285,13 @@ def test_part_of_a_wav_ends_where_pydub_ends_it(tmp_path, rate, start, duration)
     for how in ("from_file", "from_file_using_temporary_files"):
         got = getattr(pydub2.AudioSegment, how)(path, start_second=start, duration=duration)
         assert got.raw_data == getattr(pydub.AudioSegment, how)(path, start_second=start, duration=duration).raw_data
+
+
+def test_split_to_mono_of_no_channels_and_a_part_sample_raises_like_pydub():
+    def split(lib):
+        seg = lib.AudioSegment.from_file(io.BytesIO(b"\0" * 3), format="pcm", sample_width=2, frame_rate=8000, channels=0)
+        try:
+            return seg.split_to_mono()
+        except Exception as e:
+            return type(e).__name__
+    assert split(pydub2) == split(pydub) == "ValueError"
