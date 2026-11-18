@@ -3,7 +3,7 @@ from __future__ import division
 import array
 import numbers
 import os
-from tempfile import NamedTemporaryFile
+from tempfile import TemporaryFile, NamedTemporaryFile
 import subprocess
 import sys
 import struct
