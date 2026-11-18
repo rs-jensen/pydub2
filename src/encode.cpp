@@ -30,14 +30,14 @@ static int32_t sample(const Audio &a, size_t i) {
     return s;
 }
 
-static std::vector<float> floats(const Audio &a) {
-    size_t n = a.data.size() / a.width;
+// frames first to first + n as floats in wav order, a piece at a time so the whole file is never held as floats
+static void floats(const Audio &a, size_t first, size_t n, std::vector<float> &out) {
     float scale = 1.0f / (float)(1u << (a.width * 8 - 1));
-    std::vector<float> out(n);
-    for (size_t i = 0; i < n; i++) {
-        out[i] = (float)sample(a, i) * scale;
+    size_t from = first * a.channels;
+    out.resize(n * a.channels);
+    for (size_t i = 0; i < out.size(); i++) {
+        out[i] = (float)sample(a, from + i) * scale;
     }
-    return out;
 }
 
 // the wav order of 3 to 8 channels is not the order vorbis and opus expect
@@ -227,8 +227,6 @@ static void blocks(vorbis_dsp_state *vd, vorbis_block *vb, ogg_stream_state *os,
 }
 
 static std::string ogg(const Audio &a, int bitrate, const Tags &tags, const Cancel &cancel) {
-    std::vector<float> pcm = floats(a);
-    vorbis_order(pcm, a.channels);
     vorbis_info vi;
     vorbis_info_init(&vi);
     // q 3 like ffmpeg when no bitrate is given, and with a bitrate ffmpeg turns the slow rate management off
@@ -267,14 +265,17 @@ static std::string ogg(const Audio &a, int bitrate, const Tags &tags, const Canc
         ogg_stream_packetin(&os, &h3);
         pages(&os, out, true);
 
-        size_t frames = pcm.size() / a.channels;
+        size_t frames = a.data.size() / a.width / a.channels;
+        std::vector<float> pcm;
         for (size_t f = 0; f < frames; f += 4096) {
             cancel();
             size_t n = std::min(frames - f, (size_t)4096);
+            floats(a, f, n, pcm);
+            vorbis_order(pcm, a.channels);
             float **buf = vorbis_analysis_buffer(&vd, (int)n);
             for (size_t i = 0; i < n; i++) {
                 for (size_t c = 0; c < a.channels; c++) {
-                    buf[c][i] = pcm[(f + i) * a.channels + c];
+                    buf[c][i] = pcm[i * a.channels + c];
                 }
             }
             vorbis_analysis_wrote(&vd, (int)n);
@@ -313,8 +314,6 @@ static int opus_close(void *) {
 
 static std::string opus(const Audio &a, int bitrate, const Tags &tags, const Cancel &cancel) {
     std::string out;
-    std::vector<float> pcm = floats(a);
-    vorbis_order(pcm, a.channels);
     OpusEncCallbacks cb = {opus_write, opus_close};
     OggOpusComments *com = ope_comments_create();
     for (auto &t : tags) {
@@ -342,11 +341,15 @@ static std::string opus(const Audio &a, int bitrate, const Tags &tags, const Can
                                                                             : OPUS_BANDWIDTH_FULLBAND;
     err = err || ope_encoder_ctl(enc, OPUS_SET_MAX_BANDWIDTH(band));
     // it takes the frame count as an int
-    size_t frames = pcm.size() / a.channels, step = 1 << 16;
+    size_t frames = a.data.size() / a.width / a.channels, step = 1 << 16;
     try {
+        std::vector<float> pcm;
         for (size_t f = 0; !err && f < frames; f += step) {
             cancel();
-            err = ope_encoder_write_float(enc, pcm.data() + f * a.channels, (int)std::min(frames - f, step));
+            size_t n = std::min(frames - f, step);
+            floats(a, f, n, pcm);
+            vorbis_order(pcm, a.channels);
+            err = ope_encoder_write_float(enc, pcm.data(), (int)n);
         }
     } catch (...) {
         ope_encoder_destroy(enc);
