@@ -401,13 +401,7 @@ def _to_16bit(data, width, rounding):
         for i in range(4):
             high[i::4] = data[4 + i::8]
         data, width = bytes(high), 4
-    if width == 4 and rounding:
-        half = (0x8000).to_bytes(4, "little") * (1 << 18)
-        step = len(half)
-        data = b"".join(_pydub2.lin2lin(_pydub2.add(data[i:i + step], half[:len(data[i:i + step])], 4), 4, 2)
-                        for i in range(0, len(data), step))
-        return data
-    return _pydub2.lin2lin(data, width, 2)
+    return _pydub2.lin2lin(data, width, 2, bool(rounding))
 
 
 def _fit(data, m, want, fw, rate):

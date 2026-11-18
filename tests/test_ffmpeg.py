@@ -288,3 +288,15 @@ def test_temporary_files_know_a_wav_by_the_name_of_a_str_only(tmp_path, kind):
     got = AudioSegment.from_file_using_temporary_files(kind(path))
     want = pydub.AudioSegment.from_file_using_temporary_files(kind(path))
     assert (got.sample_width, got.raw_data) == (want.sample_width, want.raw_data)
+
+
+def test_float_wav_ties_round_to_even_like_ffmpeg(tmp_path):
+    samples = np.array([0.5, 1.5, 2.5, -0.5, -1.5, -2.5, 32758.5, 32759.5], "<f4") / 32768
+    data = samples.tobytes()
+    fmt = struct.pack("<HHIIHH", 3, 1, 8000, 32000, 4, 32)
+    body = b"WAVEfmt " + struct.pack("<I", 16) + fmt + b"data" + struct.pack("<I", len(data)) + data
+    path = tmp_path / "a.wav"
+    path.write_bytes(b"RIFF" + struct.pack("<I", len(body)) + body)
+    got = AudioSegment.from_file_using_temporary_files(str(path))
+    want = pydub.AudioSegment.from_file_using_temporary_files(str(path))
+    assert got.sample_width == 2 and got.raw_data == want.raw_data

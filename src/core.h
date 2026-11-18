@@ -73,7 +73,7 @@ long long rms(std::string_view data, size_t width, bool fused);
 long long max(std::string_view data, size_t width);
 void mul(std::string_view data, size_t width, double factor, const Alloc &alloc);
 void add(std::string_view a, std::string_view b, size_t width, const Alloc &alloc);
-void lin2lin(std::string_view data, size_t width, size_t new_width, const Alloc &alloc);
+void lin2lin(std::string_view data, size_t width, size_t new_width, const Alloc &alloc, bool nearest = false);
 void tomono(std::string_view data, size_t width, double lfac, double rfac, const Alloc &alloc);
 void tostereo(std::string_view data, size_t width, double lfac, double rfac, const Alloc &alloc);
 // pydubs set_channels(1) from 3 or more channels: each channel floor divided by the count, added up in the sample type
