@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import types
 
 import pytest
@@ -65,7 +66,7 @@ def mkspec(r, small=False):
     else:
         top = 300 if small or r.random() < 0.95 else 3000
         n = int(rt * r.randint(1, top) / 1000)
-    return dict(w=r.choice([1, 2, 4]), ch=r.choice([1, 2]), rate=rt, n=n,
+    return dict(w=r.choice([1, 2, 3, 4]), ch=r.choice([1, 2, 1, 2, 1, 2, 3, 4, 6]), rate=rt, n=n,
                 kind=r.choice(["silence", "full", "noise", "noise", "sine", "sine", "dc"]),
                 seed=r.getrandbits(32), extra=r.random() < 0.02)
 
@@ -88,7 +89,9 @@ def build(L, sp):
         a = rg.choice([1, 0.5, 0.01]) * hi * np.sin(2 * np.pi * f * t / sp["rate"] + rg.uniform(0, 6, (1, ch)))
     else:
         a = rg.uniform(-1, 1) * hi * 0.8 + rg.randint(-100, 100, (n, ch))
-    a = np.clip(np.round(a), lo, hi).astype({1: "<i1", 2: "<i2", 4: "<i4"}[w])
+    a = np.clip(np.round(a), lo, hi).astype({1: "<i1", 2: "<i2", 3: "<i4", 4: "<i4"}[w])
+    if w == 3:
+        a = np.frombuffer(a.tobytes(), np.uint8).reshape(-1, 4)[:, :3]
     data = a.tobytes() + (b"\x01" if sp["extra"] else b"")
     return L.AS(data=data, sample_width=w, frame_rate=sp["rate"], channels=ch)
 
@@ -198,6 +201,35 @@ def g_gen_samples(r):
     return (cls, a, kw, r.randint(0, 300)), {}
 
 
+def g_fn(r):
+    name, args = r.choice([("reverse", ()), ("apply_gain", (db(r),)), ("low_pass_filter", (cutoff(r),)),
+                           ("fade_out", (ms(r, False),)), ("invert_phase", ())])
+    return (("@fn", name, args),), {}
+
+
+def g_raw(r):
+    return (), dict(format=r.choice(["raw", "pcm"]), **pick_kw(r, sample_width=r.choice([1, 2, 3, 4, 0, 5, None]),
+                    frame_rate=r.choice([rate(r), 0, -1, None]), channels=r.choice([1, 2, 3, 0, None]),
+                    start_second=r.choice([0, 0.1, 1, -1, None]), duration=r.choice([0, 0.05, 1, None])))
+
+
+def g_spawn(r):
+    return (r.choice([0, 1, 2, 3, 7, 100, 1000, None]),), pick_kw(r, frame_rate=rate(r), channels=r.choice([1, 2, 3, 4]),
+                                                                    sample_width=r.choice([1, 2, 4]))
+
+
+def g_util(r):
+    f = r.choice(["db_to_float", "ratio_to_db", "get_array_type", "get_min_max_value", "get_frame_width"])
+    if f == "db_to_float":
+        a = (db(r),)
+    elif f == "ratio_to_db":
+        a = (r.choice([0, 1, 2, 0.5, -1, 1e-9, 1e300, INF, NAN, None, r.uniform(0, 10)]),
+             r.choice([None, 0, 1, 2, 0.5]))
+    else:
+        a = (r.choice([8, 16, 24, 32, 0, 12, 64, None]),)
+    return (f, a, pick_kw(r, using_amplitude=r.random() < 0.5) if f in ("db_to_float", "ratio_to_db") else {}), {}
+
+
 def g_eqhash(r):
     return (sg(r),), {}
 
@@ -254,6 +286,12 @@ OPS = {
     "wav": (2, lambda r: ((), {})),
     "raw": (1, lambda r: ((), {})),
     "iter": (1, lambda r: ((), {})),
+    "s.apply_mono_filter_to_each_channel": (2, g_fn),
+    "utils.ms_to_stereo": (1, lambda r: ((), {})),
+    "utils.stereo_to_ms": (1, lambda r: ((), {})),
+    "from_raw": (1, g_raw),
+    "spawn": (1, g_spawn),
+    "util": (1, g_util),
 }
 NAMES = list(OPS)
 WEIGHTS = [OPS[k][0] for k in NAMES]
@@ -272,7 +310,7 @@ def sane(op, a, kw, r):
         return a, kw
     kw = {k: fix[k]() if k in fix else v for k, v in kw.items()}
     if op == "s.set_sample_width":
-        a = (r.choice([1, 2, 4]),)
+        a = (r.choice([1, 2, 3, 4]),)
     elif op == "s.set_frame_rate":
         a = (rate(r),)
     elif op == "s.set_channels":
@@ -295,6 +333,8 @@ def make(seed):
 
 def res(L, s, x):
     if type(x) is tuple and x and isinstance(x[0], str) and x[0][:1] == "@":
+        if x[0] == "@fn":
+            return lambda m: getattr(m, x[1])(*x[2])
         if x[0] == "@new":
             return build(L, x[1])
         if x[0] == "@cur":
@@ -316,6 +356,8 @@ def sp_eqhash(L, s, o):
 
 
 def sp_wav(L, s):
+    # pydub writes a partial last frame into the wav, pydub2 leaves it out
+    s = s._spawn(s.raw_data[:int(s.frame_count()) * s.frame_width])
     b = io.BytesIO()
     s.export(b, format="wav")
     d = b.getvalue()
@@ -326,6 +368,21 @@ def sp_raw(L, s):
     b = io.BytesIO()
     s.export(b, format="raw")
     return b.getvalue()
+
+
+def sp_from_raw(L, s, **kw):
+    kw = {"sample_width": s.sample_width, "frame_rate": s.frame_rate, "channels": s.channels, **kw}
+    return L.AS.from_file(io.BytesIO(s.raw_data), **kw)
+
+
+def sp_spawn(L, s, n, **ov):
+    # a changed layout comes with its frame width, as set_channels does
+    ov["frame_width"] = ov.get("channels", s.channels) * ov.get("sample_width", s.sample_width)
+    return s._spawn(s.raw_data[:n], ov)
+
+
+def sp_util(L, s, f, a, kw):
+    return getattr(L.utils, f)(*a, **kw)
 
 
 def sp_gen(L, s, cls, a, kw, dur, vol):
@@ -347,6 +404,9 @@ SPECIAL = {
     "wav": sp_wav,
     "raw": sp_raw,
     "iter": lambda L, s: list(itertools.islice(iter(s), 40)),
+    "from_raw": sp_from_raw,
+    "spawn": sp_spawn,
+    "util": sp_util,
     "gen": sp_gen,
     "gen_samples": sp_gen_samples,
 }
@@ -367,11 +427,16 @@ PROPS = ["frame_rate", "channels", "sample_width", "frame_width", "dBFS", "max",
          "duration_seconds", "max_possible_amplitude", "array_type"]
 
 
+def is_audioop_error(e):
+    return type(e).__name__ == "error" and type(e).__module__ in ("audioop", "_audioop")
+
+
 def t(f):
     try:
         return f()
     except Exception as e:
-        return ("exc", type(e).__name__)
+        # audioop.error is a ValueError here, see docs/differences.md
+        return ("exc", "ValueError" if is_audioop_error(e) else type(e).__name__)
 
 
 def flat(L, x, label, out):
@@ -395,7 +460,8 @@ def run(L, spec, steps, seed, recs):
     try:
         s = build(L, spec)
     except Exception as e:
-        recs.append({"exc": type(e).__name__})
+        line = traceback.extract_tb(e.__traceback__)[-1].line or ""
+        recs.append({"exc": type(e).__name__, "empty24": isinstance(e, IndexError) and "_data[0]" in line})
         return
     rec = {}
     flat(L, s, "r", rec)
@@ -409,7 +475,9 @@ def run(L, spec, steps, seed, recs):
             rec = {}
             flat(L, out, "r", rec)
         except Exception as e:
-            recs.append({"exc": type(e).__name__})
+            # pydub indexes the first byte of an empty 24 bit buffer
+            line = traceback.extract_tb(e.__traceback__)[-1].line or ""
+            recs.append({"exc": type(e).__name__, "empty24": isinstance(e, IndexError) and "_data[0]" in line})
             continue
         recs.append(rec)
         segs = [out] if isinstance(out, L.AS) else [v for v in out if isinstance(v, L.AS)] if isinstance(out, list) else []
@@ -446,11 +514,14 @@ def close(a, b):
 # pydub crashes here on purpose-fixed inputs, pydub2 returns a result
 FIXED = {("s.low_pass_filter", "IndexError"), ("s.high_pass_filter", "IndexError"), ("s.set_sample_width", "IndexError"),
          ("s.fade", "ZeroDivisionError"), ("s.append", "ZeroDivisionError"), ("s.speedup", "ZeroDivisionError"),
-         ("s.strip_silence", "ZeroDivisionError")}  # fade of zero frames divides
+         ("s.strip_silence", "ZeroDivisionError"), ("s.apply_mono_filter_to_each_channel", "IndexError"),
+         ("utils.stereo_to_ms", "NameError"), ("utils.ms_to_stereo", "NameError")}  # fade of zero frames divides
 
 
 def nonfinite(step):
-    return any(isinstance(x, float) and not math.isfinite(x) for x in list(step[1]) + list(step[2].values()))
+    xs = list(step[1]) + list(step[2].values())
+    xs += [v for x in xs if type(x) is tuple and x[:1] == ("@fn",) for v in x[2]]
+    return any(isinstance(x, float) and not math.isfinite(x) for x in xs)
 
 
 def diff(ra, rb, steps=()):
@@ -460,6 +531,8 @@ def diff(ra, rb, steps=()):
         if i and not ea and eb == "ValueError" and nonfinite(steps[i - 1]):
             return None
         if i and (steps[i - 1][0], ea) in FIXED and not eb:
+            return None
+        if a.get("empty24") and not eb:
             return None
         if bool(ea) != bool(eb):
             return i, "exc", ea, eb
@@ -485,8 +558,11 @@ def cls_of(steps, d):
 def compare(spec, steps, seed):
     ra, hung = timed(PD, spec, steps, seed)
     if hung:
-        return "skip", steps[len(ra) - 1][0] if ra else "init"
-    rb, hung = timed(P2, spec, steps, seed, 5 * TIMEOUT)
+        return "skip", steps[min(len(ra), len(steps)) - 1][0] if ra else "init"
+    # nothing after a known pydub crash is compared, and pydub2 goes on from a different segment
+    stop = next((i for i, a in enumerate(ra) if i and a.get("exc") and (
+        (steps[i - 1][0], a["exc"]) in FIXED or a["empty24"])), None)
+    rb, hung = timed(P2, spec, steps[:stop], seed, 5 * TIMEOUT)
     if hung:
         return "bad", ((len(rb), "pydub2 hang", None, None))
     d = diff(ra, rb, steps)

@@ -65,6 +65,7 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - `format="pcm"` is the same as `"raw"`, and `"m4a"` and `"aac"` work. `bitrate` can be an int and `cover` can be a `pathlib.Path`.
 - `export` of wav and flac is done without ffmpeg when `codec` is pcm_s16le, pcm_s24le or pcm_s32le (flac: none or flac), and `parameters` is only `-sample_fmt s16` or `s32`, `-ar` and `-ac` with the current rate and channels. The samples are the same as ffmpeg's.
 - Anything else, such as a new rate or a new channel count, still goes to ffmpeg.
+- A wav export leaves out a partial last frame (data from `_spawn` that is not a whole number of frames). pydub writes the stray bytes into the data chunk, so its size is not a multiple of the block align and ffmpeg reports an invalid PCM packet. pydub2 writes a file that every reader accepts.
 - 24 bit wav gets a plain PCM header, where ffmpeg writes WAVE_FORMAT_EXTENSIBLE and a LIST chunk.
 - flac export writes 8 bit audio as 16 bit and 32 bit audio as 24 bit (the low byte is dropped), like ffmpeg. A file read back has `sample_width` 2 and 4. Flac with `-sample_fmt s32` is 24 bit too.
 - Exported ogg, opus and flac files never match ffmpeg byte for byte, but they use its settings. opus is unconstrained vbr at 64k per stream plus 32k per coupled pair (96k stereo). vorbis is q3, or ABR without slow rate management when a bitrate is given. flac is level 5 with ffmpeg's block size.
@@ -117,7 +118,7 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 
 These files are read properly:
 
-- WAVE_FORMAT_EXTENSIBLE wav (ffmpeg writes it for more than 2 channels) with a-law, mu-law or float samples: pydub reads the bytes as integer pcm and gives noise.
+- WAVE_FORMAT_EXTENSIBLE wav (ffmpeg writes it for more than 2 channels and for float wav of any channel count) with a-law, mu-law or float samples: pydub reads the bytes as integer pcm and gives noise.
 - flac at 24 bit and 192 kHz with 6 or 8 channels: pydub gives 0 frames.
 - wav with 12 bit samples in 16 bit: pydub gives a sample width of 1 and twice the frames.
 - WAVE_FORMAT_EXTENSIBLE wav with 24 valid bits in 32 bit samples, from a file object: ffmpeg takes it for 24 bit float and pydub gives noise.
@@ -128,6 +129,7 @@ These calls hang or crash in pydub and work in pydub2:
 - `low_pass_filter` and `high_pass_filter` on empty audio.
 - `mediainfo` of a file object, files whose name starts with `-`, and `format="wma"`.
 - `eq` and the other `scipy_effects` channel modes.
+- A 24 bit `AudioSegment` with no data (`IndexError` in pydub).
 - `stereo_to_ms` and `ms_to_stereo` in `pydub2.utils` (they raise `NameError` in pydub).
 - `start_second` or `duration` under 0.0001, which Python writes as `1e-05`: pydub passes the text to ffmpeg, which fails with `CouldntDecodeError`.
 - `strip_silence` and `append` with a crossfade that covers no frame (a few Hz, or under 1 ms) return the audio. pydub raises `ZeroDivisionError` in `fade`. A fade over zero frames does nothing here.

@@ -108,11 +108,18 @@ def fake_ffplay(tmp_path, monkeypatch):
         return proc
     monkeypatch.setattr(subprocess, "Popen", popen)
 
+    def text():
+        # Windows can refuse to open a file for a moment after it was renamed into place
+        try:
+            return rec_file.read_text()
+        except OSError:
+            return ""
+
     def rec():
-        assert wait_for(rec_file.exists)
-        pid, args = ast.literal_eval(rec_file.read_text())
+        assert wait_for(text)
+        pid, args = ast.literal_eval(text())
         return pid, args[1:]
-    rec.tag = lambda: ast.literal_eval(rec_file.read_text())[1][0]
+    rec.tag = lambda: ast.literal_eval(text())[1][0]
     rec.started = started
     rec.recorded = rec_file.exists
     rec.temp_files = lambda: os.listdir(tmp_path / "tmp")

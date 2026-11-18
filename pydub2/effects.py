@@ -213,11 +213,12 @@ def compress_dynamic_range(seg, threshold=-20.0, ratio=4.0, attack=5.0, release=
             output.append(frame)
         return seg._spawn(data=b''.join(output))
     n = int(seg.frame_count())
-    if n:
-        # pydub raises on a zero in these
-        (1.0 / ratio, 0 / attack_frames, 0 / release_frames)
-    data = _pydub2.compress(seg._data, seg.sample_width, seg.channels, thresh_rms, ratio, attack_frames,
-                            release_frames, max(-1, min(look_frames, n)))
+    if not n:
+        return seg._spawn(data=b"")
+    # pydub raises on a zero in these
+    (1.0 / ratio, 0 / attack_frames, 0 / release_frames)
+    data = _pydub2.compress(seg._data[:n * seg.frame_width], seg.sample_width, seg.channels, thresh_rms, ratio,
+                            attack_frames, release_frames, max(-1, min(look_frames, n)))
     return seg._spawn(data=data)
 
 

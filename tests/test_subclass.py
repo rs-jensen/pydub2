@@ -120,3 +120,30 @@ def test_overridden_property(name, case):
         seen[lib.__name__] = log
     assert seen["pydub"] and seen["pydub2"] == seen["pydub"]
     assert out["pydub2"] == out["pydub"]
+
+
+def partial_frame(lib, log, *names):
+    # 70 whole frames of 3 channels and 2 stray samples
+    samples = array.array("h", [int(9000 * math.sin(i * 0.3)) for i in range(212)])
+    seg = tracked(lib.AudioSegment, log, *names)(samples.tobytes(), frame_rate=1000, channels=1, sample_width=2)
+    return seg._spawn(samples.tobytes(), {"channels": 3, "frame_width": 6})
+
+
+@pytest.mark.parametrize("case", ["compress", "low_pass", "high_pass", "detect_silence", "detect_nonsilent"])
+def test_override_slow_path_with_partial_last_frame(case):
+    calls = {
+        "compress": lambda m, s: m.effects.compress_dynamic_range(s),
+        "low_pass": lambda m, s: m.effects.low_pass_filter(s, 100),
+        "high_pass": lambda m, s: m.effects.high_pass_filter(s, 100),
+        "detect_silence": lambda m, s: m.silence.detect_silence(s, 10, -90),
+        "detect_nonsilent": lambda m, s: m.silence.detect_nonsilent(s, 10, -90),
+    }
+    names = {"compress": ("rms", "get_frame"), "low_pass": ("get_array_of_samples",),
+             "high_pass": ("get_array_of_samples",), "detect_silence": ("rms",), "detect_nonsilent": ("rms",)}[case]
+    out = {}
+    for lib in (pydub, pydub2):
+        try:
+            out[lib.__name__] = result(calls[case](lib, partial_frame(lib, set(), *names)))
+        except Exception as e:
+            out[lib.__name__] = type(e), str(e)
+    assert out["pydub2"] == out["pydub"]
