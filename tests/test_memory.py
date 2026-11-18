@@ -45,7 +45,7 @@ def test_export_holds_the_audio_once(format):
     assert peak_x(export(format)) < 2.0
 
 
-# 3.0 before and 2.0 after with noise, which flac cannot shrink: the audio and the file, written in place
+# 3.0 before and 2.0 after with noise, which flac cannot shrink: the audio and the file, its blocks freed as they are copied
 def test_export_flac_does_not_copy_the_file():
     assert peak_x(export("flac"), STEREO % NOISE) < 2.5
 
