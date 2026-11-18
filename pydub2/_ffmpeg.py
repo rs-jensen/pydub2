@@ -78,7 +78,7 @@ def _to_wav(converter, path, data, format, codec, parameters, start_second, dura
             out = ["-acodec", "pcm_u8" if bits == 8 else "pcm_s%dle" % bits] + out
     if start_second is not None:
         out += ["-ss", str(start_second)]
-    limit, max_bytes = lim
+    limit, max_bytes = lim[:2]
     if limit is not None:
         # one second over, so a file past the limit is seen and not just cut
         duration = limit + 1 if duration is None else min(duration, limit + 1)
@@ -100,6 +100,8 @@ def _to_wav(converter, path, data, format, codec, parameters, start_second, dura
         raise tagged(CouldntDecodeError("Decoding failed. ffmpeg returned error code: %d\n\nOutput from ffmpeg/avlib:\n\n%s"
                                         "\nffmpeg said: %s" % (p.returncode, err, last)), format, "cant_decode")
     wav = bytearray(p.stdout)
+    # the output is copied again on return, so the first copy goes now
+    del p
     i = 12
     while wav[i:i + 4] != b"data":
         size = struct.unpack_from("<I", wav, i + 4)[0]

@@ -80,7 +80,7 @@ def test_ctrl_c_stops_a_long_decode(fmt, noise, tmp_path):
         pytest.skip("SIGINT is ignored, pytest was started in the background")
     path = str(tmp_path / "long")
     with open(path, "wb") as f:
-        f.write(_pydub2.encode(noise * 10, 44100, 2, 2, fmt))
+        f.write(_pydub2.encode(noise * 20, 44100, 2, 2, fmt))
     start = time.perf_counter()
     whole = AudioSegment.from_file(path, format=fmt)
     full = time.perf_counter() - start

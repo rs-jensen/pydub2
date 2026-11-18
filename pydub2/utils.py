@@ -203,7 +203,7 @@ def extra_ffmpeg():
 def limits():
     # read once per load, so another thread that changes them cant cut a load short
     out = []
-    for name, top in (("max_duration", 2 ** 31), ("max_bytes", 2 ** 62)):
+    for name, top in (("max_duration", 2 ** 31), ("max_bytes", 2 ** 62), ("max_file_size", 2 ** 62)):
         v = getattr(pydub2, name)
         if v is not None and not (isinstance(v, numbers.Real) and v >= 0):
             raise ValueError("pydub2.%s has to be None or a number, 0 or more, not %r" % (name, v))
@@ -213,7 +213,7 @@ def limits():
 
 
 def check_duration(frames, rate, fw=None, lim=None):
-    max_duration, max_bytes = lim or limits()
+    max_duration, max_bytes = (lim or limits())[:2]
     if max_duration is not None and frames > max_duration * rate:
         raise tagged(CouldntDecodeError("this file is longer than max_duration"), reason="too_long")
     if max_bytes is not None and fw is not None and frames * fw > max_bytes:
@@ -222,13 +222,56 @@ def check_duration(frames, rate, fw=None, lim=None):
 
 def frame_cap(rate, fw, lim):
     # one frame past the limits, so a file over them is seen and not just cut, -1 for no limit
-    max_duration, max_bytes = lim
+    max_duration, max_bytes = lim[:2]
     n = inf
     if max_duration is not None:
         n = max_duration * rate
     if max_bytes is not None:
         n = min(n, max_bytes // fw)
     return -1 if n >= 2 ** 62 else int(n) + 1
+
+
+def check_size(size, lim):
+    if lim[2] is not None and size > lim[2]:
+        raise tagged(CouldntDecodeError("this file is larger than max_file_size"), reason="too_big")
+
+
+def file_size(f, start=None):
+    # what is left to read from start, from the current position when it is None, and None for a pipe or a socket
+    try:
+        at = f.tell()
+        try:
+            return f.seek(0, 2) - (at if start is None else start)
+        finally:
+            f.seek(at)
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def read_file(f, lim):
+    # a file can grow after its size was read, so with a limit the read stops one byte past it either way
+    if lim[2] is None:
+        # a non-blocking file gives None for no data, pydub then hands ffmpeg nothing
+        return bytes(f.read() or b"")
+    check_size(file_size(f) or 0, lim)
+    return read_upto(f, lim)
+
+
+def read_upto(f, lim, n=-1):
+    # read(n) sets aside n bytes first, so a cap far past the file is read in pieces
+    if lim[2] is not None:
+        top = int(lim[2]) + 1
+        n = top if n < 0 else min(n, top)
+    parts = []
+    while n > 0:
+        part = f.read(min(n, 1 << 24))
+        if not part:
+            break
+        parts.append(part)
+        n -= len(part)
+    data = b"".join(parts)
+    check_size(len(data), lim)
+    return data
 
 
 def read_capped(d, n, lim=None):
@@ -326,7 +369,7 @@ def source(filepath, read_ahead_limit=-1, exe=None):
     except TypeError:
         filepath.seek(0)
         return ["-protocol_whitelist", "cache,pipe"] + allow + ["-read_ahead_limit", str(read_ahead_limit),
-                "-i", "cache:pipe:0"], filepath.read()
+                "-i", "cache:pipe:0"], read_file(filepath, limits())
     try:
         with open(path, "rb") as f:
             head = f.read(64)
@@ -941,7 +984,7 @@ def _open(filepath):
         path = fsdecode(filepath)
     except TypeError:
         filepath.seek(0)
-        data = filepath.read()
+        data = read_file(filepath, limits())
         return BytesIO(data), data
     try:
         return open(path, "rb"), path
