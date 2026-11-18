@@ -269,7 +269,7 @@ def for_pydub(v):
         return int(v)
     if isinstance(v, fractions.Fraction):
         v = float(v)
-    if isinstance(v, float) and 0 < abs(v) < 1e-4:
+    if isinstance(v, float) and 0 < v < 1e-4:
         return Plain(v)
     return v
 
@@ -496,6 +496,9 @@ def sp_export(L, s, fmt, **kw):
         if fmt == "opus" and s.channels in (3, 4) and s.frame_rate >= 100 and kw.get("cover") is None and native_bitrate(kw.get("bitrate"), s.channels):
             # ffmpeg has no channel layout for these in libopus, pydub2 writes them unless something sends it to ffmpeg
             s = L.AS(data=bytes(len(s.raw_data) // s.channels * 2), sample_width=s.sample_width, frame_rate=s.frame_rate, channels=2)
+            if not native_bitrate(kw.get("bitrate"), 2):
+                # a bitrate that fits four channels can be too high for two
+                kw.pop("bitrate")
     with tempfile.TemporaryDirectory() as d:
         if "cover" in kw:
             kw["cover"] = cover_arg(kw["cover"], d)

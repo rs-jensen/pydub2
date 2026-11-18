@@ -48,7 +48,7 @@ def run(converter, args, data, what):
 
 
 def seconds(v):
-    # ffmpeg reads 1e+30 but not 1e-05, 1/2 or True
+    # ffmpeg reads 1e+30 but not 1e-05, 1/2 or True (a negative 1e-05 stays an error, as in pydub)
     if isinstance(v, bool):
         return str(int(v))
     if isinstance(v, numbers.Real) and not isinstance(v, numbers.Integral):
@@ -56,7 +56,7 @@ def seconds(v):
             text = str(v if isinstance(v, float) else float(v))
         except OverflowError:
             return str(v)
-        return format(Decimal(text), "f") if "e-" in text else text
+        return format(Decimal(text), "f") if "e-" in text and text[0] != "-" else text
     return str(v)
 
 
