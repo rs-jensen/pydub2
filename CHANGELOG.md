@@ -48,6 +48,7 @@ What changed in each release.
 - On Linux and macOS `ffmpeg_timeout` and Ctrl-C stop the whole process group, so an ffmpeg behind a wrapper script (snap, conda, docker) is no longer left running.
 - `CouldntEncodeError` and `CouldntDecodeError` from ffmpeg have pydub's text again, with the return code, the command for an export and all of ffmpeg's output. A decode error ends with the line `ffmpeg said: ...` as before.
 - `playback.play_async` called from two threads at once no longer raises `RuntimeError: Set changed size during iteration`.
+- Writing ogg or opus with 3 to 8 channels puts the channels in the order vorbis and opus use, as ffmpeg does. Before, the center and right channels of 5.1 came back swapped and the low frequency channel in the wrong place.
 
 ### Security
 
