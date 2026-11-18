@@ -11,6 +11,7 @@ import wave
 from .utils import dict_set, fsdecode, get_encoder_name, mediainfo_json, sniff
 from .logging_utils import log_conversion, log_subprocess_output
 import base64
+from decimal import Decimal
 from collections import namedtuple
 
 try:
@@ -296,10 +297,10 @@ def _own_wav(head, flen, read_at):
 
 def _ffmpeg_frames(x, rate):
     # ffmpeg reads str(x) to the microsecond and rounds to the nearest frame
-    i, _, f = str(x).partition(".")
-    if not i.isdigit() or not (f.isdigit() or f == ""):
+    try:
+        us = int(Decimal(str(x)) * 1000000)
+    except (ArithmeticError, ValueError):
         return None
-    us = int(i) * 1000000 + int((f + "000000")[:6])
     return (us * rate + 500000) // 1000000
 
 
@@ -449,7 +450,8 @@ class AudioSegment(object):
         d = self.__dict__
         # another thread can have joined since the lookup failed
         if name != "_data" or not ("_parts" in d or "_data" in d):
-            raise AttributeError(name)
+            # gives pydub's message, and a property that raised AttributeError says why
+            return object.__getattribute__(self, name)
         return self._join()
 
     def _join(self):
@@ -833,7 +835,9 @@ class AudioSegment(object):
             # pydub rewinds a wav
             file.seek(0)
         # a name goes to the decoder as it is, so the file never sits in memory
-        data = None if close_file else bytes(file.read())
+        # a pipe gives its bytes once, so the decoder and ffmpeg get them from here and not by name
+        piped = close_file and not os.path.isfile(filename)
+        data = None if close_file and not piped else bytes(file.read())
         # pydub reads pcm wav itself, without codec or parameters, and cuts it in python
         head = file.read(65536) if data is None else data[:65536]
         own = wav and _pydub_wav(head)
@@ -891,7 +895,7 @@ class AudioSegment(object):
         if tried and _ffmpeg.find(cls.converter) is None and any(is_format(f) for f in ("wav", "flac", "mp3", "ogg", "opus")):
             raise tagged(CouldntDecodeError("cant read this file"), sniff(head), "cant_decode")
         try:
-            wav = _ffmpeg.to_wav(cls.converter, filename, data, format, codec, parameters, start_second, duration, lim)
+            wav = _ffmpeg.to_wav(cls.converter, None if piped else filename, data, format, codec, parameters, start_second, duration, lim)
         except (CouldntDecodeError, FileNotFoundError) as e:
             e.format = sniff(head) or getattr(e, "format", None)
             raise
@@ -1082,9 +1086,10 @@ class AudioSegment(object):
                 not (format == "opus" and self.frame_rate < 100):
             rate = 0
             if bitrate and format in ("ogg", "opus"):
-                bitrate = str(bitrate).strip().lower()
-                unit = {"k": 1000, "m": 1000000}.get(bitrate[-1])
-                rate = int(float(bitrate[:-1]) * unit) if unit else int(bitrate)
+                try:
+                    rate = _mp3.rate_of(bitrate)
+                except (ValueError, OverflowError):
+                    raise tagged(CouldntEncodeError("bad bitrate %r" % (bitrate,)), format, "cant_encode")
             data, width = pcm, self.sample_width
             if format == "flac" and width == 4:
                 # ffmpeg writes 32 bit audio as 24 bit flac
@@ -1385,9 +1390,17 @@ class AudioSegment(object):
         seg2 = seg2._data
         remaining = len(seg1)
         n = -(-remaining // len(seg2)) if seg2 else 0
-        # a times that never counts down to 0 loops to the end, like negative
-        if times > 0 and times % 1 == 0:
-            n = min(n, int(times))
+        if not times:
+            n = 0
+        elif remaining > len(seg2):
+            # a times that never counts down to 0 loops to the end, like negative
+            try:
+                if times > 0 and times % 1 == 0:
+                    n = min(n, int(times))
+            except TypeError:
+                pass
+            # pydub counts times down as it loops, so what cannot be counted fails
+            times -= 1
         seg2 = (seg2 * n)[:remaining]
         pos = len(seg2)
         if gain_during_overlay:

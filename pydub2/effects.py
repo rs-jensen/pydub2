@@ -6,7 +6,8 @@ from .utils import (
     ratio_to_db,
     register_pydub_effect,
     make_chunks,
-    get_min_max_value
+    get_min_max_value,
+    overrides
 )
 import _pydub2
 from .silence import split_on_silence
@@ -92,9 +93,9 @@ def speedup(seg, playback_speed=1.5, chunk_size=150, crossfade=25):
     chunks = [chunk[:-ms_to_remove_per_chunk] for chunk in chunks[:-1]]
 
     out = chunks[0]
-    if crossfade < 0:
+    if crossfade < 0 or overrides(out, "append", "__add__"):
         # pydub fades 0 ms at the first append and divides by zero
-        if len(chunks) > 1 and (not len(out[-crossfade:]) or not len(chunks[1][:crossfade])):
+        if crossfade < 0 and len(chunks) > 1 and (not len(out[-crossfade:]) or not len(chunks[1][:crossfade])):
             raise ZeroDivisionError("division by zero")
         for chunk in chunks[1:]:
             out = out.append(chunk, crossfade=crossfade)
@@ -194,6 +195,23 @@ def compress_dynamic_range(seg, threshold=-20.0, ratio=4.0, attack=5.0, release=
     look_frames = int(seg.frame_count(ms=attack))
     attack_frames = seg.frame_count(ms=attack)
     release_frames = seg.frame_count(ms=release)
+    if overrides(seg, "frame_count", "get_sample_slice", "get_frame", "rms"):
+        output = []
+        attenuation = 0.0
+        for i in xrange(int(seg.frame_count())):
+            rms_now = seg.get_sample_slice(i - look_frames, i).rms
+            max_attenuation = (1 - (1.0 / ratio)) * (0.0 if rms_now == 0 else max(ratio_to_db(rms_now / thresh_rms), 0))
+            attenuation_inc = max_attenuation / attack_frames
+            attenuation_dec = max_attenuation / release_frames
+            if rms_now > thresh_rms and attenuation <= max_attenuation:
+                attenuation = min(attenuation + attenuation_inc, max_attenuation)
+            else:
+                attenuation = max(attenuation - attenuation_dec, 0)
+            frame = seg.get_frame(i)
+            if attenuation != 0.0:
+                frame = _pydub2.mul(frame, seg.sample_width, db_to_float(-attenuation))
+            output.append(frame)
+        return seg._spawn(data=b''.join(output))
     n = int(seg.frame_count())
     if not n:
         return seg._spawn(data=b"")
@@ -245,7 +263,20 @@ def low_pass_filter(seg, cutoff):
     dt = 1.0 / seg.frame_rate
 
     alpha = dt / (RC + dt)
-    
+
+    if overrides(seg, "get_array_of_samples", "frame_count"):
+        original = seg.get_array_of_samples()
+        filtered = array.array(seg.array_type, original)
+        last_val = [0] * seg.channels
+        for i in range(seg.channels):
+            last_val[i] = filtered[i] = original[i]
+        for i in range(1, int(seg.frame_count())):
+            for j in range(seg.channels):
+                offset = (i * seg.channels) + j
+                last_val[j] = last_val[j] + (alpha * (original[offset] - last_val[j]))
+                filtered[offset] = int(last_val[j])
+        return seg._spawn(data=filtered)
+
     return seg._spawn(data=_pydub2.lowpass(seg._data, seg.sample_width, seg.channels, alpha))
 
 
@@ -259,6 +290,21 @@ def high_pass_filter(seg, cutoff):
     dt = 1.0 / seg.frame_rate
 
     alpha = RC / (RC + dt)
+
+    if overrides(seg, "get_array_of_samples", "frame_count"):
+        minval, maxval = get_min_max_value(seg.sample_width * 8)
+        original = seg.get_array_of_samples()
+        filtered = array.array(seg.array_type, original)
+        last_val = [0] * seg.channels
+        for i in range(seg.channels):
+            last_val[i] = filtered[i] = original[i]
+        for i in range(1, int(seg.frame_count())):
+            for j in range(seg.channels):
+                offset = (i * seg.channels) + j
+                offset_minus_1 = ((i - 1) * seg.channels) + j
+                last_val[j] = alpha * (last_val[j] + original[offset] - original[offset_minus_1])
+                filtered[offset] = int(min(max(last_val[j], minval), maxval))
+        return seg._spawn(data=filtered)
 
     return seg._spawn(data=_pydub2.highpass(seg._data, seg.sample_width, seg.channels, alpha))
 
