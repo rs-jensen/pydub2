@@ -35,6 +35,19 @@ def live_x(code, setup=STEREO % SAW):
     return float(out.stdout) / PCM
 
 
+def mapped_x(code, setup=STEREO % SAW):
+    """Peak of the address space of a fresh process over a bare import of pydub2, as a multiple of the PCM.
+
+    Linux only. Like the commit Windows counts, memory taken and not yet written is in it."""
+    def peak(code):
+        code += "\nprint(int([l for l in open('/proc/self/status') if l.startswith('VmPeak')][0].split()[1]) / 1e3)"
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                             env=dict(os.environ, PYTHONPATH=os.pathsep.join(sys.path)))
+        assert out.returncode == 0, out.stderr
+        return float(out.stdout)
+    return (peak("import pydub2\n" + setup + code) - peak("import pydub2")) * 1e6 / PCM
+
+
 def export(format):
     return "with tempfile.TemporaryDirectory() as d:\n    seg.export(d + '/out', format=%r)" % format
 
@@ -45,9 +58,16 @@ def test_export_holds_the_audio_once(format):
     assert peak_x(export(format)) < 2.0
 
 
-# 3.0 before and 2.0 after with noise, which flac cannot shrink: the audio and the file, its blocks freed as they are copied
+# 3.0 before and 2.0 after with noise, which flac cannot shrink: the audio and the file, written a block at a time.
+# Windows counts commit, not resident pages, so it saw 3.0 while the whole file was made next to the blocks
 def test_export_flac_does_not_copy_the_file():
     assert peak_x(export("flac"), STEREO % NOISE) < 2.5
+
+
+# 2.9 before and 1.9 after: the blocks and the whole file were side by side, so Windows saw 3.0 where Linux saw 2.0
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads VmPeak")
+def test_export_flac_to_a_path_never_holds_the_file_twice():
+    assert mapped_x(export("flac"), STEREO % NOISE) < 2.5
 
 
 # 3.2 before and 2.1 after: the audio and a result a tenth longer, which was held twice

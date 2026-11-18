@@ -186,6 +186,15 @@ struct Sink {
         }
         return out;
     }
+
+    // the same, one new piece at most a block long for each step, so the file is never held whole twice
+    void pieces(const Alloc &piece, size_t from, size_t to) {
+        while (from < to) {
+            size_t n = std::min(to - from, block - from % block);
+            drain(piece(n), from, from + n);
+            from += n;
+        }
+    }
 };
 
 static FLAC__StreamEncoderWriteStatus flac_write(const FLAC__StreamEncoder *, const FLAC__byte buf[], size_t len,
@@ -208,7 +217,7 @@ static FLAC__StreamEncoderTellStatus flac_tell(const FLAC__StreamEncoder *, FLAC
     return FLAC__STREAM_ENCODER_TELL_STATUS_OK;
 }
 
-static void flac(const Audio &a, const Tags &tags, const Cancel &cancel, const Alloc &alloc) {
+static void flac(const Audio &a, const Tags &tags, const Cancel &cancel, const Alloc &alloc, const Alloc &piece) {
     if (a.channels > 8) {
         throw std::runtime_error("cant encode this");
     }
@@ -285,6 +294,14 @@ static void flac(const Audio &a, const Tags &tags, const Cancel &cancel, const A
         if (s.size < at + old) {
             throw std::runtime_error("cant encode this");
         }
+    }
+    if (piece) {
+        s.pieces(piece, 0, at);
+        if (!comment.empty()) {
+            memcpy(piece(comment.size()), comment.data(), comment.size());
+        }
+        s.pieces(piece, at + old, s.size);
+        return;
     }
     char *out = alloc(s.size - old + comment.size());
     out = s.drain(out, 0, at);
@@ -456,7 +473,7 @@ static void copy(const std::string &s, const Alloc &alloc) {
 }
 
 void encode(const Audio &a, const std::string &format, int bitrate, const Tags &tags, const Cancel &cancel,
-            const Alloc &alloc) {
+            const Alloc &alloc, const Alloc &piece) {
     if (a.width < 1 || a.width > 4) {
         throw std::invalid_argument("bad sample width");
     }
@@ -464,7 +481,7 @@ void encode(const Audio &a, const std::string &format, int bitrate, const Tags &
         return wav(a, alloc);
     }
     if (format == "flac") {
-        return flac(a, tags, cancel, alloc);
+        return flac(a, tags, cancel, alloc, piece);
     }
     if (format == "ogg") {
         return copy(ogg(a, bitrate, tags, cancel), alloc);

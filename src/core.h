@@ -62,8 +62,9 @@ std::unique_ptr<Decoder> open(const std::filesystem::path &path);
 // tags are written as vorbis comments to flac, ogg and opus, wav has none
 // the 44 bytes in front of the samples, so a writer can send the samples as they are
 std::string wav_head(const Audio &a);
+// with piece, flac comes out as a run of pieces, each from its own call, and alloc is not used
 void encode(const Audio &a, const std::string &format, int bitrate, const Tags &tags, const Cancel &cancel,
-            const Alloc &alloc);
+            const Alloc &alloc, const Alloc &piece = Alloc());
 
 // pcm.cpp
 // these do the same math as the old audioop module so the numbers match pydub

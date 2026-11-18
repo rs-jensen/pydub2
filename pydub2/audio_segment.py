@@ -65,10 +65,10 @@ if sys.version_info >= (3, 0):
 _SPAWN_HOOKS = ("__new__", "__init__", "__setattr__", "__getattr__", "_spawn")
 
 
-def _encode(data, rate, *args):
+def _encode(data, rate, *args, **kwargs):
     try:
         # the wave module in pydub rounds the rate
-        return _pydub2.encode(data, round(rate), *args)
+        return _pydub2.encode(data, round(rate), *args, **kwargs)
     except RuntimeError as e:
         raise tagged(CouldntEncodeError(str(e)), args[2], "cant_encode")
 
@@ -1285,8 +1285,12 @@ class AudioSegment(object):
                 except RuntimeError as e:
                     raise tagged(CouldntEncodeError(str(e)), "wav", "cant_encode")
                 return _write_out(out_f, head, data)
+            # a file opened here takes flac a block at a time, so the file is not held whole next to the blocks
+            parts = format == "flac" and (out_f is None or isinstance(out_f, (basestring, os.PathLike)))
             out = _encode(data, self.frame_rate, self.channels, width, format, rate,
-                          [] if tags is None or format == "wav" else _vorbis_tags(tags, format))
+                          [] if tags is None or format == "wav" else _vorbis_tags(tags, format), parts=parts)
+            if parts:
+                return _write_out(out_f, *out)
             if format == "wav" and out[40] & 1 and not WAVE_PADS:
                 out = riff_without_pad(out[:-1])
             return _write_out(out_f, out)

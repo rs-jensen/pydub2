@@ -118,6 +118,16 @@ static Alloc into(nb::object &out) {
     };
 }
 
+// each piece is bytes of its own at the end of the list
+static Alloc append(nb::list &list) {
+    return [&list](size_t n) {
+        nb::gil_scoped_acquire g;
+        nb::object b = blank(n);
+        list.append(b);
+        return PyBytes_AS_STRING(b.ptr());
+    };
+}
+
 static Audio audio(nb::bytes data, int rate, int channels, int width) {
     if (rate < 1 || channels < 1 || channels > 65535 || width < 1 || width > 4) {
         throw std::invalid_argument("bad rate, channels or sample width");
@@ -253,20 +263,28 @@ NB_MODULE(_pydub2, m) {
     });
 
     m.def("encode", [](nb::bytes data, int rate, int channels, int width, std::string format, int bitrate,
-                       std::vector<std::pair<nb::bytes, nb::bytes>> tags) {
+                       std::vector<std::pair<nb::bytes, nb::bytes>> tags, bool parts) {
         Audio a = audio(data, rate, channels, width);
         Tags t;
         for (auto &p : tags) {
             t.push_back({std::string(p.first.c_str(), p.first.size()), std::string(p.second.c_str(), p.second.size())});
         }
         nb::object out;
+        nb::list list;
         {
             nb::gil_scoped_release g;
-            encode(a, format, bitrate, t, interrupt(), into(out));
+            encode(a, format, bitrate, t, interrupt(), into(out), parts ? append(list) : Alloc());
         }
-        return out;
+        if (!parts) {
+            return out;
+        }
+        // only flac comes in pieces, the other formats are one
+        if (out.is_valid()) {
+            list.append(out);
+        }
+        return nb::object(list);
     }, nb::arg("data"), nb::arg("rate"), nb::arg("channels"), nb::arg("width"), nb::arg("format"), nb::arg("bitrate") = 0,
-       nb::arg("tags") = nb::list());
+       nb::arg("tags") = nb::list(), nb::arg("parts") = false);
 
     m.def("wav_head", [](nb::bytes data, int rate, int channels, int width) {
         std::string s = wav_head(audio(data, rate, channels, width));
