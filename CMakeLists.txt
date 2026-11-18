@@ -117,10 +117,11 @@ if(NOT MSVC)
     set_source_files_properties(src/vad.cpp PROPERTIES COMPILE_OPTIONS -O3)
 endif()
 # audioop does not fuse the two products in tomono, so neither do we
+# nanobind builds for size, the sample loops need the vectoriser
 if(MSVC)
-    set_source_files_properties(src/pcm.cpp PROPERTIES COMPILE_OPTIONS /fp:strict)
+    set_source_files_properties(src/pcm.cpp PROPERTIES COMPILE_OPTIONS "/O2;/fp:strict")
 else()
-    set_source_files_properties(src/pcm.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
+    set_source_files_properties(src/pcm.cpp PROPERTIES COMPILE_OPTIONS "-O3;-ffp-contract=off")
 endif()
 if(UNIX AND NOT APPLE)
     target_link_options(_pydub2 PRIVATE -Wl,--exclude-libs,ALL)

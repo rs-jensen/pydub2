@@ -77,7 +77,7 @@ The editing functions only exist in the pydub family. Seconds on the 10 minute f
 
 Where pydub2 is slower or heavier than something else in these runs:
 
-- `overlay` and `normalize` take as long as pydub, which uses the C `audioop`, or a little less. Both are under 0.1 seconds for 10 minutes.
+- `overlay` takes as long as pydub, which uses the C `audioop`, or a little less. It is under 0.1 seconds for 10 minutes.
 - Importing it takes 7.5 ms against 4.9 for pydub. soundfile, PyAV and miniaudio take longer than pydub2.
 - Taking 10 seconds out of an ogg file takes 0.50 seconds for a 10 minute file and 0.26 for a 1 minute file, because pydub2 decodes from the start. soundfile needs 0.05, miniaudio 0.06 and PyAV 0.12. pydub needs 0.39 and pydub-lts 0.15, so this is the one row where pydub2 reads slower than pydub. For mp3 and flac the 10 second read takes 0.04 to 0.05 seconds.
 - Opus export takes 6.2 seconds for 10 minutes, a little more than ffmpeg through pydub (4.9). It is faster than PyAV (20). This is measured on Apple silicon, where the resampler inside the opus encoder has a neon version.
@@ -140,7 +140,7 @@ Notes on the table:
 - Writing mp3, ogg and opus in pydub2 holds the audio and a little more. The Python process of pydub is 9 to 15 MiB lower, because ffmpeg does the work in its own process, and that process peaks at 136 MiB.
 - Writing to a `BytesIO` holds the file twice, once as the encoded bytes and once in the `BytesIO`. For flac that is 2.5x, for the others it is small.
 - A 1 minute source gives the same multiples within 0.2x for the calls that read all of the audio and do not write a file. Writing, taking 10 seconds and streaming have fixed costs of a few MiB that show on a small source: ogg 1.4x, opus 1.5x, mp3 1.8x and flac 2.0x for writing, and 0.5x for streaming.
-- `fade` over the whole file, with `duration` the length of the audio, is the heaviest call left. It peaks at 3.8x in pydub2 and in pydub, because every millisecond is its own piece until they are joined.
+- `fade` over the whole file, with `duration` the length of the audio, peaks at 2.0x in pydub2, the audio and the result. pydub peaks at 3.8x, because every millisecond is its own piece until they are joined.
 - `append` with a crossfade is 4.0x because it holds both inputs and builds a result as long as both.
 
 ## When another library is the better choice

@@ -1628,16 +1628,31 @@ class AudioSegment(object):
         xf = seg1[-crossfade:].fade(to_gain=-120, start=0, end=float('inf'))
         xf *= seg2[:crossfade].fade(from_gain=-120, start=0, end=float('inf'))
 
-        output = TemporaryFile()
+        parts = [seg1._piece(None, -crossfade), xf._data, seg2._piece(crossfade, None)]
+        # max_file_size held the result when it was read back from a temporary file, so it still does
+        check_size(sum(map(len, parts)), limits())
+        return seg1._spawn(data=parts)
 
-        output.write(seg1[:-crossfade]._data)
-        output.write(xf._data)
-        output.write(seg2[crossfade:]._data)
-
-        output.seek(0)
-        obj = seg1._spawn(data=output)
-        output.close()
-        return obj
+    def _coarse_fade(self, from_gain, to_gain, start, end, duration, from_power):
+        """The bytes of a fade with one gain step per ms, or None when the loop in fade has to run."""
+        cls = type(self)
+        if (type(start) is not int or type(duration) is not int or start < 0 or self.frame_rate < 500
+                or type(self.sample_width) is not int or type(self.channels) is not int
+                or self.frame_width != self.sample_width * self.channels or len(self._data) % self.frame_width
+                or cls is not AudioSegment and (hasattr(cls, "_data") or any(
+                    getattr(cls, n) is not getattr(AudioSegment, n)
+                    for n in ("__getitem__", "_parse_position", "frame_count", "__len__", "_piece") + _SPAWN_HOOKS))):
+            return None
+        try:
+            to_power = db_to_float(to_gain)
+        except Exception:
+            return None
+        # chunks past the end are empty
+        count = min(duration, max(0, int(len(self) - start) + 2))
+        return _pydub2.fade(self._piece(None, start), from_power if from_gain != 0 else None, self._data,
+                            self.sample_width, self.channels, self.frame_rate / 1000.0, start, count, from_power,
+                            (to_power - from_power) / duration, self._piece(end, None),
+                            to_power if to_gain != 0 else None)
 
     def fade(self, to_gain=0, from_gain=0, start=None, end=None,
              duration=None):
@@ -1687,6 +1702,11 @@ class AudioSegment(object):
             duration = end - start
 
         from_power = db_to_float(from_gain)
+
+        if duration > 100:
+            data = self._coarse_fade(from_gain, to_gain, start, end, duration, from_power)
+            if data is not None:
+                return self._spawn(data=data)
 
         output = []
 

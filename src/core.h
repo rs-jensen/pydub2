@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -78,6 +79,10 @@ void lin2lin(std::string_view data, size_t width, size_t new_width, const Alloc 
 // head and tail joined, with over added to the first n bytes of the tail and repeated to fill them. gain scales the tail first
 void mix(std::string_view head, std::string_view tail, std::string_view over, size_t width, size_t n, bool gain, double factor,
          const Alloc &alloc);
+// before at its gain, count 1 ms chunks of data from ms start at from_power + i * step, after at its gain. false: run the loop
+bool fade(std::string_view before, std::optional<double> before_gain, std::string_view data, size_t width, size_t channels,
+          double per_ms, long long start, long long count, double from_power, double step, std::string_view after,
+          std::optional<double> after_gain, const Alloc &alloc);
 // 24 bit samples in 4 bytes, the way AudioSegment keeps them: the top three bytes of the 32 bit sample, then a padding byte in front
 void widen24(std::string_view data, size_t width, const Alloc &alloc);
 // samples index, index + channels, index + 2 * channels and so on, the way a python array slices them
