@@ -379,7 +379,7 @@ def failed(r, f, head, e):
     elif reason == "too_long":
         note = "longer than max_duration: refused"
     elif reason == "too_big":
-        note = "larger than max_bytes: refused"
+        note = "larger than max_bytes or max_file_size: refused"
     elif not head:
         reason, hint, note = "empty", None, "file is empty"
     elif is_text(head):
