@@ -3,7 +3,7 @@ from __future__ import division
 import array
 import numbers
 import os
-from tempfile import TemporaryFile, NamedTemporaryFile
+from tempfile import NamedTemporaryFile
 import subprocess
 import sys
 import struct
@@ -1626,16 +1626,10 @@ class AudioSegment(object):
         xf = seg1[-crossfade:].fade(to_gain=-120, start=0, end=float('inf'))
         xf *= seg2[:crossfade].fade(from_gain=-120, start=0, end=float('inf'))
 
-        output = TemporaryFile()
-
-        output.write(seg1[:-crossfade]._data)
-        output.write(xf._data)
-        output.write(seg2[crossfade:]._data)
-
-        output.seek(0)
-        obj = seg1._spawn(data=output)
-        output.close()
-        return obj
+        parts = [seg1._piece(None, -crossfade), xf._data, seg2._piece(crossfade, None)]
+        # the size limit of a load held for the result when it was read back from a file
+        check_size(sum(map(len, parts)), limits())
+        return seg1._spawn(data=parts)
 
     def _coarse_fade(self, from_gain, to_gain, start, end, duration, from_power):
         """The bytes of a fade with one gain step per ms, or None when the loop in fade has to run."""
