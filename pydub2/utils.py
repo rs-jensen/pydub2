@@ -240,9 +240,10 @@ def file_size(f):
     # None for a pipe or a socket
     try:
         at = f.tell()
-        size = f.seek(0, 2)
-        f.seek(at)
-        return size
+        try:
+            return f.seek(0, 2)
+        finally:
+            f.seek(at)
     except (AttributeError, OSError, ValueError):
         return None
 

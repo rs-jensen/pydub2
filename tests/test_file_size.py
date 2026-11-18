@@ -165,6 +165,20 @@ def test_data_and_spawn_refuse_a_file_object_over_the_limit(cap):
     assert AudioSegment(data=Counted(data)).raw_data == seg.raw_data
 
 
+def test_the_position_comes_back_when_a_seek_fails():
+    class Odd(io.BytesIO):
+        def seek(self, pos, whence=0):
+            at = super().seek(pos, whence)
+            if whence == 2:
+                raise OSError("cant measure")
+            return at
+
+    f = Odd(b"x" * 10)
+    f.seek(4)
+    assert utils.file_size(f) is None
+    assert f.tell() == 4
+
+
 class Idle(io.RawIOBase):
     """A non-blocking file with nothing to give yet."""
 
