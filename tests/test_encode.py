@@ -342,6 +342,14 @@ def test_vorbis_last_granule_is_the_input_length(frames):
     assert int.from_bytes(out[out.rfind(b"OggS") + 6:][:8], "little") == frames
 
 
+# libvorbis 1.3.7 shifts negative ints and reads past a noise curve from 44.1 kHz up, this fails under -fsanitize=undefined without cmake/vorbis_patch.cmake
+@pytest.mark.parametrize("rate", [8000, 22050, 44100, 48000, 96000, 192000])
+def test_vorbis_sets_up_at_every_rate(rate):
+    out = _pydub2.encode(sine(rate, 2, 2, 0.1), rate, 2, 2, "ogg")
+    assert _pydub2.decode(out)[1:3] == (rate, 2)
+    assert int.from_bytes(out[out.rfind(b"OggS") + 6:][:8], "little") == rate // 10
+
+
 def test_opus_refuses_tiny_rates():
     with pytest.raises(RuntimeError):
         _pydub2.encode(b"\0" * 400, 50, 1, 2, "opus")
