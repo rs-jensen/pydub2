@@ -523,7 +523,7 @@ def outcome(lib, path, **kw):
     return len(seg), seg.frame_rate, seg.sample_width, seg.channels, len(seg.raw_data)
 
 
-ODD_TIMES = [-1, -0.5, -1e-9, 1e-5, 1e12, 1e300, -1e300, float("nan"), float("inf"), float("-inf"), True]
+ODD_TIMES = [-1, -0.5, -1e-9, 1e12, 1e300, -1e300, float("nan"), float("inf"), float("-inf")]
 
 
 @needs_ff
@@ -621,3 +621,20 @@ def outcome_of(load, lib):
     except Exception as e:
         return type(e).__name__
     return "loaded"
+
+
+@pytest.mark.parametrize("fmt", ["wav", "flac", "mp3", "ogg", "opus"])
+@pytest.mark.parametrize("kind", ["start_second", "duration"])
+@pytest.mark.parametrize("make", [lambda: __import__("fractions").Fraction(1, 2), lambda: True, lambda: np.float64(0.25),
+                                  lambda: np.int64(0), lambda: np.float32(0.5), lambda: 1e-5, lambda: np.float64(1e-5)])
+def test_plain_numbers_cut_without_ffmpeg(tmp_path, monkeypatch, fmt, kind, make):
+    path = str(tmp_path / ("a." + fmt))
+    pydub2.AudioSegment(*noise(1000, rate=48000)[:1], sample_width=2, frame_rate=48000, channels=1).export(path, format=fmt)
+    monkeypatch.setattr(pydub2.AudioSegment, "converter", str(tmp_path / "no-ffmpeg"))
+    for source in (path, io.BytesIO(open(path, "rb").read())):
+        seg = pydub2.AudioSegment.from_file(source, format=fmt, **{kind: make()})
+        assert seg.frame_rate == 48000 and len(seg.raw_data) % 2 == 0
+    whole = pydub2.AudioSegment.from_file(path)
+    v = make() * 1000
+    want = whole[v:] if kind == "start_second" else whole[:v]
+    assert len(seg) == len(want)

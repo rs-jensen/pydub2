@@ -3,7 +3,6 @@ from __future__ import division
 import array
 import numbers
 import os
-import re
 from tempfile import TemporaryFile, NamedTemporaryFile
 import subprocess
 import sys
@@ -320,11 +319,8 @@ class _Refused(Exception):
 
 
 def _ffmpeg_time(v):
-    # a value that ffmpeg reads as given and the decoder here cuts the same, anything else is left to ffmpeg
-    if v is None:
-        return True
-    return isinstance(v, numbers.Real) and not isinstance(v, bool) and 0 <= v < 1e12 and \
-        re.fullmatch(r"-?[0-9.]+", str(v)) is not None
+    # a position the decoder here cuts at, anything negative, not finite or too large is left to ffmpeg like pydub does
+    return v is None or (isinstance(v, numbers.Real) and 0 <= v < 1e12)
 
 
 def _span(d, wav, start_second, duration):
