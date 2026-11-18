@@ -57,6 +57,23 @@ def test_converter_writes_nothing(tmp_path, monkeypatch, format):
     assert seg.export(format=format, codec="x").read() == b""
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a shell script as converter")
+@pytest.mark.parametrize("format", ["mp3", "m4a", "ogg"])
+def test_converter_writes_nothing_to_a_path(tmp_path, monkeypatch, format):
+    pydub = pytest.importorskip("pydub")
+    script = tmp_path / "quiet"
+    script.write_text("#!/bin/sh\nexit 0\n")
+    script.chmod(0o755)
+    left = {}
+    for name, lib in (("new", pydub2), ("old", pydub)):
+        monkeypatch.setattr(lib.AudioSegment, "converter", str(script))
+        path = tmp_path / name
+        path.write_bytes(b"x" * 1000)
+        lib.AudioSegment.silent(100).export(str(path), format=format, codec="x")
+        left[name] = path.read_bytes()
+    assert left["new"] == left["old"] == b""
+
+
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs fifos")
 @pytest.mark.parametrize("format", ["flac", "ogg", "opus"])
 def test_load_from_fifo(tmp_path, format):
