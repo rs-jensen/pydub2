@@ -1,11 +1,15 @@
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
 import pytest
 
 import _pydub2
+import pydub2
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 def test_decode_garbage_raises():
@@ -40,3 +44,30 @@ def test_uses_only_python_symbols_the_macos_link_allows():
     names = {line.split()[-1].split("@")[0] for line in out.splitlines() if line.strip()}
     listed = {line.split()[-1][1:] for line in allowed.read_text().splitlines() if line.startswith("-U _")}
     assert sorted(n for n in names if n.lstrip("_").startswith("Py") and n not in listed) == []
+
+
+def test_versions_agree():
+    if not (ROOT / "pyproject.toml").exists():
+        pytest.skip("not run from a source checkout")
+    found = {}
+    for name in ("pyproject.toml", "mp3/pyproject.toml", "compat/pyproject.toml"):
+        path = ROOT / name
+        if path.exists():
+            found[name] = re.search(r'^version = "([^"]+)"', path.read_text(encoding="utf-8"), re.M).group(1)
+    found["pydub2.__version__"] = pydub2.__version__
+    assert len(set(found.values())) == 1, found
+
+
+def test_license_files_named_in_the_docs_exist():
+    if not (ROOT / "licenses").is_dir():
+        pytest.skip("not run from a source checkout")
+    named = set()
+    for name in ("THIRD_PARTY.md", "docs/licensing.md"):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        named.update(re.findall(r"\blicenses/[\w.-]+\.txt", text))
+    assert named
+    for name in sorted(named):
+        assert (ROOT / name).is_file(), name
+    third_party = (ROOT / "THIRD_PARTY.md").read_text(encoding="utf-8")
+    for path in sorted((ROOT / "licenses").iterdir()):
+        assert "licenses/" + path.name in third_party, path.name
