@@ -201,3 +201,29 @@ def test_partial_frame_detect_silence():
 def test_compress_nothing_with_odd_width():
     seg = pydub2.AudioSegment(b"", sample_width=5, frame_rate=8000, channels=1)
     assert seg.compress_dynamic_range().raw_data == b""
+
+
+@pytest.mark.parametrize("step", [2 ** 31, 2 ** 40, 2 ** 63])
+def test_silence_seek_step_past_the_end(step):
+    seg = pydub2.AudioSegment(bytes(2000) + b"\x10\x20" * 500, sample_width=2, frame_rate=8000, channels=1)
+    assert silence.detect_silence(seg, 10, -16, step) == silence.detect_silence(seg, 10, -16, 1000)
+    assert silence.detect_silence(seg, 10, -16, step) == [[0, 10]]
+    assert silence.detect_nonsilent(seg, 10, -16, step) == [[10, len(seg)]]
+
+
+@pytest.mark.parametrize("n", [2 ** 31, 2 ** 63, -2 ** 31 - 1])
+def test_huge_rate_and_width_raise_overflow(n):
+    seg = tone(100)
+    with pytest.raises(OverflowError):
+        seg.set_frame_rate(n)
+    with pytest.raises(OverflowError):
+        seg.set_sample_width(n)
+
+
+def test_eq_with_nan_gain():
+    pytest.importorskip("scipy")
+    from pydub2 import scipy_effects
+    seg = tone(200, channels=2)
+    for mode in ("L+R", "M+S"):
+        with pytest.raises(ValueError):
+            scipy_effects.eq(seg, 1000, 100, mode, "peak", float("nan"))

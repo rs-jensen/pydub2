@@ -169,6 +169,12 @@ class ClassPropertyDescriptor(object):
         return self
 
 
+def _c_int(n):
+    # audioop raises this for an int that does not fit, the core would raise TypeError
+    if isinstance(n, int) and not -2 ** 31 <= n < 2 ** 31:
+        raise OverflowError("Python int too large to convert to C int")
+
+
 def classproperty(func):
     if not isinstance(func, (classmethod, staticmethod)):
         func = classmethod(func)
@@ -1191,6 +1197,7 @@ class AudioSegment(object):
         if sample_width == self.sample_width:
             return self
 
+        _c_int(sample_width)
         frame_width = self.channels * sample_width
 
         return self._spawn(
@@ -1206,6 +1213,7 @@ class AudioSegment(object):
         if frame_rate == self.frame_rate:
             return self
 
+        _c_int(frame_rate)
         if self._data and resample_quality == "high":
             converted = _pydub2.resample(self._data, self.frame_rate, self.channels,
                                          self.sample_width, frame_rate)
