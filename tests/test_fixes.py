@@ -195,3 +195,8 @@ def test_partial_frame_compress():
 
 def test_partial_frame_detect_silence():
     assert silence.detect_nonsilent(partial_frame(), min_silence_len=10, silence_thresh=-90) == [[0, 70]]
+
+
+def test_compress_nothing_with_odd_width():
+    seg = pydub2.AudioSegment(b"", sample_width=5, frame_rate=8000, channels=1)
+    assert seg.compress_dynamic_range().raw_data == b""
