@@ -313,6 +313,15 @@ def same_as_ffmpeg(tmp_path, name, data, limit=1):
     close(*both(path), limit)
 
 
+# what pydub users get: decoded here where it can be, by ffmpeg where not
+def same_as_pydub(tmp_path, name, data, limit=1):
+    path = save(tmp_path, name, data)
+    mine = pydub2.AudioSegment.from_file(path)
+    theirs = AudioSegment.from_file(path)
+    assert (mine.frame_rate, mine.channels, mine.sample_width) == (theirs.frame_rate, theirs.channels, theirs.sample_width)
+    close(mine.raw_data, theirs.raw_data, mine.sample_width, limit)
+
+
 def test_mp3_padding_where_the_tag_says(tmp_path):
     m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k"), "rb").read()
     starts = mp3_frames(m)
@@ -531,7 +540,8 @@ def test_flac_seek_with_zero_max_block_size():
     d.read(10)
 
 
-# ffmpeg keeps the channels of the first frame and mixes the rest, a new rate it resamples so that goes to ffmpeg
+# ffmpeg keeps the channels of the first frame and mixes the rest. A new rate it resamples and another layer it decodes
+# with its own synthesis, so those go to ffmpeg
 def test_mp3_channels_change(tmp_path):
     args = ["-c:a", "libmp3lame", "-write_xing", "0", "-id3v2_version", "0"]
     st = open(make(tmp_path, "st.mp3", 2, *args), "rb").read()
@@ -539,8 +549,11 @@ def test_mp3_channels_change(tmp_path):
     same_as_ffmpeg(tmp_path, "stmo.mp3", st + mo)
     same_as_ffmpeg(tmp_path, "most.mp3", mo + st)
     low = open(make(tmp_path, "low.mp3", 2, "-ar", "22050", *args), "rb").read()
-    with pytest.raises(RuntimeError):
-        _pydub2.decode(st + low)
+    mp2 = open(make(tmp_path, "a.mp2", 2, "-c:a", "mp2"), "rb").read()
+    for data in (st + low, st + mp2):
+        with pytest.raises(RuntimeError):
+            _pydub2.decode(data)
+        same_as_pydub(tmp_path, "mixed.mp3", data, 0)
 
 
 # ffmpeg wants two frames in a row to start, a single frame after the Info frame is not an mp3 to it
@@ -563,6 +576,35 @@ def test_mp3_seek_after_a_dropped_frame(tmp_path):
     for at in range(18 * 1152, 26 * 1152, 300):
         d.seek(at)
         assert d.read(1500) == whole[at * 4:(at + 1500) * 4]
+
+
+# the last n bytes of main data in the frames before frame i, which is the bit reservoir frame i can reach back into
+def main_data_before(m, starts, i, n):
+    out = b""
+    for at, end in zip(starts[1:i], starts[2:i + 1]):
+        mono = m[at + 3] >> 6 == 3
+        side = (17 if mono else 32) if m[at + 1] & 8 else (9 if mono else 17)
+        out += m[at + 4 + (0 if m[at + 1] & 1 else 2) + side:end]
+    return out[-n:]
+
+
+# block type of a granule, 0 without window switching
+def block_type(m, at, gr, ch=0):
+    v1, mono = m[at + 1] & 8, m[at + 3] >> 6 == 3
+    p = (at + 4 + (0 if m[at + 1] & 1 else 2)) * 8 + ((18 if mono else 20) if v1 else (9 if mono else 10))
+    p += (gr * (1 if mono else 2) + ch) * (59 if v1 else 63) + (33 if v1 else 38)
+    return bits(m, p + 1, 2) if bits(m, p, 1) else 0
+
+
+# an MPEG 2 frame at 16 kHz that ffmpeg and the decoder here drop for its big_values. ffmpeg keeps its last 512 bytes as
+# the bit reservoir, so with the right data there the next frame decodes as if nothing was in between
+def dropped_frame(mode, data):
+    f = bytearray(b"\xff\xf3\xe8" + bytes([mode]) + bytes(716))
+    p = 32 + (9 if mode >> 6 == 3 else 10) + 12
+    for q in range(p, p + 9):
+        f[q // 8] |= 128 >> q % 8
+    f[-len(data):] = data
+    return bytes(f)
 
 
 def damage(m, kind, k):
@@ -591,7 +633,18 @@ def damage(m, kind, k):
 def test_mp3_garbage_like_ffmpeg(tmp_path, channels, args, cases):
     m = open(make(tmp_path, "a.mp3", channels, "-c:a", "libmp3lame", *args, samples=CLICKS), "rb").read()
     for kind, k in cases:
-        same_as_ffmpeg(tmp_path, "bad.mp3", damage(m, kind, k))
+        same_as_pydub(tmp_path, "bad.mp3", damage(m, kind, k))
+
+
+# count1 quads of four ones up to the end of an mpeg 2 granule after one pair of big values. ffmpeg starts the last
+# quad at value 570, the quad at 574 would only fit half
+def test_mp3_no_quad_past_572(tmp_path):
+    def b(v, n):
+        return format(v, "0%db" % n)
+    granule = b(145 * 8, 12) + b(1, 9) + b(180, 8) + b(0, 9) + "0" + b(0, 22) + "01"
+    data = b(0, 9) + granule + "0" * 8 * 145
+    frame = b"\xff\xf3\xe0\xc0" + int(data, 2).to_bytes(len(data) // 8, "big")
+    same_as_ffmpeg(tmp_path, "quads.mp3", (frame + bytes(522 - len(frame))) * 4)
 
 
 # ffmpeg on x86 turns a sample past the int32 range into -32768 when it converts to 16 bit with sse, and wraps it
@@ -606,11 +659,12 @@ def test_mp3_far_too_loud(tmp_path):
     # a fake frame in front of the third last one decodes far too loud into the last frame, which the padding cuts
     s = open(make(tmp_path, "b.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k", samples=CLICKS), "rb").read()
     k = mp3_frames(s)[-3]
-    q = save(tmp_path, "end.mp3", s[:k] + s[k:k + 4] + b"\xff" + s[k:])
+    end = s[:k] + s[k:k + 4] + b"\xff" + s[k:]
     if platform.machine().lower() in ("x86_64", "amd64"):
         close(*both(p), 1)
-        # one sample is 2 off there, float noise in a frame far past full scale. A wrong conversion is 65535 off
-        close(*both(q), 2)
+        # one sample is 2 off there, float noise in a frame far past full scale. A wrong conversion is 65535 off. The
+        # fake frame ends in the encoder's data, which can send the file to ffmpeg
+        same_as_pydub(tmp_path, "end.mp3", end, 2)
     else:
         assert len(_pydub2.decode(bytes(m))[0]) == len(AudioSegment.from_file(p).raw_data)
 
@@ -648,19 +702,50 @@ def test_mp3_starts_inside_the_bit_reservoir(tmp_path):
 def test_mp3_frames_missing_in_the_middle(tmp_path):
     m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k", samples=CLICKS), "rb").read()
     starts = mp3_frames(m)
+    # the frame after the gap gets its own bit reservoir from a dropped frame, so only the blocks that meet differ
+    hits = 0
+    for k in range(5, len(starts) - 6):
+        for gone in (1, 2):
+            at = starts[k + gone]
+            if (block_type(m, starts[k - 1], 1) in (1, 2)) == (block_type(m, at, 0) in (2, 3)):
+                continue
+            hits += 1
+            carry = dropped_frame(m[at + 3], main_data_before(m, starts, k + gone, 512))
+            same_as_ffmpeg(tmp_path, "gap.mp3", m[:starts[k]] + carry + m[at:])
+    assert hits > 3
+    # the same without the help, where junk from the reservoir decodes in the frame after the gap and a cut frame
+    # can make the next frames start in data that sends the file to ffmpeg
     for k in (8, 10, 11, 12, 14, 15):
-        same_as_ffmpeg(tmp_path, "gap.mp3", m[:starts[k]] + m[starts[k + 1]:])
-        same_as_ffmpeg(tmp_path, "gap.mp3", m[:starts[k]] + m[starts[k + 2]:])
-        same_as_ffmpeg(tmp_path, "cut.mp3", m[:starts[k] + 4] + m[starts[k + 1]:])
+        same_as_pydub(tmp_path, "gap.mp3", m[:starts[k]] + m[starts[k + 1]:])
+        same_as_pydub(tmp_path, "gap.mp3", m[:starts[k]] + m[starts[k + 2]:])
+        same_as_pydub(tmp_path, "cut.mp3", m[:starts[k] + 4] + m[starts[k + 1]:])
 
 
 # a wrong bitrate makes a frame too short for its granules, ffmpeg then keeps the end of the frame as the bit reservoir
-@pytest.mark.parametrize("k, bitrate", [(5, 1), (6, 3), (9, 5), (17, 1), (24, 3), (28, 1)])
-def test_mp3_granules_past_the_frame(tmp_path, k, bitrate):
-    m = bytearray(open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k", samples=CLICKS), "rb").read())
-    at = mp3_frames(m)[k]
-    m[at + 2] = m[at + 2] & 15 | bitrate << 4
-    same_as_ffmpeg(tmp_path, "short.mp3", bytes(m))
+def test_mp3_granules_past_the_frame(tmp_path):
+    m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k", samples=CLICKS), "rb").read()
+    starts = mp3_frames(m)
+    # 104 bytes at 32 kbps, silent and with zeros for main data. The next frame reaches back further than its last 100
+    # bytes, so ffmpeg has too little reservoir for it and it is silent too. The frame after that is 2 off in 2 samples
+    # in 2 of 71 places with this encoder, where a wrong reservoir decodes junk that is off by hundreds
+    hits = 0
+    for k in range(5, len(starts) - 2):
+        at, end = starts[k], starts[k + 1]
+        if bits(m, (end + 4) * 8, 9) <= 100:
+            continue
+        hits += 1
+        f = bytearray(m[at:at + 36] + bytes(68))
+        f[2] = f[2] & 13 | 1 << 4
+        for g in range(4):
+            for q in range((at + 4) * 8 + 20 + 59 * g + 21 - at * 8, (at + 4) * 8 + 20 + 59 * g + 29 - at * 8):
+                f[q // 8] &= ~(128 >> q % 8)
+        same_as_ffmpeg(tmp_path, "short.mp3", m[:at] + bytes(f) + m[end:], 2)
+    assert hits > 3
+    # with the encoder's own data after it, which decodes as junk and can send the file to ffmpeg
+    for k, bitrate in ((5, 1), (6, 3), (9, 5), (17, 1), (24, 3), (28, 1)):
+        d = bytearray(m)
+        d[starts[k] + 2] = d[starts[k] + 2] & 15 | bitrate << 4
+        same_as_pydub(tmp_path, "short.mp3", bytes(d))
 
 
 # more frames than the Info tag counts put the padding in the middle, where ffmpeg drops it. Its parser keeps the old
@@ -675,10 +760,16 @@ def test_mp3_padding_in_the_middle(tmp_path):
     for at in range(len(CLICKS) - 3000, len(whole) // 4, 211):
         d.seek(at)
         assert d.read(1500) == whole[at * 4:(at + 1500) * 4]
+    # a dropped frame of another version, built here so it does not depend on the encoder
+    for k in (10, 30, 60):
+        at = starts[k]
+        same_as_ffmpeg(tmp_path, "drop.mp3", m[:at] + dropped_frame(m[at + 3], main_data_before(m, starts, k, 512)) + m[at:])
+    # a wrong bitrate makes the next frames start inside other frames, where a sync word of another layer or rate
+    # sends the file to ffmpeg. Which one depends on the encoder, so go the way pydub users do
     for k, bitrate in ((13, 1), (14, 5), (16, 1), (16, 5), (18, 3), (27, 1), (36, 1)):
         d = bytearray(m)
         d[starts[k] + 2] = d[starts[k] + 2] & 15 | bitrate << 4
-        same_as_ffmpeg(tmp_path, "rate.mp3", bytes(d))
+        same_as_pydub(tmp_path, "rate.mp3", bytes(d))
 
 
 @pytest.mark.parametrize("channels", [2, 3, 4, 5, 6, 7, 8])
