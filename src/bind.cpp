@@ -442,6 +442,9 @@ NB_MODULE(_pydub2, m) {
     });
 
     m.def("avg", [](nb::bytes data, long long width, long long step, long long first) {
+        if (step < 1 || first < 0) {
+            throw std::invalid_argument("step should be >= 1 and first >= 0");
+        }
         std::string_view s = str(data);
         nb::gil_scoped_release g;
         return avg(s, width, step, first);

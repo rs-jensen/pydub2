@@ -305,14 +305,18 @@ void reverse(std::string_view data, size_t width, const Alloc &alloc) {
 
 int avg(std::string_view data, size_t width, size_t step, size_t first) {
     check(data, width);
+    if (step < 1) {
+        throw std::invalid_argument("step should be >= 1");
+    }
     size_t n = data.size() / width;
-    if (step < 1 || first >= n) {
+    if (first >= n) {
         return 0;
     }
-    size_t count = (n - first + step - 1) / step;
+    // counted so a step near the top of size_t cannot wrap the index
+    size_t count = (n - first - 1) / step + 1;
     double sum = 0;
-    for (size_t i = first; i < n; i += step) {
-        sum += get(&data[i * width], width);
+    for (size_t k = 0; k < count; k++) {
+        sum += get(&data[(first + k * step) * width], width);
     }
     return (int)floor(sum / (double)count);
 }
