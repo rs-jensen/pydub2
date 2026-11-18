@@ -146,7 +146,7 @@ def test_no_ffmpeg(files, monkeypatch):
 
 
 ENV = [("1", True), ("true", True), ("Yes", True), ("ON", True), ("0", False), ("", False), ("false", False),
-       ("no", False), ("Off", False), (None, False)]
+       ("no", False), ("Off", False), (None, False), ("y", True), (" T ", True), ("n", False), ("F", False)]
 
 
 @pytest.mark.parametrize("value, want", ENV)
@@ -176,3 +176,12 @@ def test_probe_without_bits(files, monkeypatch):
     monkeypatch.setattr(pydub2._ffmpeg, "mediainfo_json", lambda *a, **k: {"streams": [{"codec_type": "audio"}]})
     with pytest.raises(pydub2.exceptions.CouldntDecodeError):
         pydub2.AudioSegment.from_file(files[("flac", 2)])
+
+
+@pytest.mark.parametrize("value", ["maybe", "2", "enabled"])
+def test_env_unknown_value_warns(value):
+    env = dict(os.environ, PYDUB2_STRICT=value)
+    out = subprocess.run([sys.executable, "-c", "import pydub2; print(pydub2.strict)"], env=env,
+                         capture_output=True, text=True)
+    assert out.stdout.strip() == "False"
+    assert "PYDUB2_STRICT" in out.stderr
