@@ -441,13 +441,7 @@ class AudioSegment(object):
         if self.sample_width == 3:
             # the low byte is padding, 0xff for negative samples like pydub does
             # stray bytes after the last whole sample are dropped
-            d = self._data[:len(self._data) // 3 * 3]
-            out = bytearray(len(d) // 3 * 4)
-            out[0::4] = d[2::3].translate(bytes(128) + b"\xff" * 128)
-            out[1::4] = d[0::3]
-            out[2::4] = d[1::3]
-            out[3::4] = d[2::3]
-            self._data = bytes(out)
+            self._data = _pydub2.widen24(self._data[:len(self._data) // 3 * 3], 3)
             self.sample_width = 4
             self.frame_width = self.channels * self.sample_width
 
@@ -1199,6 +1193,13 @@ class AudioSegment(object):
     def set_sample_width(self, sample_width):
         if sample_width == self.sample_width:
             return self
+
+        if sample_width == 3:
+            # kept in 4 bytes like 24 bit audio is on load
+            return self._spawn(
+                _pydub2.widen24(self._data, self.sample_width),
+                overrides={'sample_width': 4, 'frame_width': self.channels * 4}
+            )
 
         frame_width = self.channels * sample_width
 

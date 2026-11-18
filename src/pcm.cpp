@@ -237,6 +237,22 @@ void interleave(const std::vector<std::string_view> &parts, size_t width, size_t
     });
 }
 
+void widen24(std::string_view data, size_t width, const Alloc &alloc) {
+    check(data, width);
+    char *out = alloc(data.size() / width * 4);
+    by_width(width, [&](auto w) {
+        constexpr size_t W = decltype(w)::value;
+        for (size_t i = 0; i < data.size(); i += W, out += 4) {
+            int v = get32(&data[i], W);
+            // the low byte is padding, 0xff for negative samples
+            out[0] = v < 0 ? (char)0xff : 0;
+            out[1] = (char)(v >> 8);
+            out[2] = (char)(v >> 16);
+            out[3] = (char)(v >> 24);
+        }
+    });
+}
+
 void tomono(std::string_view data, size_t width, double lfac, double rfac, const Alloc &alloc) {
     check(data, width, 2);
     char *out = alloc(data.size() / 2);

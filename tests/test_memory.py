@@ -4,18 +4,18 @@ from test_untrusted import peak_mb
 
 # 24 MB of 16 bit stereo, about 2 minutes 16 s at 44.1 kHz
 PCM = 24_000_000
+IMPORTS = "import os, tempfile\nfrom pydub2 import AudioSegment\n"
 SAW = "bytes(range(256)) * %d" % (PCM // 256)
 NOISE = "os.urandom(%d)" % PCM
+STEREO = IMPORTS + "seg = AudioSegment(%s, sample_width=2, frame_rate=44100, channels=2)\n"
+# two mono segments that share nothing, half the PCM each
+MONO = IMPORTS + "mono = [AudioSegment(bytes(range(256)) * %d, sample_width=2, frame_rate=44100, channels=1) for _ in range(2)]\n" % (PCM // 512)
+# 24 bit audio as it comes from a file, three quarters of the PCM
+RAW24 = IMPORTS + "raw = bytes(range(192)) * %d\n" % (PCM // 4 * 3 // 192)
 
 
-def peak_x(code, data=SAW, mono=False):
+def peak_x(code, setup=STEREO % SAW):
     """Peak of a fresh process over a bare import of pydub2, as a multiple of the PCM, the audio included."""
-    setup = "import os, tempfile\nfrom pydub2 import AudioSegment\n" \
-        "seg = AudioSegment(%s, sample_width=2, frame_rate=44100, channels=2)\n" % data
-    if mono:
-        # two mono segments that share nothing, half the PCM each
-        setup = "from pydub2 import AudioSegment\n" \
-            "mono = [AudioSegment(bytes(range(256)) * %d, sample_width=2, frame_rate=44100, channels=1) for _ in range(2)]\n" % (PCM // 512)
     return (peak_mb("import pydub2\n" + setup + code) - peak_mb("import pydub2")) * 1e6 / PCM
 
 
@@ -31,7 +31,7 @@ def test_export_holds_the_audio_once(format):
 
 # 3.0 before and 2.0 after with noise, which flac cannot shrink: the audio, the file and one block
 def test_export_flac_does_not_copy_the_file():
-    assert peak_x(export("flac"), NOISE) < 2.5
+    assert peak_x(export("flac"), STEREO % NOISE) < 2.5
 
 
 # 3.2 before and 2.1 after: the audio and a result a tenth longer, which was held twice
@@ -57,4 +57,14 @@ def test_split_to_mono_copies_each_sample_once():
 
 # 3.9 before and 2.0 after at this size: the channels and the result, there was an array of the whole result as well
 def test_from_mono_audiosegments_copies_each_sample_once():
-    assert peak_x("AudioSegment.from_mono_audiosegments(*mono)", mono=True) < 2.7
+    assert peak_x("AudioSegment.from_mono_audiosegments(*mono)", MONO) < 2.7
+
+
+# 6.5 before and 3.0 after: the audio and a result twice as wide
+def test_set_sample_width_24_bit_makes_the_result_once():
+    assert peak_x("seg.set_sample_width(3)") < 4.0
+
+
+# 2.7 before and 1.7 after: the bytes that come in and the result, the rest was in copies
+def test_24_bit_data_is_widened_once():
+    assert peak_x("AudioSegment(raw, sample_width=3, frame_rate=44100, channels=2)", RAW24) < 2.2

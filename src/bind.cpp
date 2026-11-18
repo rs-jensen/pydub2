@@ -355,6 +355,16 @@ NB_MODULE(_pydub2, m) {
         return out;
     });
 
+    m.def("widen24", [](nb::bytes data, long long width) {
+        std::string_view s = str(data);
+        nb::object out;
+        {
+            nb::gil_scoped_release g;
+            widen24(s, width, into(out));
+        }
+        return out;
+    });
+
     m.def("channel", [](nb::bytes data, long long width, long long channels, long long index) {
         std::string_view s = str(data);
         nb::object out;
