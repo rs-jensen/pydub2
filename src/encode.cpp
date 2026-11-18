@@ -108,23 +108,48 @@ static void wav(const Audio &a, const Alloc &alloc) {
     }
 }
 
+// the encoded file in blocks, a string that grows is copied over and over and then once more into the bytes python gets
 struct Sink {
-    std::string out;
-    size_t pos = 0;
+    static constexpr size_t block = 1 << 20;
+    std::vector<std::string> blocks;
+    size_t pos = 0, size = 0;
+
+    void write(const char *buf, size_t len) {
+        while (blocks.size() * block < pos + len) {
+            blocks.emplace_back(block, '\0');
+        }
+        for (size_t done = 0; done < len;) {
+            size_t at = (pos + done) % block, n = std::min(len - done, block - at);
+            memcpy(&blocks[(pos + done) / block][at], buf + done, n);
+            done += n;
+        }
+        pos += len;
+        size = std::max(size, pos);
+    }
+
+    // bytes from to to, each block is let go once it has been copied
+    char *drain(char *out, size_t from, size_t to) {
+        while (from < to) {
+            size_t at = from % block, n = std::min(to - from, block - at);
+            std::string &b = blocks[from / block];
+            memcpy(out, &b[at], n);
+            out += n;
+            from += n;
+            if (from % block == 0) {
+                std::string().swap(b);
+            }
+        }
+        return out;
+    }
 };
 
 static FLAC__StreamEncoderWriteStatus flac_write(const FLAC__StreamEncoder *, const FLAC__byte buf[], size_t len,
                                                  uint32_t, uint32_t, void *user) {
-    Sink *s = (Sink *)user;
     try {
-        if (s->pos + len > s->out.size()) {
-            s->out.resize(s->pos + len);
-        }
+        ((Sink *)user)->write((const char *)buf, len);
     } catch (...) {
         return FLAC__STREAM_ENCODER_WRITE_STATUS_FATAL_ERROR;
     }
-    memcpy(&s->out[s->pos], buf, len);
-    s->pos += len;
     return FLAC__STREAM_ENCODER_WRITE_STATUS_OK;
 }
 
@@ -138,7 +163,7 @@ static FLAC__StreamEncoderTellStatus flac_tell(const FLAC__StreamEncoder *, FLAC
     return FLAC__STREAM_ENCODER_TELL_STATUS_OK;
 }
 
-static std::string flac(const Audio &a, const Tags &tags, const Cancel &cancel) {
+static void flac(const Audio &a, const Tags &tags, const Cancel &cancel, const Alloc &alloc) {
     if (a.channels > 8) {
         throw std::runtime_error("cant encode this");
     }
@@ -182,6 +207,8 @@ static std::string flac(const Audio &a, const Tags &tags, const Cancel &cancel) 
     if (!ok) {
         throw std::runtime_error("cant encode this");
     }
+    std::string comment;
+    size_t at = s.size, old = 0;
     if (!tags.empty()) {
         // not through libFLAC, its metadata calls drop keys and values ffmpeg writes as they are
         std::string c;
@@ -195,15 +222,20 @@ static std::string flac(const Audio &a, const Tags &tags, const Cancel &cancel) 
         if (c.size() >= 1 << 24) {
             throw std::runtime_error("cant encode this");
         }
-        std::string head = "\x84";
-        head += (char)(c.size() >> 16);
-        head += (char)(c.size() >> 8);
-        head += (char)c.size();
+        comment = "\x84";
+        comment += (char)(c.size() >> 16);
+        comment += (char)(c.size() >> 8);
+        comment += (char)c.size();
+        comment += c;
         // libflac wrote its own comment block after the stream info, ours takes its place
-        size_t old = 4 + ((uint8_t)s.out[43] << 16 | (uint8_t)s.out[44] << 8 | (uint8_t)s.out[45]);
-        s.out.replace(42, old, head + c);
+        const std::string &b = s.blocks[0];
+        at = 42;
+        old = 4 + ((uint8_t)b[43] << 16 | (uint8_t)b[44] << 8 | (uint8_t)b[45]);
     }
-    return s.out;
+    char *out = alloc(s.size - old + comment.size());
+    out = s.drain(out, 0, at);
+    memcpy(out, comment.data(), comment.size());
+    s.drain(out + comment.size(), at + old, s.size);
 }
 
 static void pages(ogg_stream_state *os, std::string &out, bool flush) {
@@ -378,7 +410,7 @@ void encode(const Audio &a, const std::string &format, int bitrate, const Tags &
         return wav(a, alloc);
     }
     if (format == "flac") {
-        return copy(flac(a, tags, cancel), alloc);
+        return flac(a, tags, cancel, alloc);
     }
     if (format == "ogg") {
         return copy(ogg(a, bitrate, tags, cancel), alloc);

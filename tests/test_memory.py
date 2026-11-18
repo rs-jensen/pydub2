@@ -4,15 +4,27 @@ from test_untrusted import peak_mb
 
 # 24 MB of 16 bit stereo, about 2 minutes 16 s at 44.1 kHz
 PCM = 24_000_000
-MAKE = "import io\nfrom pydub2 import AudioSegment\nseg = AudioSegment(bytes(range(256)) * %d, sample_width=2, frame_rate=44100, channels=2)\n" % (PCM // 256)
+SAW = "bytes(range(256)) * %d" % (PCM // 256)
+NOISE = "os.urandom(%d)" % PCM
 
 
-def peak_x(code):
+def peak_x(code, data=SAW):
     """Peak of a fresh process over a bare import of pydub2, as a multiple of the PCM, the segment included."""
-    return (peak_mb("import pydub2\n" + MAKE + code) - peak_mb("import pydub2")) * 1e6 / PCM
+    setup = "import os, tempfile\nfrom pydub2 import AudioSegment\n" \
+        "seg = AudioSegment(%s, sample_width=2, frame_rate=44100, channels=2)\n" % data
+    return (peak_mb("import pydub2\n" + setup + code) - peak_mb("import pydub2")) * 1e6 / PCM
 
 
-# measured on Linux with 10 minutes: ogg 3.2 before and 1.2 after, opus 3.1 and 1.2, mp3 3.4 and 1.2, flac 2.5 and 1.8
-@pytest.mark.parametrize("format, bound", [("ogg", 1.7), ("opus", 1.7), ("mp3", 1.7)])
-def test_export_holds_the_audio_once(format, bound):
-    assert peak_x("seg.export(io.BytesIO(), format=%r)" % format) < bound
+def export(format):
+    return "with tempfile.TemporaryDirectory() as d:\n    seg.export(d + '/out', format=%r)" % format
+
+
+# measured with 10 minutes on Linux, before and after: ogg 3.2 and 1.2, opus 3.1 and 1.2, mp3 3.4 and 1.2, 1.5 at this size
+@pytest.mark.parametrize("format", ["ogg", "opus", "mp3"])
+def test_export_holds_the_audio_once(format):
+    assert peak_x(export(format)) < 2.0
+
+
+# 3.0 before and 2.0 after with noise, which flac cannot shrink: the audio, the file and one block
+def test_export_flac_does_not_copy_the_file():
+    assert peak_x(export("flac"), NOISE) < 2.5
