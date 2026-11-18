@@ -677,6 +677,23 @@ struct Mp3 : Dec {
                     out += 2;
                 }
             }
+#elif defined(__x86_64__) || defined(_M_X64)
+            // ffmpeg on x86 converts each decoded frame with sse in blocks of 16, which gives -32768 for a sample past the
+            // int32 range. Only damaged frames get that loud
+            uint64_t lo = std::max<uint64_t>(skip, f), hi = std::min<uint64_t>(f + spf, end);
+            uint64_t simd = std::min(stop, lo + ((hi - lo) & ~(uint64_t)15));
+            if (j < simd) {
+                const float *x = &buf[(j - start) * c];
+                size_t m = (size_t)(simd - j) * c;
+                put(out, x, m, 2);
+                for (size_t i = 0; i < m; i++) {
+                    if (std::fabs(x[i] * 32768.0f) >= 2147483648.0f) {
+                        memcpy(out + i * 2, "\0\x80", 2);
+                    }
+                }
+                out += m * 2;
+                j = simd;
+            }
 #endif
             put(out, &buf[(j - start) * c], (stop - j) * c, 2);
             out += (stop - j) * c * 2;

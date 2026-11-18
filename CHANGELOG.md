@@ -64,6 +64,7 @@ What changed in each release.
 - mp3 with frames missing or cut short in the middle, or a frame too short for its own data, decodes the frames after it like ffmpeg. They were off by up to the full scale for a frame.
 - mp3 with more frames than its Info tag counts, from a doubled frame or a damaged header, has the length ffmpeg gives. ffmpeg drops the encoder padding where the tag says the audio ends, also in the middle of the file.
 - mp3 frames with a mode extension outside joint stereo (mono, plain stereo) decode like ffmpeg, which applies intensity stereo only in joint stereo and lowers the gain for the mid side bit in any mode.
+- Garbage in damaged mp3 frames decodes like ffmpeg: a granule whose bit reservoir is missing is silent, values that overflow ffmpeg's fixed point unscale are 0, the last values of a granule are not read past 572, and on x86 a sample far past full scale comes out as -32768. Such frames were off by up to the full scale.
 
 ### Security
 

@@ -283,8 +283,13 @@ def mp3_frames(m):
     out = []
     while i + 4 <= len(m) and m[i] == 0xff:
         out.append(i)
-        kbps = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320][m[i + 2] >> 4]
-        i += 144000 * kbps // 44100 + (m[i + 2] >> 1 & 1)
+        # mpeg 1 at 44100 or mpeg 2 at 22050
+        if m[i + 1] & 8:
+            kbps = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320][m[i + 2] >> 4]
+            i += 144000 * kbps // 44100 + (m[i + 2] >> 1 & 1)
+        else:
+            kbps = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160][m[i + 2] >> 4]
+            i += 72000 * kbps // 22050 + (m[i + 2] >> 1 & 1)
     return out
 
 
@@ -558,6 +563,49 @@ def test_mp3_seek_after_a_dropped_frame(tmp_path):
     for at in range(18 * 1152, 26 * 1152, 300):
         d.seek(at)
         assert d.read(1500) == whole[at * 4:(at + 1500) * 4]
+
+
+def damage(m, kind, k):
+    starts = mp3_frames(m)
+    if kind == "gap":
+        return m[:starts[k]] + m[starts[k + 1]:]
+    if kind == "gap2":
+        return m[:starts[k]] + m[starts[k + 2]:]
+    if kind == "cut4":
+        return m[:starts[k] + 4] + m[starts[k + 1]:]
+    if kind == "cut40":
+        return m[:starts[k] + 40] + m[starts[k + 1]:]
+    if kind == "dup":
+        return m[:starts[k + 1]] + m[starts[k]:]
+    d = bytearray(m)
+    d[starts[k] + 2] = d[starts[k] + 2] & 15 | int(kind[4:]) << 4
+    return bytes(d)
+
+
+# garbage in a damaged stream decodes like in ffmpeg: no quad of small values starts past value 572, an escaped value
+# too big for its fixed point unscale is 0, and a granule without its bit reservoir is silent
+@pytest.mark.parametrize("channels, args, cases", [
+    (2, ["-b:a", "128k"], [("rate3", 43), ("rate1", 9)]),
+    (1, ["-b:a", "64k"], [("dup", 49), ("rate1", 40), ("gap", 37), ("gap", 48), ("gap2", 47), ("dup", 5), ("cut4", 6)]),
+    (2, ["-ar", "22050", "-b:a", "64k"], [("cut4", 41), ("rate1", 28), ("cut40", 14), ("cut40", 18), ("gap2", 7)])])
+def test_mp3_garbage_like_ffmpeg(tmp_path, channels, args, cases):
+    m = open(make(tmp_path, "a.mp3", channels, "-c:a", "libmp3lame", *args, samples=CLICKS), "rb").read()
+    for kind, k in cases:
+        same_as_ffmpeg(tmp_path, "bad.mp3", damage(m, kind, k))
+
+
+# ffmpeg on x86 turns a sample past the int32 range into -32768 when it converts to 16 bit, the C code and arm clip it
+def test_mp3_far_too_loud(tmp_path):
+    m = bytearray(open(make(tmp_path, "a.mp3", 1, "-c:a", "libmp3lame", "-b:a", "64k", samples=CLICKS), "rb").read())
+    # global gain 255 in both granules, mono side info has it at bit 39 and 98
+    for at in mp3_frames(m)[10:20]:
+        for p in [(at + 4) * 8 + g + i for g in (39, 98) for i in range(8)]:
+            m[p // 8] |= 128 >> p % 8
+    p = save(tmp_path, "loud.mp3", bytes(m))
+    if platform.machine().lower() in ("x86_64", "amd64"):
+        close(*both(p), 1)
+    else:
+        assert len(_pydub2.decode(bytes(m))[0]) == len(AudioSegment.from_file(p).raw_data)
 
 
 # ffmpeg lowers the gain for the ms bit of the mode extension in any mode, and does stereo only in joint stereo

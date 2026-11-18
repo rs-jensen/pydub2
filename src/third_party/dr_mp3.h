@@ -1364,7 +1364,7 @@ static void drmp3_L3_huffman(float *dst, drmp3_bs *bs, const drmp3_L3_gr_info *g
 #define DRMP3_BSPOS           ((bs_next_ptr - bs->buf)*8 - 24 + bs_sh)
 
     float one = 0.0f, *count1; /* pydub2: count1 */
-    int ireg = 0, big_val_cnt = gr_info->big_values;
+    int ireg = 0, big_val_cnt = gr_info->big_values, big_values = gr_info->big_values; /* pydub2: big_values */
     const drmp3_uint8 *sfb = gr_info->sfbtab;
     const drmp3_uint8 *bs_next_ptr = bs->buf + bs->pos/8;
     drmp3_uint32 bs_cache = (((DRMP3_BYTE(bs_next_ptr)*256u + DRMP3_BYTE(bs_next_ptr + 1))*256u + DRMP3_BYTE(bs_next_ptr + 2))*256u + DRMP3_BYTE(bs_next_ptr + 3)) << (bs->pos & 7);
@@ -1406,6 +1406,7 @@ static void drmp3_L3_huffman(float *dst, drmp3_bs *bs, const drmp3_L3_gr_info *g
                             DRMP3_FLUSH_BITS(linbits);
                             DRMP3_CHECK_BITS;
                             *dst = one*drmp3_L3_pow_43(lsb)*((drmp3_int32)bs_cache < 0 ? -1: 1);
+                            *dst = *dst < 7.036f && *dst > -7.036f ? *dst : 0; /* pydub2: ffmpeg's fixed point unscale gives 0 from 8*1.759 up */
                         } else
                         {
                             *dst = g_drmp3_pow43[16 + lsb - 16*(bs_cache >> 31)]*one;
@@ -1439,6 +1440,7 @@ static void drmp3_L3_huffman(float *dst, drmp3_bs *bs, const drmp3_L3_gr_info *g
                     {
                         int lsb = leaf & 0x0F;
                         *dst = g_drmp3_pow43[16 + lsb - 16*(bs_cache >> 31)]*one;
+                        *dst = lsb < 15 || (*dst < 7.036f && *dst > -7.036f) ? *dst : 0; /* pydub2: 15 is unscaled like an escape in ffmpeg */
                         DRMP3_FLUSH_BITS(lsb ? 1 : 0);
                     }
                     DRMP3_CHECK_BITS;
@@ -1451,6 +1453,10 @@ static void drmp3_L3_huffman(float *dst, drmp3_bs *bs, const drmp3_L3_gr_info *g
     {
         const drmp3_uint8 *codebook_count1 = (gr_info->count1_table) ? tab33 : tab32;
         int leaf = codebook_count1[DRMP3_PEEK_BITS(4)];
+        if (dst - count1 > 572 - 2*big_values) /* pydub2: ffmpeg starts no quad past value 572 */
+        {
+            break;
+        }
         /* pydub2: like ffmpeg stop at the end of the data, and drop the last quad if it ran past the granule */
         if (DRMP3_BSPOS >= end)
         {
@@ -1884,7 +1890,7 @@ static int drmp3_L3_restore_reservoir(drmp3dec *h, drmp3_bs *bs, drmp3dec_scratc
     return h->reserv >= main_data_begin;
 }
 
-static void drmp3_L3_decode(drmp3dec *h, drmp3dec_scratch *s, drmp3_L3_gr_info *gr_info, int nch)
+static void drmp3_L3_decode(drmp3dec *h, drmp3dec_scratch *s, drmp3_L3_gr_info *gr_info, int nch, int zeroed) /* pydub2: zeroed */
 {
     int ch;
 
@@ -1896,6 +1902,8 @@ static void drmp3_L3_decode(drmp3dec *h, drmp3dec_scratch *s, drmp3_L3_gr_info *
         int end = s->bs.pos >= h->have*8 ? DRMP3_MIN(layer3gr_limit, data) : layer3gr_limit > data + 8 ? INT_MAX : layer3gr_limit;
         drmp3_L3_decode_scalefactors(h->header, s->ist_pos[ch], &s->bs, gr_info + ch, s->scf, ch);
         drmp3_L3_huffman(s->grbuf[ch], &s->bs, gr_info + ch, s->scf, layer3gr_limit, end, data);
+        if (zeroed) /* pydub2: ffmpeg decodes nothing for a granule without its bit reservoir */
+            DRMP3_ZERO_MEMORY(s->grbuf[ch], 576*sizeof(float));
     }
 
     if (DRMP3_HDR_TEST_I_STEREO(h->header) && (h->header[3] & 0xC0) == 0x40) /* pydub2: ffmpeg does intensity stereo only in joint stereo */
@@ -2430,7 +2438,7 @@ DRMP3_API int drmp3dec_decode_frame(drmp3dec *dec, const drmp3_uint8 *mp3, int m
                 {
                     DRMP3_COPY_MEMORY(dec->scratch.ist_pos, dec->scf0, sizeof(dec->scf0));
                 }
-                drmp3_L3_decode(dec, &dec->scratch, dec->scratch.gr_info + igr*info->channels, info->channels);
+                drmp3_L3_decode(dec, &dec->scratch, dec->scratch.gr_info + igr*info->channels, info->channels, igr < dec->zeroed);
                 if (igr == 0 && !dec->zeroed)
                 {
                     DRMP3_COPY_MEMORY(dec->scf0, dec->scratch.ist_pos, sizeof(dec->scf0));
