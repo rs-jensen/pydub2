@@ -1,3 +1,4 @@
+import decimal
 import io
 import pathlib
 import shutil
@@ -292,3 +293,11 @@ def test_wav_chunk_without_pad_byte_with_24_bit_limit(monkeypatch):
     monkeypatch.setattr(pydub2, "max_bytes", 28000)
     with pytest.raises(pydub2.exceptions.CouldntDecodeError):
         pydub2.AudioSegment.from_file(io.BytesIO(wav), format="wav")
+
+
+@pytest.mark.parametrize("value", [decimal.Decimal("0.5"), decimal.Decimal("1")])
+def test_stream_start_as_a_decimal(value):
+    wav, pcm = wav_bytes(rate=1000, pcm=bytes(range(256)) * 8)
+    plain = list(pydub2.AudioSegment.stream(io.BytesIO(wav), start_second=float(value)))
+    got = list(pydub2.AudioSegment.stream(io.BytesIO(wav), start_second=value))
+    assert [c.raw_data for c in got] == [c.raw_data for c in plain] != []

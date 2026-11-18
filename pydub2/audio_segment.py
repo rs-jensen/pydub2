@@ -1054,6 +1054,7 @@ class AudioSegment(object):
             else:
                 with open(filename, "rb") as f:
                     own = _pydub_wav(f.read(65536))
+        start_second, duration = [float(v) if isinstance(v, Decimal) else v for v in (start_second, duration)]
         span = _span(d, own, start_second, duration) if _ffmpeg_time(start_second) and _ffmpeg_time(duration) else None
         if not span:
             raise ValueError("start_second and duration have to be plain numbers, 0 or more and under 1e12")
