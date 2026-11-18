@@ -410,6 +410,9 @@ class AudioSegment(object):
                 setattr(self, attr, val)
         else:
             # normal construction
+            lim = None if isinstance(data, (basestring, bytes)) else limits()
+            if lim and lim[2] is not None:
+                data = read_file(data, lim)
             try:
                 data = data if isinstance(data, (basestring, bytes)) else data.read()
             except(OSError):
@@ -634,7 +637,7 @@ class AudioSegment(object):
         if hasattr(data, 'read'):
             if hasattr(data, 'seek'):
                 data.seek(0)
-            data = data.read()
+            data = read_file(data, limits())
 
         metadata = {
             'sample_width': self.sample_width,

@@ -366,7 +366,7 @@ def source(filepath, read_ahead_limit=-1, exe=None):
     except TypeError:
         filepath.seek(0)
         return ["-protocol_whitelist", "cache,pipe"] + allow + ["-read_ahead_limit", str(read_ahead_limit),
-                "-i", "cache:pipe:0"], filepath.read()
+                "-i", "cache:pipe:0"], read_file(filepath, limits())
     try:
         with open(path, "rb") as f:
             head = f.read(64)
@@ -981,7 +981,7 @@ def _open(filepath):
         path = fsdecode(filepath)
     except TypeError:
         filepath.seek(0)
-        data = filepath.read()
+        data = read_file(filepath, limits())
         return BytesIO(data), data
     try:
         return open(path, "rb"), path

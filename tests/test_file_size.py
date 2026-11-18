@@ -10,7 +10,7 @@ import pytest
 
 import pydub2
 import pydub2.generators
-from pydub2 import AudioSegment
+from pydub2 import AudioSegment, utils
 from pydub2.exceptions import CouldntDecodeError
 
 ffmpeg = shutil.which("ffmpeg")
@@ -133,6 +133,36 @@ def test_a_file_that_grows_after_its_size_is_read_stops(cap, format):
         with pytest.raises(CouldntDecodeError, match=TOO_BIG):
             load(f)
         assert f.taken == len(data) // 3 + 1
+
+
+@pytest.mark.parametrize("prober", [False, pytest.param(True, marks=need_ffmpeg)])
+@pytest.mark.parametrize("probe", [utils.mediainfo, utils.mediainfo_json])
+def test_mediainfo_refuses_a_file_object_over_the_limit(cap, monkeypatch, prober, probe):
+    if not prober:
+        monkeypatch.setattr(utils, "_has_prober", lambda: None)
+    data = audio("flac")
+    cap(len(data) - 1)
+    f = Counted(data)
+    with pytest.raises(CouldntDecodeError, match=TOO_BIG):
+        probe(f)
+    assert f.taken == 0
+    cap(len(data))
+    assert probe(Counted(data))
+
+
+def test_data_and_spawn_refuse_a_file_object_over_the_limit(cap):
+    data = audio("wav")
+    seg = AudioSegment.from_file(io.BytesIO(data), "wav")
+    cap(len(data) - 1)
+    f = Counted(data)
+    with pytest.raises(CouldntDecodeError, match=TOO_BIG):
+        AudioSegment(data=f)
+    assert f.taken == 0
+    with pytest.raises(CouldntDecodeError, match=TOO_BIG):
+        seg._spawn(f)
+    assert f.taken == 0
+    cap(len(data))
+    assert AudioSegment(data=Counted(data)).raw_data == seg.raw_data
 
 
 def test_a_float_limit_stops_a_pipe(cap):
