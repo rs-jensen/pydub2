@@ -1627,7 +1627,7 @@ class AudioSegment(object):
         xf *= seg2[:crossfade].fade(from_gain=-120, start=0, end=float('inf'))
 
         parts = [seg1._piece(None, -crossfade), xf._data, seg2._piece(crossfade, None)]
-        # the size limit of a load held for the result when it was read back from a file
+        # max_file_size held the result when it was read back from a temporary file, so it still does
         check_size(sum(map(len, parts)), limits())
         return seg1._spawn(data=parts)
 
