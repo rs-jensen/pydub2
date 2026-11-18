@@ -553,6 +553,16 @@ class AudioSegment(object):
 
         return self._spawn(data)
 
+    def _piece(self, start, end):
+        """The bytes of self[start:end], read in place when none have to be cut off or made up."""
+        if type(self).__getitem__ is AudioSegment.__getitem__:
+            n = len(self)
+            first = self._parse_position(min(0 if start is None else start, n)) * self.frame_width
+            last = self._parse_position(min(n if end is None else end, n)) * self.frame_width
+            if 0 <= first <= last <= len(self._data):
+                return memoryview(self._data)[first:last]
+        return self[start:end]._data
+
     def get_sample_slice(self, start_sample=None, end_sample=None):
         """
         Get a section of the audio segment by sample index.
@@ -1406,10 +1416,10 @@ class AudioSegment(object):
         sample_width = seg1.sample_width
         spawn = seg1._spawn
 
-        head = seg1[:position]._data
+        head = seg1._piece(None, position)
 
         # drop down to the raw data
-        seg1 = seg1[position:]._data
+        seg1 = seg1._piece(position, None)
         seg2 = seg2._data
         remaining = len(seg1)
         n = -(-remaining // len(seg2)) if seg2 else 0
@@ -1424,15 +1434,14 @@ class AudioSegment(object):
                 pass
             # pydub counts times down as it loops, so what cannot be counted fails
             times -= 1
-        seg2 = (seg2 * n)[:remaining]
-        pos = len(seg2)
-        if gain_during_overlay:
-            seg1_overlaid = _pydub2.mul(seg1[:pos], self.sample_width, db_to_float(float(gain_during_overlay)))
-        else:
-            seg1_overlaid = seg1[:pos]
-        output = [head, _pydub2.add(seg1_overlaid, seg2, sample_width), memoryview(seg1)[pos:]]
+        pos = min(remaining, len(seg2) * n)
+        gain = db_to_float(float(gain_during_overlay)) if gain_during_overlay else None
+        if gain is not None and self.sample_width != sample_width:
+            # pydub scales with the width of self, whatever the sync made of the data
+            seg1 = b"".join([_pydub2.mul(seg1[:pos], self.sample_width, gain), seg1[pos:]])
+            gain = None
 
-        return spawn(data=output)
+        return spawn(data=_pydub2.mix(head, seg1, seg2, sample_width, pos, gain))
 
     def append(self, seg, crossfade=100):
         seg1, seg2 = AudioSegment._sync(self, seg)

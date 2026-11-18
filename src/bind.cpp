@@ -2,10 +2,12 @@
 #include <chrono>
 #include <cstring>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/filesystem.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
@@ -81,6 +83,23 @@ static Cancel interrupt() {
 static std::string_view str(nb::bytes b) {
     return std::string_view(b.c_str(), b.size());
 }
+
+// bytes, or a slice of them seen through a memoryview, read in place
+struct View {
+    Py_buffer v{};
+    explicit View(nb::handle h) {
+        if (PyObject_GetBuffer(h.ptr(), &v, PyBUF_SIMPLE)) {
+            throw nb::python_error();
+        }
+    }
+    View(const View &) = delete;
+    ~View() {
+        PyBuffer_Release(&v);
+    }
+    std::string_view get() const {
+        return std::string_view((const char *)v.buf, (size_t)v.len);
+    }
+};
 
 static nb::object blank(size_t n) {
     nb::object out = nb::steal(PyBytes_FromStringAndSize(NULL, (Py_ssize_t)n));
@@ -267,8 +286,9 @@ NB_MODULE(_pydub2, m) {
         return pydub2::max(s, width);
     });
 
-    m.def("mul", [](nb::bytes data, long long width, double factor) {
-        std::string_view s = str(data);
+    m.def("mul", [](nb::object data, long long width, double factor) {
+        View v(data);
+        std::string_view s = v.get();
         nb::object out;
         {
             nb::gil_scoped_release g;
@@ -320,6 +340,17 @@ NB_MODULE(_pydub2, m) {
         {
             nb::gil_scoped_release g;
             add(x, y, width, into(out));
+        }
+        return out;
+    });
+
+    m.def("mix", [](nb::object head, nb::object tail, nb::object over, long long width, size_t n, std::optional<double> gain) {
+        View h(head), t(tail), o(over);
+        std::string_view hs = h.get(), ts = t.get(), os = o.get();
+        nb::object out;
+        {
+            nb::gil_scoped_release g;
+            mix(hs, ts, os, width, n, gain.has_value(), gain.value_or(0), into(out));
         }
         return out;
     });

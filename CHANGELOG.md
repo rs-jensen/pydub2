@@ -22,7 +22,8 @@ What changed in each release.
 - `detect_speech` needs a fixed amount of extra memory, not 3 times the audio. On 40 minutes it went from 1.3 GB to 19 MB. The ranges are the same.
 - Writing ogg, opus and mp3 needs a third of the memory it did. 10 minutes of 16 bit stereo peaked at 3.2, 3.1 and 3.4 times the size of the audio, now 1.2 times. The files are the same.
 - Writing flac to a file needs 1.8 times the size of the audio where it needed 2.5. The encoded file is no longer copied once more.
-- `set_frame_rate` without `resample_quality` needs a third less memory and is about 2 times faster on 10 minutes of audio. Going from 44.1 to 48 kHz peaked at 3.2 times the size of the audio and now peaks at 2.1.
+- `set_frame_rate` without `resample_quality` needs a third less memory and is up to 2 times faster on 10 minutes of audio. Going from 44.1 to 48 kHz peaked at 3.2 times the size of the audio and now peaks at 2.1.
+- `overlay` with `loop=True` needs half the memory or less and is up to 1.6 times faster. On 10 minutes it peaked at 4.0 times the size of the audio, 5.0 with `gain_during_overlay`, and now peaks at 2.0 for both. Overlaying at a `position` no longer copies the audio before and after it.
 - Writing opus from 44.1 kHz audio on arm64 is about 40 percent faster. 10 minutes now take about 6.2 s.
 - `overlay` is 3 times faster and `normalize` and `apply_gain` are 1.9 times faster on 60 s of audio.
 - The `FileNotFoundError` for a missing ffmpeg says what it looked for, and suggests the `ffmpeg` extra only when `AudioSegment.converter` is not set.

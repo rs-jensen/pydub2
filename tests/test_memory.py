@@ -33,3 +33,8 @@ def test_export_flac_does_not_copy_the_file():
 # 3.2 before and 2.1 after: the audio and a result a tenth longer, which was held twice
 def test_set_frame_rate_writes_the_result_in_place():
     assert peak_x("seg.set_frame_rate(48000)") < 2.6
+
+
+# 5.8 before and 2.0 after at this size, the audio and the result
+def test_overlay_loop_with_gain_makes_one_copy():
+    assert peak_x("seg.overlay(seg[:1000], position=5000, loop=True, gain_during_overlay=-6)") < 3.0

@@ -167,6 +167,40 @@ void lin2lin(std::string_view data, size_t width, size_t new_width, const Alloc 
     }
 }
 
+void mix(std::string_view head, std::string_view tail, std::string_view over, size_t width, size_t n, bool gain, double factor,
+         const Alloc &alloc) {
+    check(tail, width);
+    check(over, width);
+    if (n > tail.size() || n % width || (n && over.empty())) {
+        throw std::invalid_argument("bad length to mix");
+    }
+    char *out = alloc(head.size() + tail.size());
+    memcpy(out, head.data(), head.size());
+    out += head.size();
+    memcpy(out, tail.data(), tail.size());
+    bool nan = false;
+    by_width(width, [&](auto w) {
+        constexpr size_t W = decltype(w)::value;
+        for (size_t i = 0, j = 0; i < n; i += W, j += W) {
+            if (j == over.size()) {
+                j = 0;
+            }
+            int x = get(&tail[i], W);
+            if (gain) {
+                double v = x * factor;
+                bool bad = std::isnan(v);
+                nan |= bad;
+                x = bad ? 0 : (int)floor(fbound(v, minvals[W], maxvals[W]));
+            }
+            long long sum = (long long)x + get(&over[j], W);
+            put(out + i, W, (int)std::min<long long>(std::max<long long>(sum, minvals[W]), maxvals[W]));
+        }
+    });
+    if (nan) {
+        throw std::invalid_argument("not a number");
+    }
+}
+
 void tomono(std::string_view data, size_t width, double lfac, double rfac, const Alloc &alloc) {
     check(data, width, 2);
     char *out = alloc(data.size() / 2);
