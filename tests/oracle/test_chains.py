@@ -382,7 +382,8 @@ def sp_load(L, s, variant, how, src, **kw):
             elif how == "from_file_using_temporary_files" and isinstance(e, ValueError) and "closed file" in str(e):
                 # pydub cannot slice what it read and raises here, pydub2 goes on to ffmpeg like from_file, with 16 bit
                 seg = load("from_file", **kw).set_sample_width(2)
-            elif name == "CouldntDecodeError" and variant in ("odd", "odd_tail") and not int(s.frame_count()) and src in ("bytes", "file") and \
+            elif name == "CouldntDecodeError" and variant in ("odd", "odd_tail") and not int(s.frame_count()) and (
+                    src in ("bytes", "file") or (how == "from_file_using_temporary_files" and src == "pathlib")) and \
                     all(fits_native(v) for k, v in kw.items() if k != "format"):
                 # ffmpeg cannot read a wav without a whole frame and with an unpadded chunk from a pipe, pydub2 does
                 seg = load(src="path", **kw)
