@@ -267,6 +267,15 @@ def test_ffmpeg_gets_seconds_as_plain_text(tmp_path, kind, value, plain):
     assert got.raw_data == AudioSegment.from_file(path, codec="flac", **{kind: plain}).raw_data
 
 
+@pytest.mark.parametrize("codec", [None, "flac"])
+@pytest.mark.parametrize("value", [np.float16(0.1), np.float16(0.3)])
+def test_seconds_go_to_ffmpeg_as_pydub_writes_them(tmp_path, codec, value):
+    path = str(tmp_path / "a.flac")
+    AudioSegment(np.arange(96000, dtype="<i2").tobytes(), sample_width=2, frame_rate=48000, channels=1).export(path, "flac")
+    got = AudioSegment.from_file(path, codec=codec, start_second=value)
+    assert got.raw_data == pydub.AudioSegment.from_file(path, codec=codec, start_second=value).raw_data
+
+
 def test_ffmpeg_gets_a_negative_start_as_plain_text(tmp_path):
     path = str(tmp_path / "a.flac")
     AudioSegment.silent(3000, 8000).export(path, "flac")

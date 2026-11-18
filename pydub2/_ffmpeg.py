@@ -48,16 +48,18 @@ def run(converter, args, data, what):
 
 
 def seconds(v):
-    # ffmpeg reads 1e+30 but not 1e-05, 1/2 or True (a negative 1e-05 stays an error, as in pydub)
+    # pydub gives ffmpeg str(v), which it reads for 1e+30 but not 1e-05, 1/2 or True (a negative 1e-05 stays an error, as in pydub)
     if isinstance(v, bool):
         return str(int(v))
-    if isinstance(v, numbers.Real) and not isinstance(v, numbers.Integral):
+    text = str(v)
+    if not isinstance(v, numbers.Real):
+        return text
+    if "/" in text:
         try:
-            text = str(v if isinstance(v, float) else float(v))
+            text = str(float(v))
         except OverflowError:
-            return str(v)
-        return format(Decimal(text), "f") if "e-" in text and text[0] != "-" else text
-    return str(v)
+            return text
+    return format(Decimal(text), "f") if "e-" in text and text[0] != "-" else text
 
 
 def to_wav(converter, path=None, data=None, format=None, codec=None, parameters=None,
