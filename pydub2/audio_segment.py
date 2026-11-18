@@ -1425,6 +1425,8 @@ class AudioSegment(object):
         if self.channels == 1:
             return [self]
 
+        # a width that has no array type is a KeyError in pydub, whatever the channel count
+        self.array_type
         return [
             self._spawn(_pydub2.channel(self._data, self.sample_width, self.channels, i),
                         overrides={"channels": 1, "frame_width": self.sample_width})

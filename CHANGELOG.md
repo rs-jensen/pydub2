@@ -68,6 +68,7 @@ What changed in each release.
 - A bitrate with a null byte raises `ValueError` on export of flac, as with pydub, where flac took it.
 - `AudioSegment.stream` takes a `start_second` or `duration` under 0.0001 (written `1e-05` by Python) and cuts it like a longer one, where it raised `ValueError`.
 - `export` to flac of a rate over 65535 that is not a multiple of 10, like 67685 Hz, writes the file as ffmpeg does, where it raised `CouldntEncodeError`.
+- `detect_silence`, `detect_nonsilent` and `split_on_silence` of an empty segment with a `frame_rate` of 2**31 or more return `[]` as in pydub, where they raised `TypeError`.
 - A float wav (or another float source) read as 16 bit rounds a sample that falls exactly between two values to the even one, as ffmpeg does, where it rounded up and was 1 off in about 1 sample in 256.
 - A `start_second` or `duration` that is a `Fraction`, a `bool` or under 0.0001 works when `from_file` hands the file to ffmpeg (a-law wav, a `codec`, a negative start), and a `Fraction` or `bool` works in `AudioSegment.stream` of flac, mp3, ogg and opus. ffmpeg was given text like `1/2` or `1e-05` and refused it.
 - `AudioSegment.from_file_using_temporary_files` of a `pathlib.Path` or a file object hands a wav to ffmpeg and gives 16 bit, as in pydub. It knows a wav by its name for a `str` or `bytes` path only.

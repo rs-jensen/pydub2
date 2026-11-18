@@ -266,3 +266,13 @@ def test_get_sample_slice_with_floats():
         pydub.AudioSegment(wav).get_sample_slice(0.0, 12)
     with pytest.raises(TypeError):
         pydub2.AudioSegment(wav).get_sample_slice(0.0, 12)
+
+
+def test_split_to_mono_of_a_width_without_array_type_raises_like_pydub():
+    def split(lib):
+        seg = lib.AudioSegment.from_file(io.BytesIO(b""), format="pcm", sample_width=0, frame_rate=8000, channels=0)
+        try:
+            return seg.split_to_mono()
+        except Exception as e:
+            return type(e).__name__
+    assert split(pydub2) == split(pydub) == "KeyError"
