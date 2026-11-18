@@ -143,8 +143,8 @@ def test_fade_reads_a_memoryview_of_the_audio():
     assert out[-(len(data) - 40000):] == data[40000:]
 
 
-# a whole file fade ran a python loop of one slice, one gain and one bytes object per ms, and it was 12 times slower
-# than this on 30 seconds of stereo at 44.1 kHz, 1.4 s against 0.13 s for 10 minutes
+# a fade over the whole file ran a python loop with a slice, a gain and a bytes object for each millisecond. On 30 seconds of
+# stereo it took 82 ms where it takes 7 ms now, so the loop is what the subclass gets here
 def test_a_fade_over_the_whole_file_is_not_a_loop_per_millisecond():
     fast = clip(AudioSegment, 2, 2, 44100 * 30, 44100)
     slow = clip(Stepped, 2, 2, 44100 * 30, 44100)
