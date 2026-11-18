@@ -271,11 +271,31 @@ def fix_wav_headers(data):
     data[pos + 4:pos + 8] = struct.pack('<I', len(data) - pos - 8)
 
 
+_PCM_GUID = b"\x01\x00\x00\x00\x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71"
+
+
 def _pydub_wav(head):
     try:
         return bool(read_wav_audio(head))
     except (CouldntDecodeError, struct.error):
         return False
+
+
+def _pcm_wav(data):
+    # (headers, format) of a wav that pydub reads right, which is integer pcm, also as the sub-format of WAVE_FORMAT_EXTENSIBLE
+    try:
+        h = extract_wav_headers(data)
+        w = read_wav_audio(data, h)
+        fmt = [x for x in h if x.id == b"fmt "][0]
+        pos = fmt.position + 8
+        tag = struct.unpack_from("<H", data, pos)[0]
+        if tag == 0xFFFE and (fmt.size < 40 or data[pos + 24:pos + 40] != _PCM_GUID):
+            return None
+    except (CouldntDecodeError, struct.error):
+        return None
+    if w.bits_per_sample not in (8, 16, 24, 32) or w.channels < 1 or w.sample_rate < 1:
+        return None
+    return h, w
 
 
 def _own_wav(head, flen, read_at):
@@ -788,10 +808,9 @@ class AudioSegment(object):
                 data, frame_rate, channels, sample_width = _pydub2.decode(data)
             except RuntimeError:
                 # a header the decoder refuses, like a rate of a few GHz, that pydub reads
-                try:
-                    return cls(data=data)
-                except struct.error:
+                if _pcm_wav(data) is None:
                     raise tagged(CouldntDecodeError("cant read this file"), "wav", "cant_decode")
+                return cls(data=data)
             return cls(data=data, metadata={
                 'sample_width': sample_width,
                 'frame_rate': frame_rate,
@@ -986,13 +1005,10 @@ class AudioSegment(object):
     @classmethod
     def _pydub_wav_segment(cls, filename, data, head, lim):
         # a wav the decoder refuses and pydub reads on its own, like an odd chunk without its pad byte
-        try:
-            h = extract_wav_headers(head)
-            w = read_wav_audio(head, h)
-        except (CouldntDecodeError, struct.error):
+        pcm = _pcm_wav(head)
+        if pcm is None:
             return None
-        if w.bits_per_sample not in (8, 16, 24, 32) or w.channels < 1 or w.sample_rate < 1:
-            return None
+        h, w = pcm
         fw = w.channels * (4 if w.bits_per_sample == 24 else w.bits_per_sample // 8)
         size = os.path.getsize(filename) if data is None else len(data)
         # the header gives the length, so a wav over the limits fails before it is read
