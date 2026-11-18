@@ -74,3 +74,49 @@ def test_overrides_are_called_like_pydub(case):
     for only in (None,) + names:
         assert seen["pydub2", only] == seen["pydub", only], only
         assert out["pydub2", only] == out["pydub", only], only
+
+
+def nested(lib, log, upper, lower):
+    # the names in upper are overridden one class up, the ones in lower in the class that is used
+    base = tracked(lib.AudioSegment, log, *upper)
+    cls = type("Leaf", (tracked(base, log, *lower),), {})
+    samples = array.array("h", (int(12000 * math.sin(i * 0.3)) if (i // 400) % 2 == 0 else 0 for i in range(1600)))
+    return cls(samples.tobytes(), frame_rate=8000, channels=1, sample_width=2)
+
+
+@pytest.mark.parametrize("case", ["detect_silence", "split_on_silence", "strip_silence", "compress", "normalize"])
+@pytest.mark.parametrize("split", [(0, 1), (1, 0), (1, 1)])
+def test_subclass_of_a_subclass(case, split):
+    _, call, names = CASES[case]
+    upper, lower = (names[:len(names) // 2 + 1], names[len(names) // 2:])
+    upper, lower = (upper if split[0] else (), lower if split[1] else ())
+    seen = {}
+    out = {}
+    for lib in (pydub, pydub2):
+        log = set()
+        s = nested(lib, log, upper, lower)
+        log.clear()
+        out[lib.__name__] = result(call(lib, s))
+        seen[lib.__name__] = log
+    assert seen["pydub2"] == seen["pydub"]
+    assert out["pydub2"] == out["pydub"]
+
+
+@pytest.mark.parametrize("name, case", [("rms", "detect_silence"), ("rms", "strip_silence"), ("dBFS", "detect_leading_silence"),
+                                        ("max_possible_amplitude", "normalize")])
+def test_overridden_property(name, case):
+    _, call, _ = CASES[case]
+    seen = {}
+    out = {}
+    for lib in (pydub, pydub2):
+        log = set()
+        # a property that gives its own number, so the result shows the override was used
+        attr = inspect.getattr_static(lib.AudioSegment, name)
+        cls = type("Prop", (lib.AudioSegment,), {name: property(lambda self, attr=attr: (log.add(name), attr.fget(self) // 2)[1])})
+        samples = array.array("h", (int(12000 * math.sin(i * 0.3)) if (i // 400) % 2 == 0 else 0 for i in range(1600)))
+        s = cls(samples.tobytes(), frame_rate=8000, channels=1, sample_width=2)
+        log.clear()
+        out[lib.__name__] = result(call(lib, s))
+        seen[lib.__name__] = log
+    assert seen["pydub"] and seen["pydub2"] == seen["pydub"]
+    assert out["pydub2"] == out["pydub"]
