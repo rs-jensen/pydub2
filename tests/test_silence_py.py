@@ -123,3 +123,19 @@ def test_silence_of_an_empty_segment_with_a_huge_rate(frame_rate):
     for name in ("detect_silence", "detect_nonsilent", "split_on_silence"):
         assert getattr(silence, name)(new, min_silence_len=0, silence_thresh=5) == \
             getattr(old_silence, name)(old, min_silence_len=0, silence_thresh=5)
+
+
+@pytest.mark.parametrize("frames, extra", [(1329, 3), (2000, 3), (1006, 1)])
+def test_silence_with_a_partial_last_frame(frames, extra):
+    data = bytes(range(256)) * (frames // 64) + bytes(frames % 64 * 4 + extra)
+
+    def run(cls, mod):
+        seg = cls(b"", sample_width=4, frame_rate=21891, channels=1)._spawn(data)
+        out = []
+        for thresh in (-16, -100, float("inf")):
+            try:
+                out.append(mod.detect_silence(seg, 5, thresh))
+            except Exception:
+                out.append("error")
+        return out
+    assert run(AudioSegment, silence) == run(OldSegment, old_silence)
