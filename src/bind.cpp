@@ -376,9 +376,12 @@ NB_MODULE(_pydub2, m) {
     });
 
     m.def("interleave", [](nb::list parts, long long width, size_t frames) {
+        // held here, another thread can take them out of the list while the gil is released
+        std::vector<nb::bytes> held;
         std::vector<std::string_view> views;
         for (nb::handle h : parts) {
-            views.push_back(str(nb::cast<nb::bytes>(h)));
+            held.push_back(nb::cast<nb::bytes>(h));
+            views.push_back(str(held.back()));
         }
         nb::object out;
         {
