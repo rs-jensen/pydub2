@@ -1074,6 +1074,8 @@ class AudioSegment(object):
         if format in ("raw", "pcm"):
             return _write_out(out_f, self._data)
 
+        int(self.frame_count())  # pydub calls it for the wav header and a subclass can override it
+
         # a partial last frame is dropped, the encoders take whole frames only
         fw = self.channels * self.sample_width
         pcm = self._data[:len(self._data) // fw * fw]
