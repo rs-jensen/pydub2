@@ -77,7 +77,7 @@ The editing functions only exist in the pydub family. Seconds on the 10 minute f
 
 Where pydub2 is slower or heavier than something else in these runs:
 
-- `overlay` and `normalize` take as long as pydub, which uses the C `audioop`, or a little less. Both are under 0.1 seconds for 10 minutes.
+- `overlay` takes as long as pydub, which uses the C `audioop`, or a little less. It is under 0.1 seconds for 10 minutes.
 - Importing it takes 7.5 ms against 4.9 for pydub. soundfile, PyAV and miniaudio take longer than pydub2.
 - Taking 10 seconds out of an ogg file takes 0.50 seconds for a 10 minute file and 0.26 for a 1 minute file, because pydub2 decodes from the start. soundfile needs 0.05, miniaudio 0.06 and PyAV 0.12. pydub needs 0.39 and pydub-lts 0.15, so this is the one row where pydub2 reads slower than pydub. For mp3 and flac the 10 second read takes 0.04 to 0.05 seconds.
 - Opus export takes 6.2 seconds for 10 minutes, a little more than ffmpeg through pydub (4.9). It is faster than PyAV (20). This is measured on Apple silicon, where the resampler inside the opus encoder has a neon version.
