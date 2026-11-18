@@ -203,7 +203,7 @@ def extra_ffmpeg():
 def limits():
     # read once per load, so another thread that changes them cant cut a load short
     out = []
-    for name, top in (("max_duration", 2 ** 31), ("max_bytes", 2 ** 62)):
+    for name, top in (("max_duration", 2 ** 31), ("max_bytes", 2 ** 62), ("max_file_size", 2 ** 62)):
         v = getattr(pydub2, name)
         if v is not None and not (isinstance(v, numbers.Real) and v >= 0):
             raise ValueError("pydub2.%s has to be None or a number, 0 or more, not %r" % (name, v))
@@ -213,7 +213,7 @@ def limits():
 
 
 def check_duration(frames, rate, fw=None, lim=None):
-    max_duration, max_bytes = lim or limits()
+    max_duration, max_bytes = (lim or limits())[:2]
     if max_duration is not None and frames > max_duration * rate:
         raise tagged(CouldntDecodeError("this file is longer than max_duration"), reason="too_long")
     if max_bytes is not None and fw is not None and frames * fw > max_bytes:
@@ -222,13 +222,53 @@ def check_duration(frames, rate, fw=None, lim=None):
 
 def frame_cap(rate, fw, lim):
     # one frame past the limits, so a file over them is seen and not just cut, -1 for no limit
-    max_duration, max_bytes = lim
+    max_duration, max_bytes = lim[:2]
     n = inf
     if max_duration is not None:
         n = max_duration * rate
     if max_bytes is not None:
         n = min(n, max_bytes // fw)
     return -1 if n >= 2 ** 62 else int(n) + 1
+
+
+def check_size(size, lim):
+    if lim[2] is not None and size > lim[2]:
+        raise tagged(CouldntDecodeError("this file is larger than max_file_size"), reason="too_big")
+
+
+def file_size(f):
+    # None for a pipe or a socket
+    try:
+        at = f.tell()
+        size = f.seek(0, 2)
+        f.seek(at)
+        return size
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def read_file(f, lim):
+    # a file that can seek is only read when it is under max_file_size, anything else stops one byte past it
+    if lim[2] is None:
+        return bytes(f.read())
+    size = file_size(f)
+    check_size(size or 0, lim)
+    return bytes(f.read()) if size is not None else read_upto(f, lim)
+
+
+def read_upto(f, lim, n=-1):
+    # read(n) sets aside n bytes first, so a cap far past the file is read in pieces
+    if lim[2] is not None:
+        n = lim[2] + 1 if n < 0 else min(n, lim[2] + 1)
+    parts = []
+    while n > 0:
+        parts.append(f.read(min(n, 1 << 24)))
+        if not parts[-1]:
+            break
+        n -= len(parts[-1])
+    data = b"".join(parts)
+    check_size(len(data), lim)
+    return data
 
 
 def read_capped(d, n, lim=None):

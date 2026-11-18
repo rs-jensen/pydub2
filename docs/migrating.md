@@ -126,7 +126,7 @@ Turn it off when you have looked at the differences and are happy with them. A g
 
 Strict mode does not cover the new functions (`stream`, `detect_speech`, `from_numpy`), the error class where pydub raises `audioop.error` (pydub2 raises `ValueError`), and calls that hang in pydub.
 
-The limits for untrusted files stay on in strict mode. URLs, playlists and the demuxer list are refused as before, so a playlist that pydub would load still raises, and `max_duration`, `max_bytes` and `ffmpeg_timeout` still apply. Only the `file:` prefix is dropped, so a file whose name has a colon in it, like `http:x.mp3`, fails to load, as in pydub. Set the switch once at startup and do not flip it from several threads.
+The limits for untrusted files stay on in strict mode. URLs, playlists and the demuxer list are refused as before, so a playlist that pydub would load still raises, and `max_duration`, `max_bytes`, `max_file_size` and `ffmpeg_timeout` still apply. Only the `file:` prefix is dropped, so a file whose name has a colon in it, like `http:x.mp3`, fails to load, as in pydub. Set the switch once at startup and do not flip it from several threads.
 
 One known exception: pydub reads a 24 bit 192 kHz flac with 6 or 8 channels from a file object or `BytesIO` with a different number of frames from one run to the next. Strict mode runs the same ffmpeg calls, so it can differ from pydub there by chance.
 

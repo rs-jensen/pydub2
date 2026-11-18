@@ -91,7 +91,7 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - On a new `AudioSegment` a width, channel count or rate of 0 or below raises the same class as pydub (`ZeroDivisionError`, or `ValueError` from `len`).
 - `mul` (`apply_gain`, fades) with a nan factor, or an infinite factor on a zero sample, raises `ValueError`. The result is undefined in audioop.
 - When ffmpeg is missing, `FileNotFoundError` is only raised for formats pydub2 cannot read itself. For wav, flac, mp3, ogg and opus a file it cannot decode raises `CouldntDecodeError`.
-- `pydub2.max_duration`, `pydub2.max_bytes` and `pydub2.ffmpeg_timeout` are new, all off by default. A file longer than `max_duration`, or that decodes to more than `max_bytes`, raises `CouldntDecodeError`.
+- `pydub2.max_duration`, `pydub2.max_bytes`, `pydub2.max_file_size` and `pydub2.ffmpeg_timeout` are new, all off by default. A file longer than `max_duration`, that decodes to more than `max_bytes`, or that is larger than `max_file_size`, raises `CouldntDecodeError`.
 
 ## ffmpeg
 

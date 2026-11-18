@@ -32,9 +32,13 @@ from .utils import (
     ratio_to_db,
     get_array_type,
     check_duration,
+    check_size,
+    file_size,
     frame_cap,
     limits,
     read_capped,
+    read_file,
+    read_upto,
 )
 from .exceptions import (
     TooManyMissingFrames,
@@ -727,6 +731,12 @@ class AudioSegment(object):
         if isinstance(file, bytes):
             file = filename
         file, close_file = _fd_or_path_or_tempfile(file, 'rb', tempfile=False)
+        if lim[2] is not None:
+            # a name or a file that can seek says its size, so one over max_file_size is not read
+            size = file_size(file) or 0
+            if size > lim[2] and close_file:
+                file.close()
+            check_size(size, lim)
 
         if format:
             format = format.lower()
@@ -766,17 +776,10 @@ class AudioSegment(object):
             }
             fw = channels * sample_width
             n = frame_cap(frame_rate, fw, lim)
-            if n < 0:
+            if n < 0 and lim[2] is None:
                 data = file.read(-1)
             else:
-                # read(k) sets aside k bytes first, so a cap far past the file is read in pieces
-                parts, left = [], n * fw
-                while left > 0:
-                    parts.append(file.read(min(left, 1 << 24)))
-                    if not parts[-1]:
-                        break
-                    left -= len(parts[-1])
-                data = b"".join(parts)
+                data = read_upto(file, lim, n * fw)
                 check_duration(len(data) // fw, frame_rate, fw, lim)
             if start_second is None and duration is None:
                 return cls(data=data, metadata=metadata)
@@ -809,7 +812,7 @@ class AudioSegment(object):
                         # pydub keeps only what the data chunk says, so the rest is not read
                         file.seek(0)
                         obj = cls(data=file.read(h[-1].position + 8 + size))
-                    elif lim == (None, None):
+                    elif lim[:2] == (None, None):
                         obj = cls._from_safe_wav(file)
                 except Exception:
                     pass
@@ -835,7 +838,12 @@ class AudioSegment(object):
         # a name goes to the decoder as it is, so the file never sits in memory
         # a pipe gives its bytes once, so the decoder and ffmpeg get them from here and not by name
         piped = close_file and not os.path.isfile(filename)
-        data = None if close_file and not piped else bytes(file.read())
+        try:
+            data = None if close_file and not piped else read_file(file, lim)
+        except CouldntDecodeError:
+            if close_file:
+                file.close()
+            raise
         # pydub reads pcm wav itself, without codec or parameters, and cuts it in python
         head = file.read(65536) if data is None else data[:65536]
         own = wav and _pydub_wav(head)
@@ -922,7 +930,7 @@ class AudioSegment(object):
         """Yields the file in chunk_ms pieces without loading all of it. wav, flac, mp3, ogg and opus only."""
         lim = limits()
         filename = None if hasattr(file, "read") else fsdecode(file)
-        data = bytes(file.read()) if filename is None else None
+        data = read_file(file, lim) if filename is None else None
         try:
             d = _pydub2.Decoder(data if filename is None else filename)
         except RuntimeError:
@@ -934,6 +942,8 @@ class AudioSegment(object):
                     (filename or "").lower().endswith((".wav", ".flac", ".mp3", ".ogg", ".opus")):
                 raise CouldntDecodeError("cant read this file")
             raise CouldntDecodeError("stream only reads wav, flac, mp3, ogg and opus")
+        if filename is not None and lim[2] is not None:
+            check_size(os.path.getsize(filename), lim)
 
         def run(f, *args):
             try:

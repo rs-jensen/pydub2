@@ -8,6 +8,7 @@ if _env not in ("", "0", "false", "no", "n", "off", "f") and not strict:
 del _env
 max_duration = None
 max_bytes = None
+max_file_size = None
 ffmpeg_timeout = None
 
 from .audio_segment import AudioSegment
