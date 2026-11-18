@@ -34,3 +34,25 @@ def test_band_pass_filter(channels, width, low, high, order):
 def test_band_pass_filter_is_a_method_once_the_module_is_imported():
     new, old = pair(2)
     assert new.band_pass_filter(300, 3000).raw_data == old.band_pass_filter(300, 3000).raw_data
+
+
+@pytest.mark.parametrize("name", ["low_pass_filter", "high_pass_filter"])
+@pytest.mark.parametrize("width", [1, 2, 4])
+@pytest.mark.parametrize("channels", [1, 2])
+@pytest.mark.parametrize("cutoff, order", [(500, 5), (4000, 2), (7000, 8)])
+def test_low_and_high_pass_filter(name, channels, width, cutoff, order):
+    new, old = pair(channels, width)
+    a = getattr(effects, name)(new, cutoff, order)
+    b = getattr(old_effects, name)(old, cutoff, order)
+    assert a.raw_data == b.raw_data
+    assert a.raw_data != new.raw_data
+
+
+@pytest.mark.parametrize("mode", ["peak", "low_shelf", "high_shelf"])
+@pytest.mark.parametrize("gain", [6, -6])
+@pytest.mark.parametrize("channels", [1, 2])
+def test_eq_like_pydub(mode, channels, gain):
+    new, old = pair(channels)
+    a = effects.eq(new, 1000, 400, "L+R", mode, gain)
+    assert a.raw_data == old_effects.eq(old, 1000, 400, "L+R", mode, gain).raw_data
+    assert a.raw_data != new.raw_data

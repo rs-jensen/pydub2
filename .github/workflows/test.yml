@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: "3.13"
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - run: pip install . ./mp3 pytest pydub audioop-lts numpy
+      - run: pip install . ./mp3 pytest pydub audioop-lts numpy scipy
       - run: pytest tests
 
   test-native:
@@ -45,5 +45,5 @@ jobs:
           ffmpeg -version | head -n 1
       - if: runner.os == 'macOS'
         run: brew install ffmpeg
-      - run: pip install . ./mp3 pytest pydub audioop-lts numpy
+      - run: pip install . ./mp3 pytest pydub audioop-lts numpy scipy
       - run: pytest -rs tests
