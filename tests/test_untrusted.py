@@ -835,16 +835,18 @@ def test_odd_limits(tmp_path, monkeypatch):
         monkeypatch.setattr(pydub2, name, None)
 
 
-def alive(pid):
+def alive(pid, name):
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     try:
         with open("/proc/%d/stat" % pid) as f:
-            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+            comm, _, rest = f.read().partition("(")[2].rpartition(")")
     except OSError:
         return True
+    # a pid that another process took after ours went is not ours
+    return comm == name and rest.split()[0] != "Z"
 
 
 # snap, conda and docker put ffmpeg behind a shell script
@@ -857,9 +859,10 @@ def test_timeout_stops_what_a_wrapper_started(tmp_path, monkeypatch):
     pid = int(pidfile.read_text())
     try:
         end = time.time() + 5
-        while alive(pid) and time.time() < end:
+        while alive(pid, "sleep") and time.time() < end:
             time.sleep(0.05)
-        assert not alive(pid)
+        ps = subprocess.run(["ps", "-o", "pid,ppid,pgid,stat,args", "-p", str(pid)], capture_output=True, text=True)
+        assert not alive(pid, "sleep"), ps.stdout
     finally:
-        if alive(pid):
+        if alive(pid, "sleep"):
             os.kill(pid, signal.SIGKILL)

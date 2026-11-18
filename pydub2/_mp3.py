@@ -42,7 +42,7 @@ def available():
 
 
 def rate_of(text):
-    text = str(text).lower()
+    text = str(text).strip().lower()
     unit = {"k": 1000, "m": 1000000}.get(text[-1])
     return int(float(text[:-1]) * unit) if unit else int(float(text))
 
@@ -83,7 +83,7 @@ def encode(data, rate, channels, width, bitrate=None, tags=None, id3v2_version="
                 return None
         if bitrate:
             rate_of(bitrate)
-    except (ValueError, IndexError):
+    except (ValueError, IndexError, OverflowError):
         return None
     if quality is not None and not 0 <= quality <= 9.999:
         return None

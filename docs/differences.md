@@ -11,7 +11,8 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - Wav files over 4 GB load (RF64, or a data size of 0xFFFFFFFF from a pipe). pydub refuses them.
 - Loading part of a wav, flac, mp3 or opus file with `start_second` or `duration` seeks in the file instead of running ffmpeg. You get the same frames as pydub (ffmpeg's `-ss` and `-t` rounding, then pydub's slicing), with the same small sample differences as a full load of that format.
 - Part of an ogg vorbis file goes through ffmpeg when it is there. ffmpeg cuts by packet times that drift from the sample count near the start of some files. Without ffmpeg the file is cut at the exact sample, which can be a few hundred samples from pydub. `stream` always cuts at the exact sample.
-- `AudioSegment` accepts `bytearray` and `memoryview` as data.
+- `AudioSegment` accepts `bytearray` and `memoryview` as data, and `raw_data` is always `bytes`. A `memoryview` with items wider than a byte, or with more than one dimension, is read as the bytes it holds. pydub keeps the view and counts its items.
+- A wrong `format` is ignored for wav, flac, mp3, ogg and opus data, which is read as what it is. pydub raises `CouldntDecodeError`, because ffmpeg is told the wrong format.
 - Sample widths other than 8, 16, 24 and 32 bit that ffprobe reports for a file are read as 16 bit.
 
 ### How the samples differ
@@ -128,6 +129,7 @@ These calls hang or crash in pydub and work in pydub2:
 - `mediainfo` of a file object, files whose name starts with `-`, and `format="wma"`.
 - `eq` and the other `scipy_effects` channel modes.
 - `stereo_to_ms` and `ms_to_stereo` in `pydub2.utils` (they raise `NameError` in pydub).
+- `start_second` or `duration` under 0.0001, which Python writes as `1e-05`: pydub passes the text to ffmpeg, which fails with `CouldntDecodeError`.
 - `strip_silence` and `append` with a crossfade that covers no frame (a few Hz, or under 1 ms) return the audio. pydub raises `ZeroDivisionError` in `fade`. A fade over zero frames does nothing here.
 
 ## pydub quirks kept on purpose

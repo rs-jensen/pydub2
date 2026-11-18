@@ -50,10 +50,15 @@ def wait_for(cond, t=5):
     return cond()
 
 
-def interrupt_later(delay):
+def interrupt_later(delay, after=None):
     # a real SIGINT, interrupt_main does not wake a blocking wait
     send = (lambda: os.kill(os.getpid(), signal.SIGINT)) if os.name != "nt" else _thread.interrupt_main
-    threading.Timer(delay, send).start()
+
+    def go():
+        # the player has to be up first, a slow machine takes longer than the delay to start python
+        if after is None or wait_for(after, 60):
+            send()
+    threading.Timer(delay, go).start()
 
 
 FAKE = """import os, signal, sys, time
@@ -109,6 +114,7 @@ def fake_ffplay(tmp_path, monkeypatch):
         return pid, args[1:]
     rec.tag = lambda: ast.literal_eval(rec_file.read_text())[1][0]
     rec.started = started
+    rec.recorded = rec_file.exists
     rec.temp_files = lambda: os.listdir(tmp_path / "tmp")
     return rec
 
@@ -183,7 +189,7 @@ def test_blocking_play_uses_ffplay_and_cleans_up(fake_ffplay, monkeypatch):
 
 @posix
 def test_interrupt_in_blocking_play(fake_ffplay):
-    interrupt_later(0.5)
+    interrupt_later(0.5, fake_ffplay.recorded)
     with pytest.raises(KeyboardInterrupt):
         playback.play(seg)
     pid, args = fake_ffplay()

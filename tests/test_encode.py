@@ -88,6 +88,37 @@ def test_lossy(fmt, channels, rate):
     assert best_corr(array.array("h", data)[::channels], back[::channels]) > 0.95
 
 
+# one tone per channel, the fourth channel of 5.1 and 7.1 is the low frequency one
+TONES = [600, 1000, 1400, 100, 2200, 2600, 3000, 3400]
+
+
+def tone_per_channel(channels, rate=48000):
+    t = np.arange(rate) / rate
+    return np.stack([0.4 * np.sin(2 * np.pi * f * t) for f in TONES[:channels]], 1)
+
+
+def loudest(pcm, channels, rate=48000):
+    x = np.frombuffer(pcm, "<i2").reshape(-1, channels).astype(float)
+    freqs = np.fft.rfftfreq(len(x), 1 / rate)
+    return [freqs[np.abs(np.fft.rfft(x[:, c])).argmax()] for c in range(channels)]
+
+
+@needs_ff
+@pytest.mark.parametrize("fmt", ["ogg", "opus"])
+@pytest.mark.parametrize("channels", [2, 5, 6, 7, 8])
+def test_lossy_keeps_the_channel_order(fmt, channels):
+    data = (tone_per_channel(channels) * 32767).astype("<i2").tobytes()
+    out = pydub2.AudioSegment(data, sample_width=2, frame_rate=48000, channels=channels).export(format=fmt).read()
+    heard = [loudest(ffdecode(out, 48000, channels).tobytes(), channels)]
+    pcm, _, ch, width = _pydub2.decode(out)
+    heard.append(loudest((np.frombuffer(pcm, "<i%d" % width) >> (8 * width - 16)).astype("<i2").tobytes(), ch))
+    # ffmpeg's libopus does not keep the order of 5 and 7 channels
+    if not (fmt == "opus" and channels in (5, 7)):
+        heard.append(loudest(ffdecode(pydub_export(data, 48000, channels, 2, fmt), 48000, channels).tobytes(), channels))
+    for got in heard:
+        assert np.abs(np.array(got) - TONES[:channels]).max() < 30, (got, TONES[:channels])
+
+
 @pytest.mark.parametrize("fmt", ["ogg", "opus"])
 def test_bitrate_changes_size(fmt):
     data = sine(48000, 2, secs=2, freq=3000)

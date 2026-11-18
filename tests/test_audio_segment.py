@@ -1,6 +1,8 @@
+import base64
 import io
 import math
 import os
+import re
 import shutil
 import subprocess
 import wave
@@ -199,3 +201,68 @@ def test_from_file_rewinds_wav():
     f = io.BytesIO(wav)
     f.seek(10)
     same(pydub.AudioSegment.from_file(io.BytesIO(wav), format="wav"), pydub2.AudioSegment.from_file(f, format="wav"))
+
+
+def flv(tmp_path, data):
+    src = tmp_path / "src.wav"
+    src.write_bytes(data)
+    path = tmp_path / "x.flv"
+    subprocess.run([ff, "-y", "-v", "quiet", "-i", str(src), "-c:a", "libmp3lame", "-f", "flv", str(path)], check=True)
+    return path
+
+
+@need_ffmpeg
+@pytest.mark.parametrize("channels", [1, 2])
+def test_from_flv(tmp_path, channels):
+    path = flv(tmp_path, make_wav(2, channels, rate=44100))
+    same(pydub.AudioSegment.from_flv(str(path)), pydub2.AudioSegment.from_flv(str(path)))
+    same(pydub.AudioSegment.from_flv(io.BytesIO(path.read_bytes())), pydub2.AudioSegment.from_flv(io.BytesIO(path.read_bytes())))
+    assert pydub2.AudioSegment.from_flv(str(path)).channels == channels
+
+
+@need_ffmpeg
+@pytest.mark.parametrize("ext", ["wav", "flac", "mp3"])
+@pytest.mark.parametrize("kwargs", [{}, {"start_second": 0.2, "duration": 0.3}, {"start_second": 0.5}])
+def test_from_file_using_temporary_files(tmp_path, ext, kwargs):
+    src = tmp_path / "src.wav"
+    src.write_bytes(make_wav(2, 2, rate=44100))
+    path = tmp_path / ("x." + ext)
+    subprocess.run([ff, "-y", "-v", "quiet", "-i", str(src), str(path)], check=True)
+    a = pydub.AudioSegment.from_file_using_temporary_files(str(path), **kwargs)
+    for src in (str(path), io.BytesIO(path.read_bytes())):
+        b = pydub2.AudioSegment.from_file_using_temporary_files(src, format=ext, **kwargs)
+        assert (a.frame_rate, a.channels, a.sample_width) == (b.frame_rate, b.channels, b.sample_width)
+        if ext == "mp3":
+            assert abs(len(a) - len(b)) <= 30
+            assert abs(a.dBFS - b.dBFS) < 0.5
+        else:
+            same(a, b)
+
+
+@need_ffmpeg
+def test_repr_html():
+    wav = make_wav(2, 2, rate=44100)
+    new, old = pydub2.AudioSegment(wav), pydub.AudioSegment(wav)
+    pattern = re.compile(r"base64,([^\"]*)")
+    mine, theirs = new._repr_html_(), old._repr_html_()
+    assert pattern.sub("", mine) == pattern.sub("", theirs)
+    same_mp3(base64.b64decode(pattern.search(theirs).group(1)), base64.b64decode(pattern.search(mine).group(1)))
+
+
+@pytest.mark.parametrize("width, channels", formats)
+@pytest.mark.parametrize("start, end", [(None, None), (0, 10), (100, 4000), (10, None), (None, 33), (-5, 20), (20, 5),
+                                        (7999, 99999), (8000, 8000), (9000, None), (3, 3)])
+def test_get_sample_slice(width, channels, start, end):
+    wav = make_wav(width, channels)
+    a = pydub.AudioSegment(wav).get_sample_slice(start, end)
+    b = pydub2.AudioSegment(wav).get_sample_slice(start, end)
+    same(a, b)
+    assert len(b) == len(a)
+
+
+def test_get_sample_slice_with_floats():
+    wav = make_wav(2, 2)
+    with pytest.raises(TypeError):
+        pydub.AudioSegment(wav).get_sample_slice(0.0, 12)
+    with pytest.raises(TypeError):
+        pydub2.AudioSegment(wav).get_sample_slice(0.0, 12)

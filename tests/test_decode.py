@@ -554,7 +554,7 @@ def test_mp3_starts_inside_the_bit_reservoir(tmp_path):
         same_as_ffmpeg(tmp_path, "cut.mp3", m[starts[k]:])
 
 
-@pytest.mark.parametrize("channels", [3, 4, 5, 6, 7, 8])
+@pytest.mark.parametrize("channels", [2, 3, 4, 5, 6, 7, 8])
 @pytest.mark.parametrize("name, codec", [("a.ogg", "libvorbis"), ("a.opus", "libopus")])
 def test_channel_order(tmp_path, channels, name, codec):
     expr = "|".join("0.3*sin(%d*t)" % (700 * (c + 1)) for c in range(channels))
