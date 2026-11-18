@@ -140,7 +140,7 @@ Notes on the table:
 - Writing mp3, ogg and opus in pydub2 holds the audio and a little more. The Python process of pydub is 9 to 15 MiB lower, because ffmpeg does the work in its own process, and that process peaks at 136 MiB.
 - Writing to a `BytesIO` holds the file twice, once as the encoded bytes and once in the `BytesIO`. For flac that is 2.5x, for the others it is small.
 - A 1 minute source gives the same multiples within 0.2x for the calls that read all of the audio and do not write a file. Writing, taking 10 seconds and streaming have fixed costs of a few MiB that show on a small source: ogg 1.4x, opus 1.5x, mp3 1.8x and flac 2.0x for writing, and 0.5x for streaming.
-- `fade` over the whole file, with `duration` the length of the audio, is the heaviest call left. It peaks at 3.8x in pydub2 and in pydub, because every millisecond is its own piece until they are joined.
+- `fade` over the whole file, with `duration` the length of the audio, peaks at 2.0x in pydub2, the audio and the result. pydub peaks at 3.8x, because every millisecond is its own piece until they are joined.
 - `append` with a crossfade is 4.0x because it holds both inputs and builds a result as long as both.
 
 ## When another library is the better choice
