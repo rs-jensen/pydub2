@@ -88,6 +88,17 @@ def test_fade_per_millisecond_matches_pydub(kw, width, channels, frames, rate):
     assert outcome(lambda: ours.fade(**kw)) == outcome(lambda: theirs.fade(**kw))
 
 
+@pytest.mark.parametrize("meta", [dict(sample_width=2, channels=1, frame_width=4), dict(sample_width=1, channels=2, frame_width=4),
+                                  dict(sample_width=2, channels=2.0, frame_width=4)])
+@pytest.mark.parametrize("kw", [dict(to_gain=-20, start=0, duration=500), dict(from_gain=-6, start=100, end=900)])
+def test_fade_per_millisecond_of_a_segment_with_its_own_frame_width_matches_the_loop(meta, kw):
+    # metadata can give a frame width that is not the sample width times the channels, the loop cuts by the frame width
+    data = random.Random(3).randbytes(32000)
+    fast = AudioSegment(data, metadata=dict(meta, frame_rate=8000))
+    slow = Stepped(data, metadata=dict(meta, frame_rate=8000))
+    assert outcome(lambda: fast.fade(**kw)) == outcome(lambda: slow.fade(**kw))
+
+
 def test_fade_takes_the_fast_path_only_for_a_plain_segment(monkeypatch):
     calls = []
     real = _pydub2.fade

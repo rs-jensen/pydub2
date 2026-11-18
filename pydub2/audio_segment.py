@@ -1635,7 +1635,8 @@ class AudioSegment(object):
         """The bytes of a fade with one gain step per ms, or None when the loop in fade has to run."""
         cls = type(self)
         if (type(start) is not int or type(duration) is not int or start < 0 or self.frame_rate < 500
-                or len(self._data) % self.frame_width
+                or type(self.sample_width) is not int or type(self.channels) is not int
+                or self.frame_width != self.sample_width * self.channels or len(self._data) % self.frame_width
                 or cls is not AudioSegment and (hasattr(cls, "_data") or any(
                     getattr(cls, n) is not getattr(AudioSegment, n)
                     for n in ("__getitem__", "_parse_position", "frame_count", "__len__", "_piece") + _SPAWN_HOOKS))):
