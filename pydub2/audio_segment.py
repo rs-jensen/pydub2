@@ -730,16 +730,17 @@ class AudioSegment(object):
         frame_rate = segs[0].frame_rate
 
         frame_count = max(int(seg.frame_count()) for seg in segs)
-        parts = []
-        for seg in segs:
-            part = seg._data
-            samples = len(part) // sample_width
-            if channels > 1 and samples != frame_count and not fill_up:
-                raise ValueError("attempt to assign array of size %d to extended slice of size %d" % (samples, frame_count))
-            parts.append(part)
+        parts = [seg._data for seg in segs]
+        if channels > 1 and not fill_up and any(len(part) // sample_width != frame_count for part in parts):
+            # pydub's slice assignment, it fails or, for an empty channel, takes samples out
+            data = array.array(segs[0].array_type, b'\0' * (frame_count * sample_width * channels))
+            for i, seg in enumerate(segs):
+                data[i::channels] = seg.get_array_of_samples()
+        else:
+            data = _pydub2.interleave(parts, sample_width, frame_count)
 
         return cls(
-            _pydub2.interleave(parts, sample_width, frame_count),
+            data,
             channels=channels,
             sample_width=sample_width,
             frame_rate=frame_rate,
