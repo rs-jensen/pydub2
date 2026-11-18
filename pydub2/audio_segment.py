@@ -140,7 +140,9 @@ def _export_pcm(seg, format, codec, parameters):
         width = {None: 2, "pcm_s16le": 2, "pcm_s24le": 3, "pcm_s32le": 4}.get(codec, 0)
         if not width or fmt and fmt != {2: "s16", 3: "s32", 4: "s32"}[width]:
             return None
-    seg = seg.set_sample_width(4 if width == 3 else width)
+    # ffmpeg drops a partial last frame
+    fw = seg.channels * seg.sample_width
+    seg = seg._spawn(seg._data[:len(seg._data) // fw * fw]).set_sample_width(4 if width == 3 else width)
     if format == "flac" and width == 3:
         return _encode(_pydub2.lin2lin(seg._data, 4, 3), seg.frame_rate, seg.channels, 3, format, 0)
     if width != 3:

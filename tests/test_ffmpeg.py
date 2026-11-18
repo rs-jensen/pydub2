@@ -276,6 +276,17 @@ def test_seconds_go_to_ffmpeg_as_pydub_writes_them(tmp_path, codec, value):
     assert got.raw_data == pydub.AudioSegment.from_file(path, codec=codec, start_second=value).raw_data
 
 
+@pytest.mark.parametrize("fmt, kw", [("wav", {"codec": "pcm_s24le"}), ("wav", {"parameters": ["-ac", "2"]}), ("flac", {"codec": "flac"})])
+def test_export_with_codec_or_parameters_drops_a_partial_frame_like_ffmpeg(fmt, kw):
+    def export(cls):
+        seg = cls(b"", sample_width=2, frame_rate=8000, channels=2)._spawn(bytes(range(256)) * 8 + b"\3")
+        out = io.BytesIO()
+        seg.export(out, format=fmt, **kw)
+        back = pydub.AudioSegment.from_file(io.BytesIO(out.getvalue()), format=fmt)
+        return back.sample_width, back.raw_data
+    assert export(AudioSegment) == export(pydub.AudioSegment)
+
+
 def test_ffmpeg_gets_a_negative_start_as_plain_text(tmp_path):
     path = str(tmp_path / "a.flac")
     AudioSegment.silent(3000, 8000).export(path, "flac")
