@@ -1,3 +1,4 @@
+import os
 import random
 import time
 
@@ -145,6 +146,7 @@ def test_fade_reads_a_memoryview_of_the_audio():
 
 # a fade over the whole file ran a python loop with a slice, a gain and a bytes object for each millisecond. On 30 seconds of
 # stereo it took 82 ms where it takes 7 ms now, so the loop is what the subclass gets here
+@pytest.mark.skipif(any(k in os.environ for k in ("ASAN_OPTIONS", "UBSAN_OPTIONS", "TSAN_OPTIONS")), reason="runs under a sanitizer")
 def test_a_fade_over_the_whole_file_is_not_a_loop_per_millisecond():
     fast = clip(AudioSegment, 2, 2, 44100 * 30, 44100)
     slow = clip(Stepped, 2, 2, 44100 * 30, 44100)

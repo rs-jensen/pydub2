@@ -135,6 +135,7 @@ def speed_of(f):
 # 5 MB of 16 bit audio, the time of the module over the time of audioop. The module was built for size and took 2.2 times
 # audioop for mul, 10.8 for reverse, 5.4 for lin2lin, 3.2 for tomono, 2.9 for tostereo, 3.9 for rms and 7.0 for max on x86 Linux,
 # now 0.25, 0.46, 0.27, 0.68, 0.78, 0.41 and 0.51
+@pytest.mark.skipif(any(k in os.environ for k in ("ASAN_OPTIONS", "UBSAN_OPTIONS", "TSAN_OPTIONS")), reason="runs under a sanitizer")
 def test_sample_loops_take_no_more_than_audioop():
     buf = random.Random(1).randbytes(5_000_000)
     for name, args in (("mul", (0.7,)), ("reverse", ()), ("lin2lin", (4,)), ("tomono", (0.5, 0.5)), ("tostereo", (1, 1)), ("rms", ()),
