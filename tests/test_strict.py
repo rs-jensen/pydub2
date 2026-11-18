@@ -125,6 +125,20 @@ def outcome_bytes(lib, path, format, kw):
         return type(e).__name__
 
 
+@pytest.mark.parametrize("how", ["path", "fileobj"])
+@pytest.mark.parametrize("format", ["opus", "ogg"])
+def test_opus_format_name_like_pydub(files, format, how):
+    path = files[("opus", 2)]
+
+    def load(lib):
+        if how == "path":
+            return lib.AudioSegment.from_file(path, format=format)
+        with open(path, "rb") as f:
+            return lib.AudioSegment.from_file(f, format=format)
+    # ffmpeg has no opus demuxer, so pydub only loads this file as ogg
+    assert outcome(lambda: load(pydub2)) == outcome(lambda: load(pydub))
+
+
 def test_export_without_format(tmp_path):
     seg = pydub2.AudioSegment.silent(300, 24000)
     # pydub writes mp3 whatever the name says
