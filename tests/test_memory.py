@@ -28,3 +28,8 @@ def test_export_holds_the_audio_once(format):
 # 3.0 before and 2.0 after with noise, which flac cannot shrink: the audio, the file and one block
 def test_export_flac_does_not_copy_the_file():
     assert peak_x(export("flac"), NOISE) < 2.5
+
+
+# 3.2 before and 2.1 after: the audio and a result a tenth longer, which was held twice
+def test_set_frame_rate_writes_the_result_in_place():
+    assert peak_x("seg.set_frame_rate(48000)") < 2.6

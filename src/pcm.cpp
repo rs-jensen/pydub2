@@ -1,6 +1,7 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <new>
 #include <numeric>
 #include <stdexcept>
 #include <type_traits>
@@ -245,14 +246,29 @@ void ratecv(std::string_view data, size_t width, size_t channels, int inrate, in
     inrate /= g;
     outrate /= g;
     std::vector<int> prev(channels, 0), cur(channels, 0);
-    std::string out;
     const char *p = data.data();
     size_t len = data.size() / (width * channels);
+    // one frame for the first input and one more each time the rate steps past an input, so the output is sized once
+    uint64_t frames = 0;
+    if (len) {
+        uint64_t q = (len - 1) / inrate;
+        if (q && outrate > UINT64_MAX / q) {
+            throw std::bad_alloc();
+        }
+        frames = q * outrate + (len - 1) % inrate * (uint64_t)outrate / inrate + 1;
+    }
+    if (frames > SIZE_MAX / (width * channels)) {
+        throw std::bad_alloc();
+    }
+    size_t bytes = (size_t)frames * width * channels;
+    char *out = alloc(bytes), *at = out, *end = out + bytes;
     int d = -outrate;
     for (;;) {
         while (d < 0) {
             if (len == 0) {
-                memcpy(alloc(out.size()), out.data(), out.size());
+                if (at != end) {
+                    throw std::logic_error("resampled length");
+                }
                 return;
             }
             for (size_t c = 0; c < channels; c++) {
@@ -266,8 +282,10 @@ void ratecv(std::string_view data, size_t width, size_t channels, int inrate, in
         while (d >= 0) {
             for (size_t c = 0; c < channels; c++) {
                 int v = (int)(((double)prev[c] * (double)d + (double)cur[c] * (double)(outrate - d)) / (double)outrate);
-                out.resize(out.size() + width);
-                put32(&out[out.size() - width], width, v);
+                if (at < end) {
+                    put32(at, width, v);
+                }
+                at += width;
             }
             d -= inrate;
         }
