@@ -329,7 +329,8 @@ bool fade(std::string_view before, std::optional<double> before_gain, std::strin
         if (!at(start + i, a) || !at(start + i + 1, b) || b < a) {
             return false;
         }
-        size_t first = std::min<unsigned long long>(a, frames), last = std::min<unsigned long long>(b, frames);
+        size_t first = std::min<unsigned long long>((unsigned long long)a, frames);
+        size_t last = std::min<unsigned long long>((unsigned long long)b, frames);
         size_t missing = (size_t)(b - a) - (last - first);
         if ((double)missing > 2 * per_ms) {
             return false;
