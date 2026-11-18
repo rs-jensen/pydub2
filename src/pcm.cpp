@@ -98,8 +98,7 @@ double sumsq(std::string_view data, size_t width, bool fused) {
     check(data, width);
     size_t n = data.size() / width, i = 0;
     double sum = 0;
-    // a double adds squares of up to 24 bits exactly while the sum stays within 2^53, so there the integer sum is the same
-    // number, and it vectorises. Past that the sum rounds as it goes and has to be walked in order
+    // up to 2^53 a double adds the squares exactly, so an integer sum is the same and vectorises. Past it they go in order
     if (width < 4) {
         by_width(width, [&](auto w) {
             constexpr size_t W = decltype(w)::value;
