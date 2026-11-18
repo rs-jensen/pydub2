@@ -1,11 +1,15 @@
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
 import pytest
 
 import _pydub2
+import pydub2
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 def test_decode_garbage_raises():
@@ -26,3 +30,30 @@ def test_docs_say_the_lame_build_is_patched():
         pytest.skip("not run from a source checkout")
     for name in ("docs/licensing.md", "THIRD_PARTY.md", "mp3/LICENSE", "mp3/README.md"):
         assert "unmodified" not in (root / name).read_text(encoding="utf-8"), name
+
+
+def test_versions_agree():
+    if not (ROOT / "pyproject.toml").exists():
+        pytest.skip("not run from a source checkout")
+    found = {}
+    for name in ("pyproject.toml", "mp3/pyproject.toml", "compat/pyproject.toml"):
+        path = ROOT / name
+        if path.exists():
+            found[name] = re.search(r'^version = "([^"]+)"', path.read_text(encoding="utf-8"), re.M).group(1)
+    found["pydub2.__version__"] = pydub2.__version__
+    assert len(set(found.values())) == 1, found
+
+
+def test_license_files_named_in_the_docs_exist():
+    if not (ROOT / "licenses").is_dir():
+        pytest.skip("not run from a source checkout")
+    named = set()
+    for name in ("THIRD_PARTY.md", "docs/licensing.md"):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        named.update(re.findall(r"\blicenses/[\w.-]+\.txt", text))
+    assert named
+    for name in sorted(named):
+        assert (ROOT / name).is_file(), name
+    third_party = (ROOT / "THIRD_PARTY.md").read_text(encoding="utf-8")
+    for path in sorted((ROOT / "licenses").iterdir()):
+        assert "licenses/" + path.name in third_party, path.name
