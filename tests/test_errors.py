@@ -92,6 +92,27 @@ def test_load_from_fifo(tmp_path, format):
     assert out.stdout.strip() == str(len(pydub2.AudioSegment.from_file(io.BytesIO(data)))), out.stderr
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs fifos")
+@pytest.mark.parametrize("format", ["flac", "ogg"])
+def test_fifo_over_max_bytes_like_a_file(tmp_path, monkeypatch, format):
+    seg = pydub2.generators.Sine(440, sample_rate=48000).to_audio_segment(duration=1000)
+    data = seg.export(format=format).read()
+    plain = tmp_path / ("plain." + format)
+    plain.write_bytes(data)
+    fifo = tmp_path / ("pipe." + format)
+    os.mkfifo(fifo)
+
+    def feed():
+        with open(fifo, "wb") as f:
+            f.write(data)
+    threading.Thread(target=feed, daemon=True).start()
+    monkeypatch.setattr(pydub2, "max_bytes", 10000)
+    with pytest.raises(pydub2.exceptions.CouldntDecodeError, match="^this file is larger than max_bytes$"):
+        pydub2.AudioSegment.from_file(str(plain))
+    with pytest.raises(pydub2.exceptions.CouldntDecodeError, match="^this file is larger than max_bytes$"):
+        pydub2.AudioSegment.from_file(str(fifo))
+
+
 def bad_call(module, call):
     pydub = pytest.importorskip("pydub")
     lib = pydub if module == "pydub" else pydub2
