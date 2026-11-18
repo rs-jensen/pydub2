@@ -365,7 +365,8 @@ bool fade(std::string_view before, std::optional<double> before_gain, std::strin
         constexpr size_t W = decltype(w)::value;
         auto copy = [&](std::string_view src, std::optional<double> gain) {
             if (gain) {
-                nan |= gain_run<W>(src.data(), out, src.size() / W, *gain);
+                // msvc does not take W of the enclosing lambda as a constant here
+                nan |= gain_run<decltype(w)::value>(src.data(), out, src.size() / decltype(w)::value, *gain);
             } else if (!src.empty()) {
                 memcpy(out, src.data(), src.size());
             }
