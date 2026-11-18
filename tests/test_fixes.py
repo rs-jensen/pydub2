@@ -260,3 +260,13 @@ def test_wav_at_a_rate_the_decoder_refuses_from_ffmpeg():
     wav, pcm = wav_bytes(rate=1332770)
     seg = pydub2.AudioSegment.from_file(io.BytesIO(wav))
     assert (seg.raw_data, seg.frame_rate) == (pcm, 1332770)
+
+
+@pytest.mark.parametrize("kw, size", [({"start_second": 2 ** 64}, 0), ({"start_second": 1e300}, 0),
+                                      ({"duration": 2 ** 64}, 1024), ({"duration": 1e300}, 1024),
+                                      ({"start_second": 0.0625, "duration": 2 ** 64}, 32)])
+def test_huge_start_and_duration(kw, size):
+    wav, pcm = wav_bytes()
+    seg = pydub2.AudioSegment.from_file(io.BytesIO(wav), **kw)
+    assert len(seg.raw_data) == size
+    assert [len(c.raw_data) for c in pydub2.AudioSegment.stream(io.BytesIO(wav), **kw)] == ([size] if size else [])

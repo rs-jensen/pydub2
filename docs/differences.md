@@ -14,6 +14,7 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - `AudioSegment` accepts `bytearray` and `memoryview` as data, and `raw_data` is always `bytes`. A `memoryview` with items wider than a byte, or with more than one dimension, is read as the bytes it holds. pydub keeps the view and counts its items.
 - A wrong `format` is ignored for wav, flac, mp3, ogg and opus data, which is read as what it is. pydub raises `CouldntDecodeError`, because ffmpeg is told the wrong format.
 - Sample widths other than 8, 16, 24 and 32 bit that ffprobe reports for a file are read as 16 bit.
+- A `start_second` or `duration` too large for ffmpeg, like `1e300` or `2**64`, gives an empty segment or the rest of the file. pydub raises `CouldntDecodeError`.
 
 ### How the samples differ
 

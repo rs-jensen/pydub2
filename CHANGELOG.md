@@ -81,6 +81,7 @@ What changed in each release.
 - A file that ffmpeg turns into a wav with a rate the decoder refuses, like 1.3 MHz, loads like in pydub, where `from_file` raised `RuntimeError`.
 - `python -m pydub2 doctor --scan` no longer stops with `RecursionError` on a file with a very long chain of attributes like `a.b.c...`.
 - mp3 tags written by `pydub2_mp3` raise `ValueError` for a null byte, like pydub, where they were cut at it. A lone surrogate like `\udc80` and a key that is not a string work as in pydub, where they raised `UnicodeEncodeError` and `AttributeError`.
+- `from_file` and `stream` with a `start_second` or `duration` of 2**64 or 1e300 return what is left of the file, where they raised `TypeError`.
 
 ## [0.0.1] - 2026-11-16
 

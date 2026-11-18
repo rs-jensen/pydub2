@@ -899,7 +899,7 @@ class AudioSegment(object):
                 if span:
                     start, n, final = span
                     if start:
-                        d.seek(start)
+                        d.seek(min(start, 1 << 62))
                     pcm = read_capped(d, n, lim)
                     fw = d.channels * d.width
                     return cls._segment(d, _fit(pcm, len(pcm) // fw, final(len(pcm) // fw), fw, d.rate))
@@ -1005,7 +1005,7 @@ class AudioSegment(object):
         if step < 1:
             raise ValueError("chunk_ms is too small")
         if start:
-            run(d.seek, start)
+            run(d.seek, min(start, 1 << 62))
         cap = frame_cap(d.rate, fw, lim)
 
         def chunks(d):

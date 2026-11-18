@@ -283,7 +283,8 @@ def read_capped(d, n, lim=None):
     cap = frame_cap(d.rate, fw, lim)
     if cap >= 0:
         n = cap if n < 0 else min(n, cap)
-    pcm = d.read(n)
+    # a count the core cant take reads to the end
+    pcm = d.read(-1 if n >= 2 ** 62 else n)
     check_duration(len(pcm) // fw, d.rate, fw, lim)
     return pcm
 
