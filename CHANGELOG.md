@@ -72,13 +72,6 @@ What changed in each release.
 - mp3 with more frames than its Info tag counts, from a doubled frame or a damaged header, has the length ffmpeg gives. ffmpeg drops the encoder padding where the tag says the audio ends, also in the middle of the file.
 - mp3 frames with a mode extension outside joint stereo (mono, plain stereo) decode like ffmpeg, which applies intensity stereo only in joint stereo and lowers the gain for the mid side bit in any mode.
 - Garbage in damaged mp3 frames decodes like ffmpeg: a granule whose bit reservoir is missing is silent, values that overflow ffmpeg's fixed point unscale are 0, the last values of a granule are not read past 572, and on x86 a sample far past full scale comes out as -32768. Such frames were off by up to the full scale.
-
-### Security
-
-- pydub2 no longer starts an `ffmpeg`, `ffprobe` or `ffplay` from the current folder when none is found on PATH. It says ffmpeg is not found. The ffmpeg extra does not look in the current folder either.
-- A float wav whose block align is smaller than its channels and sample size say no longer makes the decoder count a frame per block align and set aside up to 1024 times the decoded size, 1 GB for a 1 MB file with 256 channels.
-- Writing opus from audio at a rate over 768 kHz raises `CouldntEncodeError`. The rate comes from the file header, an ogg vorbis file can say 1 GHz, and libopusenc took minutes per channel to resample from that.
-- `pydub2.max_bytes` limits the size of the decoded audio, off by default. `max_duration` alone does not bound memory, a 301 kB flac that says 8 channels at 192 kHz asked for 22 GB under a limit of an hour. Both limits now hold for raw and pcm input, in strict mode and in `stream`, are checked from the header before anything is read where it gives the length, and take `inf`. They are read once at the start of a load. A file object is still read into memory whole before it is decoded, except for raw and pcm input.
 - `detect_silence`, `detect_nonsilent` and `split_on_silence` with a `seek_step` of 2**31 or more give the ranges pydub gives, where they raised `TypeError`.
 - `set_frame_rate` and `set_sample_width` with an int that does not fit in a C int raise `OverflowError` like pydub, where they raised `TypeError`.
 - `scipy_effects.eq` with a `gain_dB` of `nan` raises `ValueError`. It returned `None`, or raised `AttributeError` in the mid-side modes.
@@ -87,6 +80,13 @@ What changed in each release.
 - `python -m pydub2 doctor --scan` no longer stops with `RecursionError` on a file with a very long chain of attributes like `a.b.c...`.
 - mp3 tags written by `pydub2_mp3` raise `ValueError` for a null byte, like pydub, where they were cut at it. A lone surrogate like `\udc80` and a key that is not a string work as in pydub, where they raised `UnicodeEncodeError` and `AttributeError`.
 - `AudioSegment.stream` with a `start_second` or `duration` of 1e12 or more raises `ValueError` like a negative or `nan` one, where 2**64 and 1e300 raised `TypeError`.
+
+### Security
+
+- pydub2 no longer starts an `ffmpeg`, `ffprobe` or `ffplay` from the current folder when none is found on PATH. It says ffmpeg is not found. The ffmpeg extra does not look in the current folder either.
+- A float wav whose block align is smaller than its channels and sample size say no longer makes the decoder count a frame per block align and set aside up to 1024 times the decoded size, 1 GB for a 1 MB file with 256 channels.
+- Writing opus from audio at a rate over 768 kHz raises `CouldntEncodeError`. The rate comes from the file header, an ogg vorbis file can say 1 GHz, and libopusenc took minutes per channel to resample from that.
+- `pydub2.max_bytes` limits the size of the decoded audio, off by default. `max_duration` alone does not bound memory, a 301 kB flac that says 8 channels at 192 kHz asked for 22 GB under a limit of an hour. Both limits now hold for raw and pcm input, in strict mode and in `stream`, are checked from the header before anything is read where it gives the length, and take `inf`. They are read once at the start of a load. A file object is still read into memory whole before it is decoded, except for raw and pcm input.
 
 ## [0.0.1] - 2026-11-16
 
