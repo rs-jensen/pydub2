@@ -560,8 +560,8 @@ def compare(spec, steps, seed):
     if hung:
         return "skip", steps[min(len(ra), len(steps)) - 1][0] if ra else "init"
     # nothing after a known pydub crash is compared, and pydub2 goes on from a different segment
-    stop = next((i for i, a in enumerate(ra) if i and a.get("exc") and (
-        (steps[i - 1][0], a["exc"]) in FIXED or a["empty24"])), None)
+    stop = next((i for i, a in enumerate(ra) if a.get("exc") and (
+        a["empty24"] or (i and (steps[i - 1][0], a["exc"]) in FIXED))), None)
     rb, hung = timed(P2, spec, steps[:stop], seed, 5 * TIMEOUT)
     if hung:
         return "bad", ((len(rb), "pydub2 hang", None, None))
@@ -607,6 +607,12 @@ def test_chains():
     n = int(os.environ.get("PYDUB2_CHAINS", 300))
     bad = [m for m in (describe(s) for s in range(n)) if m]
     assert not bad, "%d of %d chains differ, first ones:\n%s" % (len(bad), n, "\n".join(bad[:5]))
+
+
+def test_pydub_crash_at_start_ends_the_chain():
+    # pydub cannot build an empty 24 bit segment, so what pydub2 does with it afterwards is not compared
+    spec = dict(w=3, ch=2, rate=32000, n=0, kind="silence", seed=0, extra=False)
+    assert compare(spec, [("s.fade", (), {"from_gain": -40, "start": -10 ** 9, "end": 16}, 0)], 0) == ("ok", None)
 
 
 SEEN = {}
