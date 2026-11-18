@@ -27,6 +27,7 @@ What changed in each release.
 - `fade`, `fade_in` and `fade_out` do not copy the parts of the audio they leave alone. A fade of 2 seconds in 10 minutes peaked at 3.0 times the size of the audio and now peaks at 2.0, and is twice as fast.
 - `split_to_mono` and `from_mono_audiosegments` copy each sample once, and are 4 times faster on 10 minutes of stereo. `split_to_mono` peaked at 3.5 times the size of the audio and now peaks at 2.0, and `from_mono_audiosegments` needed 2.5 times the size of the result on top of its input and now 1.
 - `set_sample_width(3)` and building a segment from 24 bit data are 6 times faster and need half the memory. `set_sample_width(3)` on 10 minutes of 16 bit stereo peaked at 6.5 times the size of the audio and now peaks at 3.0.
+- `speedup` needs a fifth less memory. On 10 minutes it peaked at 3.5 times the size of the audio and now peaks at 2.7. It does not copy the chunks it keeps a second time.
 - Writing opus from 44.1 kHz audio on arm64 is about 40 percent faster. 10 minutes now take about 6.2 s.
 - `overlay` is 3 times faster and `normalize` and `apply_gain` are 1.9 times faster on 60 s of audio.
 - The `FileNotFoundError` for a missing ffmpeg says what it looked for, and suggests the `ffmpeg` extra only when `AudioSegment.converter` is not set.

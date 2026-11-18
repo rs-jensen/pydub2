@@ -14,9 +14,9 @@ MONO = IMPORTS + "mono = [AudioSegment(bytes(range(256)) * %d, sample_width=2, f
 RAW24 = IMPORTS + "raw = bytes(range(192)) * %d\n" % (PCM // 4 * 3 // 192)
 
 
-def peak_x(code, setup=STEREO % SAW):
+def peak_x(code, setup=STEREO % SAW, pcm=PCM):
     """Peak of a fresh process over a bare import of pydub2, as a multiple of the PCM, the audio included."""
-    return (peak_mb("import pydub2\n" + setup + code) - peak_mb("import pydub2")) * 1e6 / PCM
+    return (peak_mb("import pydub2\n" + setup + code) - peak_mb("import pydub2")) * 1e6 / pcm
 
 
 def export(format):
@@ -68,3 +68,9 @@ def test_set_sample_width_24_bit_makes_the_result_once():
 # 2.7 before and 1.7 after: the bytes that come in and the result, the rest was in copies
 def test_24_bit_data_is_widened_once():
     assert peak_x("AudioSegment(raw, sample_width=3, frame_rate=44100, channels=2)", RAW24) < 2.2
+
+
+# 3.4 before and 2.6 after with twice the PCM so the gap is well over the noise: the audio, the pieces and the result
+def test_speedup_lets_go_of_each_chunk_once_it_is_trimmed():
+    code = "from pydub2.effects import speedup\nspeedup(seg, 1.5)"
+    assert peak_x(code, STEREO % ("bytes(range(256)) * %d" % (2 * PCM // 256)), 2 * PCM) < 3.0

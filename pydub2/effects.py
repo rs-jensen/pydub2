@@ -89,8 +89,11 @@ def speedup(seg, playback_speed=1.5, chunk_size=150, crossfade=25):
 
     # we don't want to truncate the last chunk since it is not guaranteed to be
     # the full chunk length
-    last_chunk = chunks[-1]
-    chunks = [chunk[:-ms_to_remove_per_chunk] for chunk in chunks[:-1]]
+    last_chunk = chunks.pop()
+    # trimmed in place, so each whole chunk is let go as its trimmed copy is made
+    for i, chunk in enumerate(chunks):
+        chunks[i] = chunk[:-ms_to_remove_per_chunk]
+    del chunk
 
     out = chunks[0]
     if crossfade < 0 or overrides(out, "append", "__add__"):
@@ -110,7 +113,9 @@ def speedup(seg, playback_speed=1.5, chunk_size=150, crossfade=25):
     rate = out.frame_rate / 1000.0
     pieces = [out._data]
     size = len(out._data)
-    for chunk in chunks[1:]:
+    for i in range(1, len(chunks)):
+        # the pieces hold what is left of each chunk, the list need not hold all of them as well
+        chunk, chunks[i] = chunks[i], None
         if crossfade > len(chunk):
             raise ValueError("Crossfade is longer than the appended AudioSegment ({}ms > {}ms)".format(
                 crossfade, len(chunk)))
@@ -134,7 +139,7 @@ def speedup(seg, playback_speed=1.5, chunk_size=150, crossfade=25):
         tail += b"\0" * (end - start - len(tail))
         xf = out._spawn(tail).fade(to_gain=-120, start=0, end=float('inf'))
         xf *= chunk[:crossfade].fade(from_gain=-120, start=0, end=float('inf'))
-        for data in (xf._data, chunk[crossfade:]._data):
+        for data in (xf._data, chunk._piece(crossfade, None)):
             pieces.append(data)
             size += len(data)
 
