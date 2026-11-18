@@ -65,6 +65,7 @@ What changed in each release.
 - `AudioSegment.from_file` with a `start_second` or `duration` that is negative, `nan`, infinite or too large for ffmpeg does what pydub does: a short wav with `start_second=-1` is loaded through ffmpeg, and the others raise `CouldntDecodeError`, where they raised `TooManyMissingFrames`, `ValueError`, `OverflowError` or `TypeError` or gave a wrong cut.
 - `AudioSegment.from_file_using_temporary_files` gives 16 bit audio for ogg, opus, flac of more than 16 bit and the other formats that go through ffmpeg, as pydub does, where it gave 32 bit. A wav and raw data keep their width.
 - `AudioSegment.stream` reads a named pipe (fifo) once like `from_file` does, where it opened it a second time and waited for ever or said it could not read the file.
+- `AudioSegment(data=file)` with a file whose `read()` gives `None` raises `TypeError` as pydub does when `max_file_size` is set, where it raised `CouldntDecodeError`.
 
 ### Security
 

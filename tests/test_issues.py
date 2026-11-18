@@ -593,3 +593,31 @@ def test_temporary_files_keep_the_width_of_a_wav_and_raw_data(tmp_path):
         assert lib.AudioSegment.from_file_using_temporary_files(path).sample_width == 4
         assert lib.AudioSegment.from_file_using_temporary_files(
             io.BytesIO(seg.raw_data), format="raw", sample_width=4, frame_rate=8000, channels=1).sample_width == 4
+
+
+class NoneReader(io.BytesIO):
+    def read(self, *args):
+        return None
+
+
+@needs_ff
+@pytest.mark.parametrize("limit", [None, "max_bytes", "max_file_size", "max_duration"])
+@pytest.mark.parametrize("format", [None, "wav", "mp3", "flac", "ogg"])
+@pytest.mark.parametrize("how", ["init", "from_file"])
+def test_reader_that_gives_none_matches_pydub(monkeypatch, limit, format, how):
+    if limit:
+        monkeypatch.setattr(pydub2, limit, 100.0 if limit == "max_duration" else 1 << 30)
+
+    def load(lib):
+        if how == "init":
+            return lib.AudioSegment(data=NoneReader())
+        return lib.AudioSegment.from_file(NoneReader(), format=format)
+    assert outcome_of(load, pydub2) == outcome_of(load, pydub)
+
+
+def outcome_of(load, lib):
+    try:
+        load(lib)
+    except Exception as e:
+        return type(e).__name__
+    return "loaded"

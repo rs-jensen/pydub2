@@ -436,7 +436,7 @@ class AudioSegment(object):
             # normal construction
             lim = None if isinstance(data, (basestring, bytes)) else limits()
             if lim and lim[2] is not None:
-                data = read_file(data, lim)
+                data = read_file(data, lim, none_error=True)
             try:
                 data = data if isinstance(data, (basestring, bytes)) else data.read()
             except(OSError):
