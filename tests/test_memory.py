@@ -91,6 +91,11 @@ def test_a_fade_over_the_whole_file_makes_the_result_once():
     assert peak_x("seg.fade(to_gain=-20, start=0, duration=len(seg))") < 2.5
 
 
+# 3.9 before and 2.9 after, the audio and a result twice its size: the parts went through a temporary file and were read back
+def test_append_with_a_crossfade_holds_the_audio_and_the_result():
+    assert peak_x("seg.append(seg, 100)") < 3.3
+
+
 # 3.4 before and 2.0 after at this size: the audio and the channels, there was an array of the whole audio as well
 def test_split_to_mono_copies_each_sample_once():
     assert peak_x("seg.split_to_mono()") < 2.7
