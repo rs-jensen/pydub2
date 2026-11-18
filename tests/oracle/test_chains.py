@@ -249,7 +249,7 @@ def num(x):
     # numbers that do not survive a repr round trip are written as "kind:text"
     if isinstance(x, str) and ":" in x:
         kind, _, v = x.partition(":")
-        make = {"frac": fractions.Fraction, "f64": np.float64, "f32": np.float32,
+        make = {"frac": fractions.Fraction, "f64": np.float64, "f32": np.float32, "f16": np.float16,
                 "i64": np.int64, "b": lambda v: v == "1"}.get(kind)
         return make(v) if make else x
     return x
@@ -259,8 +259,8 @@ def secs(r):
     if r.random() < 0.5:
         return r.choice([None, None, 0, 0.05, 0.1, 0.25, 0.5, 1])
     return r.choice([2, 1.5, -1, -0.5, 1e-5, 1e-9, 0.0001, 0.001, 0.0005, 1e12, 1e13, 10 ** 30, 1e300, INF, -INF, NAN, True, False,
-                     "frac:1/2", "frac:1/3", "frac:-1/2", "frac:1/100000", "f64:0.1", "f32:0.25", "i64:0", "i64:1",
-                     "b:1", "x", "1.5", 2 ** 63, 2 ** 64])
+                     "frac:1/2", "frac:1/3", "frac:-1/2", "frac:1/100000", "f64:0.1", "f32:0.25", "f32:0.7", "f16:0.1",
+                     "i64:0", "i64:1", "b:1", "x", "1.5", 2 ** 63, 2 ** 64])
 
 
 def for_pydub(v):
@@ -282,7 +282,9 @@ class Plain(float):
 VARIANTS = ["pcm", "pcm", "pcm", "ext", "float", "extfloat", "alaw", "mulaw", "extalaw", "ext24", "odd", "odd_tail",
             "chunk", "chunk_nopad"]
 # pydub reads these as integer pcm or alaw bytes, pydub2 decodes them, so only rate, channels and length are compared
-WRONG_IN_PYDUB = {"extfloat", "alaw", "mulaw", "extalaw"}
+WRONG_IN_PYDUB = {"extfloat", "extalaw"}
+# pydub2 has no decoder of its own for these, so the format goes to ffmpeg there too
+VIA_FFMPEG = WRONG_IN_PYDUB | {"alaw", "mulaw"}
 GUID = b"\x00\x00\x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71"
 
 
@@ -342,10 +344,10 @@ def sp_load(L, s, variant, how, src, **kw):
     kw = {k: num(v) for k, v in kw.items()}
     data = wav_variant(s, variant)
     wrong = kw.get("format") not in (None, "wav", "WAV") and isinstance(kw.get("format"), str)
-    # pydub2 has no decoder of its own for these, so the format goes to ffmpeg there too
-    via_ffmpeg = variant in WRONG_IN_PYDUB
-    # and so does ffmpeg for the other one, which pydub has read a file object, a pipe or a nameless path, see docs/differences.md
-    params_only = via_ffmpeg or (variant == "ext24" and (src in ("bytes", "file") or (how == "from_file_using_temporary_files" and src == "pathlib")))
+    via_ffmpeg = variant in VIA_FFMPEG
+    # ffmpeg reads ext24 as float when pydub has it read a file object, a pipe or a nameless path, see docs/differences.md
+    params_only = variant in WRONG_IN_PYDUB or (variant == "ext24" and (
+        src in ("bytes", "file") or (how == "from_file_using_temporary_files" and src == "pathlib")))
     if L is PD:
         kw = {k: for_pydub(v) if k != "format" else v for k, v in kw.items()}
         # pydub2 reads wav data as what it is, ffmpeg is told the format and fails, or reads the audio as a stereo mp3
@@ -376,7 +378,8 @@ def sp_load(L, s, variant, how, src, **kw):
                 return ["rate 0"]
             if L is not PD:
                 raise
-            if name == "CouldntDecodeError" and wrong and not via_ffmpeg and all(fits_native(v) for k, v in kw.items() if k != "format"):
+            if name == "CouldntDecodeError" and "format" in kw and wrong and not via_ffmpeg and \
+                    all(fits_native(v) for k, v in kw.items() if k != "format"):
                 # a wrong format is ignored for wav data that pydub2 reads itself, pydub hands it to ffmpeg
                 seg = load(**{k: v for k, v in kw.items() if k != "format"})
             elif how == "from_file_using_temporary_files" and isinstance(e, ValueError) and "closed file" in str(e):
@@ -385,8 +388,9 @@ def sp_load(L, s, variant, how, src, **kw):
             elif name == "CouldntDecodeError" and variant in ("odd", "odd_tail") and not int(s.frame_count()) and (
                     src in ("bytes", "file") or (how == "from_file_using_temporary_files" and src == "pathlib")) and \
                     all(fits_native(v) for k, v in kw.items() if k != "format"):
-                # ffmpeg cannot read a wav without a whole frame and with an unpadded chunk from a pipe, pydub2 does
+                # ffmpeg cannot read a wav without a whole frame and with an unpadded chunk from a pipe, pydub2 drops the part frame
                 seg = load(src="path", **kw)
+                seg = seg._spawn(seg.raw_data[:int(seg.frame_count()) * seg.frame_width])
                 if how == "from_file_using_temporary_files":
                     seg = seg.set_sample_width(2)
             else:
@@ -488,8 +492,9 @@ def big_tag(tags):
 
 
 def sp_export(L, s, fmt, **kw):
-    # pydub writes a partial last frame, the encoders of pydub2 do not
-    s = s._spawn(s.raw_data[:int(s.frame_count()) * s.frame_width])
+    if fmt != "raw":
+        # pydub writes a partial last frame, pydub2 leaves it out, see docs/differences.md
+        s = s._spawn(s.raw_data[:int(s.frame_count()) * s.frame_width])
     out = io.BytesIO()
     if L is PD:
         # pydub takes no format from the target and has no muxer called m4a or aac, see docs/differences.md
@@ -914,6 +919,32 @@ def test_pydub_crash_at_start_ends_the_chain():
     # pydub cannot build an empty 24 bit segment, so what pydub2 does with it afterwards is not compared
     spec = dict(w=3, ch=2, rate=32000, n=0, kind="silence", seed=0, extra=False)
     assert compare(spec, [("s.fade", (), {"from_gain": -40, "start": -10 ** 9, "end": 16}, 0)], 0) == ("ok", None)
+
+
+@pytest.mark.skipif(not HAVE_FFMPEG, reason="needs ffmpeg")
+@pytest.mark.parametrize("how", ["from_file", "from_file_using_temporary_files"])
+@pytest.mark.parametrize("w", [2, 4])
+def test_pipe_wav_with_only_a_part_frame(how, w):
+    spec = dict(w=w, ch=1, rate=8000, n=100, kind="noise", seed=0, extra=False)
+    steps = [("spawn", (1,), {}, 0), ("load", ("odd", how, "bytes"), {}, 0)]
+    assert compare(spec, steps, 0) == ("ok", None)
+
+
+@pytest.mark.skipif(not HAVE_FFMPEG, reason="needs ffmpeg")
+def test_alaw_loads_and_raw_exports_compare_the_samples():
+    s = build(P2, dict(w=2, ch=1, rate=8000, n=100, kind="noise", seed=0, extra=False))
+    for variant in ("alaw", "mulaw"):
+        assert isinstance(sp_load(P2, s, variant, "from_file", "path"), P2.AS)
+    s = s._spawn(s.raw_data + b"\1")
+    out = io.BytesIO()
+    s.export(out, format="raw")
+    assert sp_export(P2, s, "raw") == out.getvalue()
+
+
+@pytest.mark.skipif(not HAVE_FFMPEG, reason="needs ffmpeg")
+def test_pipe_wav_without_a_whole_frame_and_a_wrong_format():
+    spec = dict(w=4, ch=4, rate=44100, n=0, kind="dc", seed=0, extra=False)
+    assert compare(spec, [("load", ("odd_tail", "from_file", "file"), {"format": "mp3"}, 0)], 0) == ("ok", None)
 
 
 SEEN = {}
