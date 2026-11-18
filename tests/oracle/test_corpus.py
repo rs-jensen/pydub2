@@ -23,6 +23,11 @@ DECODER = "a different decoder"
 EXPECTED = {
     "pcm_alaw_44100_6ch_1s.wav": ({"samples"}, WRONG_IN_PYDUB), "pcm_mulaw_44100_6ch_1s.wav": ({"samples"}, WRONG_IN_PYDUB),
     "pcm_f32le_44100_6ch_1s.wav": ({"samples"}, WRONG_IN_PYDUB), "pcm_f64le_44100_6ch_1s.wav": ({"samples"}, WRONG_IN_PYDUB),
+    # ffmpeg 6.1 writes these as WAVE_FORMAT_EXTENSIBLE too
+    "pcm_f32le_44100_1ch_10ms.wav": ({"samples"}, WRONG_IN_PYDUB), "pcm_f32le_44100_1ch_1s.wav": ({"samples"}, WRONG_IN_PYDUB),
+    "pcm_f32le_44100_1ch_1smp.wav": ({"samples"}, WRONG_IN_PYDUB), "pcm_f32le_44100_1ch_61s.wav": ({"samples"}, WRONG_IN_PYDUB),
+    "pcm_f32le_44100_2ch_1s.wav": ({"samples"}, WRONG_IN_PYDUB), "pcm_f64le_44100_1ch_1s.wav": ({"samples"}, WRONG_IN_PYDUB),
+    "pcm_f64le_44100_2ch_1s.wav": ({"samples"}, WRONG_IN_PYDUB),
     "ext_float.wav": ({"samples"}, WRONG_IN_PYDUB), "ext_24_in_32.wav": ({"samples"}, WRONG_IN_PYDUB),
     "bits_12_in_16.wav": ({"params:width", "params:width,frames"}, WRONG_IN_PYDUB),
     "s24_192000_6ch_1s.flac": ({"params:frames"}, WRONG_IN_PYDUB), "s24_192000_8ch_1s.flac": ({"params:frames"}, WRONG_IN_PYDUB),
