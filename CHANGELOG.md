@@ -42,6 +42,7 @@ What changed in each release.
 
 ### Fixed
 
+- An ogg export reads back at the length pydub gives. The ogg pages are cut where ffmpeg cuts them, and libvorbis gets the audio 64 frames at a time as from ffmpeg. Both decide whether the end padding is kept. 1 second of 8 kHz mono came back as 8192 frames, where pydub gives 8000.
 - `rms`, `dBFS`, `detect_silence`, `compress_dynamic_range` and `normalize` of 32 bit audio now match the audioop you have. The first call asks that audioop, so macOS arm64 and the Pythons that fuse the sum give pydub's numbers where they were off by 1 (`rms`) or 1e-8 dB (`dBFS`).
 - 24 bit data with stray bytes after the last whole sample loads like pydub does, and `set_channels`, `low_pass_filter`, `high_pass_filter`, `compress_dynamic_range` and `detect_silence` leave a partial last frame out of the work instead of raising `ValueError`.
 - `export` of audio with a partial last frame, which `_spawn` can make, leaves the partial frame out and writes the file, where it raised `ValueError`.

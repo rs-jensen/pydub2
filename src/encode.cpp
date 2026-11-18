@@ -311,22 +311,69 @@ static void flac(const Audio &a, const Tags &tags, const Cancel &cancel, const A
     s.drain(out + comment.size(), at + old, s.size);
 }
 
-static void pages(ogg_stream_state *os, std::string &out, bool flush) {
+static void pages(ogg_stream_state *os, std::string &out) {
     ogg_page og;
-    while (flush ? ogg_stream_flush(os, &og) : ogg_stream_pageout(os, &og)) {
+    while (ogg_stream_flush(os, &og)) {
         out.append((char *)og.header, (size_t)og.header_len);
         out.append((char *)og.body, (size_t)og.body_len);
     }
 }
 
-static void blocks(vorbis_dsp_state *vd, vorbis_block *vb, ogg_stream_state *os, std::string &out) {
+// audio pages cut where ffmpeg's muxer cuts them, as its demuxer only trims the end padding for some page layouts
+struct Pager {
+    ogg_stream_state *os;
+    std::string &out;
+    int64_t rate;
+    int64_t start; // in samples, ffmpeg starts the first page half a short block before 0
+    int64_t gran = -1;
+    long segs = 0, size = 0;
+
+    // ffmpeg's av_rescale_q to microseconds, nearest with halves away from zero
+    int64_t us(int64_t g) const {
+        int64_t r = ((g < 0 ? -g : g) * 1000000 + rate / 2) / rate;
+        return g < 0 ? -r : r;
+    }
+
+    void flush() {
+        ogg_page og;
+        if (ogg_stream_flush_fill(os, &og, 0x7fffffff)) {
+            out.append((char *)og.header, (size_t)og.header_len);
+            out.append((char *)og.body, (size_t)og.body_len);
+        }
+        start = gran;
+        gran = -1;
+        segs = size = 0;
+    }
+
+    void add(ogg_packet &op) {
+        if (size && 65025 - size < op.bytes) {
+            flush();
+        }
+        ogg_stream_packetin(os, &op);
+        long total = op.bytes / 255 + 1, left = op.bytes;
+        for (long i = 0; i < total;) {
+            long n = std::min(total - i, 255 - segs), len = std::min(left, n * 255);
+            segs += n;
+            size += len;
+            left -= len;
+            i += n;
+            if (i == total) {
+                gran = op.granulepos;
+            }
+            if (segs == 255 || us(gran) - us(start) >= 1000000) {
+                flush();
+            }
+        }
+    }
+};
+
+static void blocks(vorbis_dsp_state *vd, vorbis_block *vb, Pager &pg) {
     ogg_packet op;
     while (vorbis_analysis_blockout(vd, vb) == 1) {
         vorbis_analysis(vb, nullptr);
         vorbis_bitrate_addblock(vb);
         while (vorbis_bitrate_flushpacket(vd, &op)) {
-            ogg_stream_packetin(os, &op);
-            pages(os, out, false);
+            pg.add(op);
         }
     }
 }
@@ -368,13 +415,15 @@ static std::string ogg(const Audio &a, int bitrate, const Tags &tags, const Canc
         ogg_stream_packetin(&os, &h1);
         ogg_stream_packetin(&os, &h2);
         ogg_stream_packetin(&os, &h3);
-        pages(&os, out, true);
+        pages(&os, out);
 
+        Pager pg{&os, out, a.rate, -vorbis_info_blocksize(&vi, 0) / 2};
         size_t frames = a.data.size() / a.width / a.channels;
         std::vector<float> pcm;
-        for (size_t f = 0; f < frames; f += 4096) {
+        // 64 frames at a time like ffmpeg, libvorbis extrapolates back from the start with what it has when it first can
+        for (size_t f = 0; f < frames; f += 64) {
             cancel();
-            size_t n = std::min(frames - f, (size_t)4096);
+            size_t n = std::min(frames - f, (size_t)64);
             floats(a, f, n, pcm);
             vorbis_order(pcm, a.channels);
             float **buf = vorbis_analysis_buffer(&vd, (int)n);
@@ -384,11 +433,11 @@ static std::string ogg(const Audio &a, int bitrate, const Tags &tags, const Canc
                 }
             }
             vorbis_analysis_wrote(&vd, (int)n);
-            blocks(&vd, &vb, &os, out);
+            blocks(&vd, &vb, pg);
         }
         vorbis_analysis_wrote(&vd, 0);
-        blocks(&vd, &vb, &os, out);
-        pages(&os, out, true);
+        blocks(&vd, &vb, pg);
+        pg.flush();
     } catch (...) {
         ex = std::current_exception();
     }

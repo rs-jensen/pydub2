@@ -84,7 +84,9 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - opus with 3 or 4 channels is written. ffmpeg's libopus has no channel layout for them, so pydub raises `CouldntEncodeError`.
 - opus below 100 Hz goes to ffmpeg, because libopusenc corrupts memory when it resamples up from so low. ffmpeg encodes down to 1 Hz. Without ffmpeg it raises `FileNotFoundError`.
 - opus above 768 kHz raises `CouldntEncodeError`, because libopusenc's resampler takes minutes at such rates. ffmpeg encodes any rate.
-- vorbis tags name libVorbis. A vorbis file has more, smaller ogg pages than ffmpeg's. The last granule is the input length. ffmpeg's own decoder can read vorbis a few ms too long.
+- vorbis tags name libVorbis. The ogg pages are cut where ffmpeg cuts them, and the last granule is the input length. ffmpeg keeps the end padding of some files, so they read back up to 32 ms too long. pydub2 reads the same length, as pydub does.
+- ogg of empty audio reads back as empty audio. ffmpeg writes no audio page at all, and pydub cannot read its own file back.
+- opus from 11025, 22050 or 32000 Hz audio can read back up to 3 samples at 48 kHz longer or shorter than pydub's. ffmpeg resamples these rates itself before libopus, and its resampler rounds the length another way.
 - mp3 written by `pydub2_mp3` always starts with an Info frame carrying the encoder delay and padding, so the file reads back at the length it was written with. That includes low constant bitrates, where lame has no room for its own and ffmpeg uses a bigger frame. The crc fields of that frame are left 0 when lame did not write it, and its size can differ from ffmpeg's (417 bytes against 208 at the default bitrate).
 - mp3 written by `pydub2_mp3` without `tags` has no ID3 tag, so it starts with the Info frame and not `ID3`. ffmpeg always writes an ID3v2.4 tag that only names its own version (`TSSE=Lavf...`).
 - A tag text with a lone surrogate that stands for a byte, like `\udc80`, is written as U+FFFD by `pydub2_mp3`. ffmpeg writes the byte.
