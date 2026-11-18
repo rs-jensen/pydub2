@@ -64,6 +64,7 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - `format="pcm"` is the same as `"raw"`, and `"m4a"` and `"aac"` work. `bitrate` can be an int and `cover` can be a `pathlib.Path`.
 - `export` of wav and flac is done without ffmpeg when `codec` is pcm_s16le, pcm_s24le or pcm_s32le (flac: none or flac), and `parameters` is only `-sample_fmt s16` or `s32`, `-ar` and `-ac` with the current rate and channels. The samples are the same as ffmpeg's.
 - Anything else, such as a new rate or a new channel count, still goes to ffmpeg.
+- A wav export leaves out a partial last frame (data from `_spawn` that is not a whole number of frames). pydub writes the stray bytes into the data chunk.
 - 24 bit wav gets a plain PCM header, where ffmpeg writes WAVE_FORMAT_EXTENSIBLE and a LIST chunk.
 - flac export writes 8 bit audio as 16 bit and 32 bit audio as 24 bit (the low byte is dropped), like ffmpeg. A file read back has `sample_width` 2 and 4. Flac with `-sample_fmt s32` is 24 bit too.
 - Exported ogg, opus and flac files never match ffmpeg byte for byte, but they use its settings. opus is unconstrained vbr at 64k per stream plus 32k per coupled pair (96k stereo). vorbis is q3, or ABR without slow rate management when a bitrate is given. flac is level 5 with ffmpeg's block size.
@@ -127,6 +128,7 @@ These calls hang or crash in pydub and work in pydub2:
 - `low_pass_filter` and `high_pass_filter` on empty audio.
 - `mediainfo` of a file object, files whose name starts with `-`, and `format="wma"`.
 - `eq` and the other `scipy_effects` channel modes.
+- A 24 bit `AudioSegment` with no data (`IndexError` in pydub).
 - `stereo_to_ms` and `ms_to_stereo` in `pydub2.utils` (they raise `NameError` in pydub).
 - `strip_silence` and `append` with a crossfade that covers no frame (a few Hz, or under 1 ms) return the audio. pydub raises `ZeroDivisionError` in `fade`. A fade over zero frames does nothing here.
 
