@@ -62,8 +62,9 @@ std::unique_ptr<Decoder> open(const std::filesystem::path &path);
 // tags are written as vorbis comments to flac, ogg and opus, wav has none
 // the 44 bytes in front of the samples, so a writer can send the samples as they are
 std::string wav_head(const Audio &a);
+// with piece, flac comes out as a run of pieces, each from its own call, and alloc is not used
 void encode(const Audio &a, const std::string &format, int bitrate, const Tags &tags, const Cancel &cancel,
-            const Alloc &alloc);
+            const Alloc &alloc, const Alloc &piece = Alloc());
 
 // pcm.cpp
 // these do the same math as the old audioop module so the numbers match pydub
@@ -74,14 +75,26 @@ long long max(std::string_view data, size_t width);
 void mul(std::string_view data, size_t width, double factor, const Alloc &alloc);
 void add(std::string_view a, std::string_view b, size_t width, const Alloc &alloc);
 void lin2lin(std::string_view data, size_t width, size_t new_width, const Alloc &alloc);
+// head and tail joined, with over added to the first n bytes of the tail and repeated to fill them. gain scales the tail first
+void mix(std::string_view head, std::string_view tail, std::string_view over, size_t width, size_t n, bool gain, double factor,
+         const Alloc &alloc);
+// 24 bit samples in 4 bytes, the way AudioSegment keeps them: the top three bytes of the 32 bit sample, then a padding byte in front
+void widen24(std::string_view data, size_t width, const Alloc &alloc);
+// samples index, index + channels, index + 2 * channels and so on, the way a python array slices them
+void channel(std::string_view data, size_t width, size_t channels, size_t index, const Alloc &alloc);
+// one mono part per channel, the frames a part does not have are 0
+void interleave(const std::vector<std::string_view> &parts, size_t width, size_t frames, const Alloc &alloc);
 void tomono(std::string_view data, size_t width, double lfac, double rfac, const Alloc &alloc);
 void tostereo(std::string_view data, size_t width, double lfac, double rfac, const Alloc &alloc);
 // pydubs set_channels(1) from 3 or more channels: each channel floor divided by the count, added up in the sample type
 // throws std::overflow_error where the python array would
 void downmix(std::string_view data, size_t width, size_t channels, const Alloc &alloc);
 void reverse(std::string_view data, size_t width, const Alloc &alloc);
-int avg(std::string_view data, size_t width);
+// the mean of every step-th sample from first, floored. step 1 is all of them
+int avg(std::string_view data, size_t width, size_t step = 1, size_t first = 0);
 void bias(std::string_view data, size_t width, int bias, const Alloc &alloc);
+// bias for the even samples and another for the odd ones, in one pass
+void bias_pairs(std::string_view data, size_t width, int even, int odd, const Alloc &alloc);
 // the loops of the low pass, high pass and compress_dynamic_range effects, alpha and the rest as pydub works them out
 void lowpass(std::string_view data, size_t width, size_t channels, double alpha, const Alloc &alloc);
 void highpass(std::string_view data, size_t width, size_t channels, double alpha, const Alloc &alloc);

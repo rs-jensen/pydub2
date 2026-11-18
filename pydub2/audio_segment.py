@@ -65,10 +65,10 @@ if sys.version_info >= (3, 0):
 _SPAWN_HOOKS = ("__new__", "__init__", "__setattr__", "__getattr__", "_spawn")
 
 
-def _encode(data, rate, *args):
+def _encode(data, rate, *args, **kwargs):
     try:
         # the wave module in pydub rounds the rate
-        return _pydub2.encode(data, round(rate), *args)
+        return _pydub2.encode(data, round(rate), *args, **kwargs)
     except RuntimeError as e:
         raise tagged(CouldntEncodeError(str(e)), args[2], "cant_encode")
 
@@ -517,13 +517,7 @@ class AudioSegment(object):
         if self.sample_width == 3:
             # the low byte is padding, 0xff for negative samples like pydub does
             # stray bytes after the last whole sample are dropped
-            d = self._data[:len(self._data) // 3 * 3]
-            out = bytearray(len(d) // 3 * 4)
-            out[0::4] = d[2::3].translate(bytes(128) + b"\xff" * 128)
-            out[1::4] = d[0::3]
-            out[2::4] = d[1::3]
-            out[3::4] = d[2::3]
-            self._data = bytes(out)
+            self._data = _pydub2.widen24(self._data[:len(self._data) // 3 * 3], 3)
             self.sample_width = 4
             self.frame_width = self.channels * self.sample_width
 
@@ -625,9 +619,31 @@ class AudioSegment(object):
                     "missing frames: %s" % missing_frames)
             silence = _pydub2.mul(data[:self.frame_width],
                                   self.sample_width, 0)
-            data += (silence * missing_frames)
+            data = bytes(data) + silence * missing_frames
 
         return self._spawn(data)
+
+    def _piece(self, start, end):
+        """The bytes of self[start:end], read in place when none have to be cut off or made up."""
+        if type(self).__getitem__ is AudioSegment.__getitem__:
+            n = len(self)
+            first = self._parse_position(min(0 if start is None else start, n)) * self.frame_width
+            last = self._parse_position(min(n if end is None else end, n)) * self.frame_width
+            if 0 <= first <= last <= len(self._data):
+                return memoryview(self._data)[first:last]
+        return self[start:end]._data
+
+    def _view(self, start, end):
+        """self[start:end], sharing the samples with self when none have to be cut off or made up."""
+        data = self._piece(start, end)
+        cls = type(self)
+        if not isinstance(data, memoryview) or cls is not AudioSegment and (hasattr(cls, "_data") or any(
+                getattr(cls, n) is not getattr(AudioSegment, n) for n in _SPAWN_HOOKS)):
+            return self._spawn(bytes(data))
+        out = cls.__new__(cls)
+        out.__dict__.update(sample_width=self.sample_width, frame_rate=self.frame_rate, channels=self.channels,
+                            frame_width=self.frame_width, _data=data)
+        return out
 
     def get_sample_slice(self, start_sample=None, end_sample=None):
         """
@@ -782,14 +798,14 @@ class AudioSegment(object):
         frame_rate = segs[0].frame_rate
 
         frame_count = max(int(seg.frame_count()) for seg in segs)
-        data = array.array(
-            segs[0].array_type,
-            b'\0' * (frame_count * sample_width * channels)
-        )
-
-        for i, seg in enumerate(segs):
-            samples = seg.get_array_of_samples()
-            data[i:len(samples) * channels if fill_up else None:channels] = samples
+        parts = [seg._data for seg in segs]
+        if channels > 1 and not fill_up and any(len(part) // sample_width != frame_count for part in parts):
+            # pydub's slice assignment, it fails or, for an empty channel, takes samples out
+            data = array.array(segs[0].array_type, b'\0' * (frame_count * sample_width * channels))
+            for i, seg in enumerate(segs):
+                data[i::channels] = seg.get_array_of_samples()
+        else:
+            data = _pydub2.interleave(parts, sample_width, frame_count)
 
         return cls(
             data,
@@ -1269,8 +1285,12 @@ class AudioSegment(object):
                 except RuntimeError as e:
                     raise tagged(CouldntEncodeError(str(e)), "wav", "cant_encode")
                 return _write_out(out_f, head, data)
+            # a file opened here takes flac a block at a time, so the file is not held whole next to the blocks
+            parts = format == "flac" and (out_f is None or isinstance(out_f, (basestring, os.PathLike)))
             out = _encode(data, self.frame_rate, self.channels, width, format, rate,
-                          [] if tags is None or format == "wav" else _vorbis_tags(tags, format))
+                          [] if tags is None or format == "wav" else _vorbis_tags(tags, format), parts=parts)
+            if parts:
+                return _write_out(out_f, *out)
             if format == "wav" and out[40] & 1 and not WAVE_PADS:
                 out = riff_without_pad(out[:-1])
             return _write_out(out_f, out)
@@ -1339,6 +1359,13 @@ class AudioSegment(object):
             return self
 
         _c_int(sample_width)
+        if sample_width == 3:
+            # kept in 4 bytes like 24 bit audio is on load
+            return self._spawn(
+                _pydub2.widen24(self._data, self.sample_width),
+                overrides={'sample_width': 4, 'frame_width': self.channels * 4}
+            )
+
         frame_width = self.channels * sample_width
 
         return self._spawn(
@@ -1402,22 +1429,11 @@ class AudioSegment(object):
         if self.channels == 1:
             return [self]
 
-        samples = self.get_array_of_samples()
-
-        mono_channels = []
-        for i in range(self.channels):
-            samples_for_current_channel = samples[i::self.channels]
-
-            try:
-                mono_data = samples_for_current_channel.tobytes()
-            except AttributeError:
-                mono_data = samples_for_current_channel.tostring()
-
-            mono_channels.append(
-                self._spawn(mono_data, overrides={"channels": 1, "frame_width": self.sample_width})
-            )
-
-        return mono_channels
+        return [
+            self._spawn(_pydub2.channel(self._data, self.sample_width, self.channels, i),
+                        overrides={"channels": 1, "frame_width": self.sample_width})
+            for i in range(self.channels)
+        ]
 
     @property
     def rms(self):
@@ -1497,20 +1513,18 @@ class AudioSegment(object):
         if self.channels == 1:
             return self._spawn(data=remove_data_dc(self._data, offset))
 
-        left_channel = _pydub2.tomono(self._data, self.sample_width, 1, 0)
-        right_channel = _pydub2.tomono(self._data, self.sample_width, 0, 1)
-
-        if not channel or channel == 1:
-            left_channel = remove_data_dc(left_channel, offset)
-
-        if not channel or channel == 2:
-            right_channel = remove_data_dc(right_channel, offset)
-
-        left_channel = _pydub2.tostereo(left_channel, self.sample_width, 1, 0)
-        right_channel = _pydub2.tostereo(right_channel, self.sample_width, 0, 1)
-
-        return self._spawn(data=_pydub2.add(left_channel, right_channel,
-                                            self.sample_width))
+        if len(self._data) % (self.sample_width * 2):
+            raise ValueError("not a whole number of samples")
+        # left and right are the even and the odd samples, each gets its own offset
+        offsets = [0, 0]
+        for i in (0, 1):
+            if not channel or channel == i + 1:
+                offsets[i] = offset or _pydub2.avg(self._data, self.sample_width, 2, i)
+        try:
+            data = _pydub2.bias_pairs(self._data, self.sample_width, -offsets[0], -offsets[1])
+        except TypeError:
+            raise ValueError("offset does not fit in the sample width")
+        return self._spawn(data=data)
 
     def apply_gain(self, volume_change):
         return self._spawn(data=_pydub2.mul(self._data, self.sample_width,
@@ -1556,10 +1570,10 @@ class AudioSegment(object):
         sample_width = seg1.sample_width
         spawn = seg1._spawn
 
-        head = seg1[:position]._data
+        head = seg1._piece(None, position)
 
         # drop down to the raw data
-        seg1 = seg1[position:]._data
+        seg1 = seg1._piece(position, None)
         seg2 = seg2._data
         remaining = len(seg1)
         n = -(-remaining // len(seg2)) if seg2 else 0
@@ -1574,15 +1588,14 @@ class AudioSegment(object):
                 pass
             # pydub counts times down as it loops, so what cannot be counted fails
             times -= 1
-        seg2 = (seg2 * n)[:remaining]
-        pos = len(seg2)
-        if gain_during_overlay:
-            seg1_overlaid = _pydub2.mul(seg1[:pos], self.sample_width, db_to_float(float(gain_during_overlay)))
-        else:
-            seg1_overlaid = seg1[:pos]
-        output = [head, _pydub2.add(seg1_overlaid, seg2, sample_width), memoryview(seg1)[pos:]]
+        pos = min(remaining, len(seg2) * n)
+        gain = db_to_float(float(gain_during_overlay)) if gain_during_overlay else None
+        if gain is not None and self.sample_width != sample_width:
+            # pydub scales with the width of self, whatever the sync made of the data
+            seg1 = b"".join([_pydub2.mul(seg1[:pos], self.sample_width, gain), seg1[pos:]])
+            gain = None
 
-        return spawn(data=output)
+        return spawn(data=_pydub2.mix(head, seg1, seg2, sample_width, pos, gain))
 
     def append(self, seg, crossfade=100):
         seg1, seg2 = AudioSegment._sync(self, seg)
@@ -1676,7 +1689,7 @@ class AudioSegment(object):
         output = []
 
         # original data - up until the crossfade portion, as is
-        before_fade = self[:start]._data
+        before_fade = self._piece(None, start)
         if from_gain != 0:
             before_fade = _pydub2.mul(before_fade,
                                       self.sample_width,
@@ -1715,7 +1728,7 @@ class AudioSegment(object):
                 output.append(sample)
 
         # original data after the crossfade portion, at the new volume
-        after_fade = self[end:]._data
+        after_fade = self._piece(end, None)
         if to_gain != 0:
             after_fade = _pydub2.mul(after_fade,
                                      self.sample_width,

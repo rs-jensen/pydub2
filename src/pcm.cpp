@@ -1,6 +1,7 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <new>
 #include <numeric>
 #include <stdexcept>
 #include <type_traits>
@@ -166,6 +167,95 @@ void lin2lin(std::string_view data, size_t width, size_t new_width, const Alloc 
     }
 }
 
+void mix(std::string_view head, std::string_view tail, std::string_view over, size_t width, size_t n, bool gain, double factor,
+         const Alloc &alloc) {
+    check(tail, width);
+    check(over, width);
+    if (n > tail.size() || n % width || (n && over.empty())) {
+        throw std::invalid_argument("bad length to mix");
+    }
+    char *out = alloc(head.size() + tail.size());
+    memcpy(out, head.data(), head.size());
+    out += head.size();
+    memcpy(out, tail.data(), tail.size());
+    bool nan = false;
+    by_width(width, [&](auto w) {
+        constexpr size_t W = decltype(w)::value;
+        for (size_t i = 0, j = 0; i < n; i += W, j += W) {
+            if (j == over.size()) {
+                j = 0;
+            }
+            int x = get(&tail[i], W);
+            if (gain) {
+                double v = x * factor;
+                bool bad = std::isnan(v);
+                nan |= bad;
+                x = bad ? 0 : (int)floor(fbound(v, minvals[W], maxvals[W]));
+            }
+            long long sum = (long long)x + get(&over[j], W);
+            put(out + i, W, (int)std::min<long long>(std::max<long long>(sum, minvals[W]), maxvals[W]));
+        }
+    });
+    if (nan) {
+        throw std::invalid_argument("not a number");
+    }
+}
+
+void channel(std::string_view data, size_t width, size_t channels, size_t index, const Alloc &alloc) {
+    check(data, width, 1);
+    check({}, width, channels);
+    // a partial last frame counts, the channels it reaches are one sample longer
+    size_t samples = data.size() / width;
+    size_t count = index < samples ? (samples - index + channels - 1) / channels : 0;
+    char *out = alloc(count * width);
+    by_width(width, [&](auto w) {
+        constexpr size_t W = decltype(w)::value;
+        for (size_t k = 0; k < count; k++) {
+            memcpy(out + k * W, &data[(index + k * channels) * W], W);
+        }
+    });
+}
+
+void interleave(const std::vector<std::string_view> &parts, size_t width, size_t frames, const Alloc &alloc) {
+    check({}, width, parts.size());
+    for (auto &p : parts) {
+        check(p, width);
+        if (p.size() / width > frames) {
+            throw std::invalid_argument("channel longer than the frames");
+        }
+    }
+    size_t channels = parts.size();
+    if (frames > SIZE_MAX / (width * channels)) {
+        throw std::bad_alloc();
+    }
+    char *out = alloc(frames * channels * width);
+    memset(out, 0, frames * channels * width);
+    by_width(width, [&](auto w) {
+        constexpr size_t W = decltype(w)::value;
+        for (size_t c = 0; c < channels; c++) {
+            for (size_t k = 0; k < parts[c].size() / W; k++) {
+                memcpy(out + (k * channels + c) * W, &parts[c][k * W], W);
+            }
+        }
+    });
+}
+
+void widen24(std::string_view data, size_t width, const Alloc &alloc) {
+    check(data, width);
+    char *out = alloc(data.size() / width * 4);
+    by_width(width, [&](auto w) {
+        constexpr size_t W = decltype(w)::value;
+        for (size_t i = 0; i < data.size(); i += W, out += 4) {
+            int v = get32(&data[i], W);
+            // the low byte is padding, 0xff for negative samples
+            out[0] = v < 0 ? (char)0xff : 0;
+            out[1] = (char)(v >> 8);
+            out[2] = (char)(v >> 16);
+            out[3] = (char)(v >> 24);
+        }
+    });
+}
+
 void tomono(std::string_view data, size_t width, double lfac, double rfac, const Alloc &alloc) {
     check(data, width, 2);
     char *out = alloc(data.size() / 2);
@@ -213,16 +303,22 @@ void reverse(std::string_view data, size_t width, const Alloc &alloc) {
     }
 }
 
-int avg(std::string_view data, size_t width) {
+int avg(std::string_view data, size_t width, size_t step, size_t first) {
     check(data, width);
-    if (data.empty()) {
+    if (step < 1) {
+        throw std::invalid_argument("step should be >= 1");
+    }
+    size_t n = data.size() / width;
+    if (first >= n) {
         return 0;
     }
+    // counted so a step near the top of size_t cannot wrap the index
+    size_t count = (n - first - 1) / step + 1;
     double sum = 0;
-    for (size_t i = 0; i < data.size(); i += width) {
-        sum += get(&data[i], width);
+    for (size_t k = 0; k < count; k++) {
+        sum += get(&data[(first + k * step) * width], width);
     }
-    return (int)floor(sum / (double)(data.size() / width));
+    return (int)floor(sum / (double)count);
 }
 
 void bias(std::string_view data, size_t width, int bias, const Alloc &alloc) {
@@ -230,6 +326,14 @@ void bias(std::string_view data, size_t width, int bias, const Alloc &alloc) {
     char *out = alloc(data.size());
     for (size_t i = 0; i < data.size(); i += width) {
         put(out + i, width, (int)((uint32_t)get(&data[i], width) + (uint32_t)bias));
+    }
+}
+
+void bias_pairs(std::string_view data, size_t width, int even, int odd, const Alloc &alloc) {
+    check(data, width, 2);
+    char *out = alloc(data.size());
+    for (size_t i = 0; i < data.size(); i += width) {
+        put(out + i, width, (int)((uint32_t)get(&data[i], width) + (uint32_t)(i / width % 2 ? odd : even)));
     }
 }
 
@@ -245,14 +349,29 @@ void ratecv(std::string_view data, size_t width, size_t channels, int inrate, in
     inrate /= g;
     outrate /= g;
     std::vector<int> prev(channels, 0), cur(channels, 0);
-    std::string out;
     const char *p = data.data();
     size_t len = data.size() / (width * channels);
+    // one frame for the first input and one more each time the rate steps past an input, so the output is sized once
+    uint64_t frames = 0;
+    if (len) {
+        uint64_t q = (len - 1) / inrate;
+        if (q && (uint64_t)outrate > UINT64_MAX / q) {
+            throw std::bad_alloc();
+        }
+        frames = q * outrate + (len - 1) % inrate * (uint64_t)outrate / inrate + 1;
+    }
+    if (frames > SIZE_MAX / (width * channels)) {
+        throw std::bad_alloc();
+    }
+    size_t bytes = (size_t)frames * width * channels;
+    char *out = alloc(bytes), *at = out, *end = out + bytes;
     int d = -outrate;
     for (;;) {
         while (d < 0) {
             if (len == 0) {
-                memcpy(alloc(out.size()), out.data(), out.size());
+                if (at != end) {
+                    throw std::logic_error("resampled length");
+                }
                 return;
             }
             for (size_t c = 0; c < channels; c++) {
@@ -266,8 +385,10 @@ void ratecv(std::string_view data, size_t width, size_t channels, int inrate, in
         while (d >= 0) {
             for (size_t c = 0; c < channels; c++) {
                 int v = (int)(((double)prev[c] * (double)d + (double)cur[c] * (double)(outrate - d)) / (double)outrate);
-                out.resize(out.size() + width);
-                put32(&out[out.size() - width], width, v);
+                if (at < end) {
+                    put32(at, width, v);
+                }
+                at += width;
             }
             d -= inrate;
         }

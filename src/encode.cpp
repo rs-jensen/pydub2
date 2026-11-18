@@ -4,6 +4,14 @@
 #include <new>
 #include <stdexcept>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#endif
+
 #include <FLAC/stream_encoder.h>
 #include <vorbis/vorbisenc.h>
 #include <opusenc.h>
@@ -30,14 +38,14 @@ static int32_t sample(const Audio &a, size_t i) {
     return s;
 }
 
-static std::vector<float> floats(const Audio &a) {
-    size_t n = a.data.size() / a.width;
+// frames first to first + n as floats in wav order, a piece at a time so the whole file is never held as floats
+static void floats(const Audio &a, size_t first, size_t n, std::vector<float> &out) {
     float scale = 1.0f / (float)(1u << (a.width * 8 - 1));
-    std::vector<float> out(n);
-    for (size_t i = 0; i < n; i++) {
-        out[i] = (float)sample(a, i) * scale;
+    size_t from = first * a.channels;
+    out.resize(n * a.channels);
+    for (size_t i = 0; i < out.size(); i++) {
+        out[i] = (float)sample(a, from + i) * scale;
     }
-    return out;
 }
 
 // the wav order of 3 to 8 channels is not the order vorbis and opus expect
@@ -108,23 +116,94 @@ static void wav(const Audio &a, const Alloc &alloc) {
     }
 }
 
+// pages straight from the system, malloc can keep a freed block and the peak would not go down as they are copied out
+static char *map(size_t n) {
+#ifdef _WIN32
+    void *p = VirtualAlloc(nullptr, n, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (!p) {
+        throw std::bad_alloc();
+    }
+#else
+    void *p = mmap(nullptr, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        throw std::bad_alloc();
+    }
+#endif
+    return (char *)p;
+}
+
+static void unmap(char *p, size_t n) {
+#ifdef _WIN32
+    (void)n;
+    VirtualFree(p, 0, MEM_RELEASE);
+#else
+    munmap(p, n);
+#endif
+}
+
+// the encoded file in blocks, a string that grows is copied over and over and then once more into the bytes python gets
 struct Sink {
-    std::string out;
-    size_t pos = 0;
+    static constexpr size_t block = 1 << 20;
+    std::vector<char *> blocks;
+    size_t pos = 0, size = 0;
+
+    Sink() = default;
+    Sink(const Sink &) = delete;
+    ~Sink() {
+        for (char *b : blocks) {
+            if (b) {
+                unmap(b, block);
+            }
+        }
+    }
+
+    void write(const char *buf, size_t len) {
+        while (blocks.size() * block < pos + len) {
+            blocks.reserve(blocks.size() + 1);
+            blocks.push_back(map(block));
+        }
+        for (size_t done = 0; done < len;) {
+            size_t at = (pos + done) % block, n = std::min(len - done, block - at);
+            memcpy(blocks[(pos + done) / block] + at, buf + done, n);
+            done += n;
+        }
+        pos += len;
+        size = std::max(size, pos);
+    }
+
+    // bytes from to to, each block is let go once it has been copied
+    char *drain(char *out, size_t from, size_t to) {
+        while (from < to) {
+            size_t at = from % block, n = std::min(to - from, block - at);
+            char *&b = blocks[from / block];
+            memcpy(out, b + at, n);
+            out += n;
+            from += n;
+            if (from % block == 0) {
+                unmap(b, block);
+                b = nullptr;
+            }
+        }
+        return out;
+    }
+
+    // the same, one new piece at most a block long for each step, so the file is never held whole twice
+    void pieces(const Alloc &piece, size_t from, size_t to) {
+        while (from < to) {
+            size_t n = std::min(to - from, block - from % block);
+            drain(piece(n), from, from + n);
+            from += n;
+        }
+    }
 };
 
 static FLAC__StreamEncoderWriteStatus flac_write(const FLAC__StreamEncoder *, const FLAC__byte buf[], size_t len,
                                                  uint32_t, uint32_t, void *user) {
-    Sink *s = (Sink *)user;
     try {
-        if (s->pos + len > s->out.size()) {
-            s->out.resize(s->pos + len);
-        }
+        ((Sink *)user)->write((const char *)buf, len);
     } catch (...) {
         return FLAC__STREAM_ENCODER_WRITE_STATUS_FATAL_ERROR;
     }
-    memcpy(&s->out[s->pos], buf, len);
-    s->pos += len;
     return FLAC__STREAM_ENCODER_WRITE_STATUS_OK;
 }
 
@@ -138,7 +217,7 @@ static FLAC__StreamEncoderTellStatus flac_tell(const FLAC__StreamEncoder *, FLAC
     return FLAC__STREAM_ENCODER_TELL_STATUS_OK;
 }
 
-static std::string flac(const Audio &a, const Tags &tags, const Cancel &cancel) {
+static void flac(const Audio &a, const Tags &tags, const Cancel &cancel, const Alloc &alloc, const Alloc &piece) {
     if (a.channels > 8) {
         throw std::runtime_error("cant encode this");
     }
@@ -152,6 +231,27 @@ static std::string flac(const Audio &a, const Tags &tags, const Cancel &cancel) 
         if (b <= (uint64_t)a.rate * 105 / 1000) {
             block = b;
         }
+    }
+    // a file of the samples as they are, a header on each block and the stream info, and the comment block that is put in
+    std::string comment;
+    if (!tags.empty()) {
+        // not through libFLAC, its metadata calls drop keys and values ffmpeg writes as they are
+        std::string c;
+        put32(c, strlen(FLAC__VENDOR_STRING));
+        c += FLAC__VENDOR_STRING;
+        put32(c, tags.size());
+        for (auto &t : tags) {
+            put32(c, t.first.size() + 1 + t.second.size());
+            c += t.first + "=" + t.second;
+        }
+        if (c.size() >= 1 << 24) {
+            throw std::runtime_error("cant encode this");
+        }
+        comment = "\x84";
+        comment += (char)(c.size() >> 16);
+        comment += (char)(c.size() >> 8);
+        comment += (char)c.size();
+        comment += c;
     }
     std::vector<FLAC__int32> buf(block * a.channels);
     FLAC__StreamEncoder *enc = FLAC__stream_encoder_new();
@@ -182,28 +282,31 @@ static std::string flac(const Audio &a, const Tags &tags, const Cancel &cancel) 
     if (!ok) {
         throw std::runtime_error("cant encode this");
     }
+    size_t at = s.size, old = 0;
     if (!tags.empty()) {
-        // not through libFLAC, its metadata calls drop keys and values ffmpeg writes as they are
-        std::string c;
-        put32(c, strlen(FLAC__VENDOR_STRING));
-        c += FLAC__VENDOR_STRING;
-        put32(c, tags.size());
-        for (auto &t : tags) {
-            put32(c, t.first.size() + 1 + t.second.size());
-            c += t.first + "=" + t.second;
-        }
-        if (c.size() >= 1 << 24) {
+        // libflac wrote its own comment block after the stream info, ours takes its place
+        if (s.size < 46) {
             throw std::runtime_error("cant encode this");
         }
-        std::string head = "\x84";
-        head += (char)(c.size() >> 16);
-        head += (char)(c.size() >> 8);
-        head += (char)c.size();
-        // libflac wrote its own comment block after the stream info, ours takes its place
-        size_t old = 4 + ((uint8_t)s.out[43] << 16 | (uint8_t)s.out[44] << 8 | (uint8_t)s.out[45]);
-        s.out.replace(42, old, head + c);
+        const char *b = s.blocks[0];
+        at = 42;
+        old = 4 + ((uint8_t)b[43] << 16 | (uint8_t)b[44] << 8 | (uint8_t)b[45]);
+        if (s.size < at + old) {
+            throw std::runtime_error("cant encode this");
+        }
     }
-    return s.out;
+    if (piece) {
+        s.pieces(piece, 0, at);
+        if (!comment.empty()) {
+            memcpy(piece(comment.size()), comment.data(), comment.size());
+        }
+        s.pieces(piece, at + old, s.size);
+        return;
+    }
+    char *out = alloc(s.size - old + comment.size());
+    out = s.drain(out, 0, at);
+    memcpy(out, comment.data(), comment.size());
+    s.drain(out + comment.size(), at + old, s.size);
 }
 
 static void pages(ogg_stream_state *os, std::string &out, bool flush) {
@@ -227,8 +330,6 @@ static void blocks(vorbis_dsp_state *vd, vorbis_block *vb, ogg_stream_state *os,
 }
 
 static std::string ogg(const Audio &a, int bitrate, const Tags &tags, const Cancel &cancel) {
-    std::vector<float> pcm = floats(a);
-    vorbis_order(pcm, a.channels);
     vorbis_info vi;
     vorbis_info_init(&vi);
     // q 3 like ffmpeg when no bitrate is given, and with a bitrate ffmpeg turns the slow rate management off
@@ -267,14 +368,17 @@ static std::string ogg(const Audio &a, int bitrate, const Tags &tags, const Canc
         ogg_stream_packetin(&os, &h3);
         pages(&os, out, true);
 
-        size_t frames = pcm.size() / a.channels;
+        size_t frames = a.data.size() / a.width / a.channels;
+        std::vector<float> pcm;
         for (size_t f = 0; f < frames; f += 4096) {
             cancel();
             size_t n = std::min(frames - f, (size_t)4096);
+            floats(a, f, n, pcm);
+            vorbis_order(pcm, a.channels);
             float **buf = vorbis_analysis_buffer(&vd, (int)n);
             for (size_t i = 0; i < n; i++) {
                 for (size_t c = 0; c < a.channels; c++) {
-                    buf[c][i] = pcm[(f + i) * a.channels + c];
+                    buf[c][i] = pcm[i * a.channels + c];
                 }
             }
             vorbis_analysis_wrote(&vd, (int)n);
@@ -313,8 +417,6 @@ static int opus_close(void *) {
 
 static std::string opus(const Audio &a, int bitrate, const Tags &tags, const Cancel &cancel) {
     std::string out;
-    std::vector<float> pcm = floats(a);
-    vorbis_order(pcm, a.channels);
     OpusEncCallbacks cb = {opus_write, opus_close};
     OggOpusComments *com = ope_comments_create();
     for (auto &t : tags) {
@@ -342,11 +444,15 @@ static std::string opus(const Audio &a, int bitrate, const Tags &tags, const Can
                                                                             : OPUS_BANDWIDTH_FULLBAND;
     err = err || ope_encoder_ctl(enc, OPUS_SET_MAX_BANDWIDTH(band));
     // it takes the frame count as an int
-    size_t frames = pcm.size() / a.channels, step = 1 << 16;
+    size_t frames = a.data.size() / a.width / a.channels, step = 1 << 16;
     try {
+        std::vector<float> pcm;
         for (size_t f = 0; !err && f < frames; f += step) {
             cancel();
-            err = ope_encoder_write_float(enc, pcm.data() + f * a.channels, (int)std::min(frames - f, step));
+            size_t n = std::min(frames - f, step);
+            floats(a, f, n, pcm);
+            vorbis_order(pcm, a.channels);
+            err = ope_encoder_write_float(enc, pcm.data(), (int)n);
         }
     } catch (...) {
         ope_encoder_destroy(enc);
@@ -367,7 +473,7 @@ static void copy(const std::string &s, const Alloc &alloc) {
 }
 
 void encode(const Audio &a, const std::string &format, int bitrate, const Tags &tags, const Cancel &cancel,
-            const Alloc &alloc) {
+            const Alloc &alloc, const Alloc &piece) {
     if (a.width < 1 || a.width > 4) {
         throw std::invalid_argument("bad sample width");
     }
@@ -375,7 +481,7 @@ void encode(const Audio &a, const std::string &format, int bitrate, const Tags &
         return wav(a, alloc);
     }
     if (format == "flac") {
-        return copy(flac(a, tags, cancel), alloc);
+        return flac(a, tags, cancel, alloc, piece);
     }
     if (format == "ogg") {
         return copy(ogg(a, bitrate, tags, cancel), alloc);
