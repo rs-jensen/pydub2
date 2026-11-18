@@ -1,4 +1,6 @@
 import functools
+import os
+import re
 import struct
 import threading
 
@@ -41,10 +43,28 @@ def available():
     return lib() is not None
 
 
+# the suffixes of ffmpeg's number parser, as powers of ten
+UNITS = dict(zip("yzafpnumcdhkKMGTPEZY", (-24, -21, -18, -15, -12, -9, -6, -3, -2, -1, 2, 3, 3, 6, 9, 12, 15, 18, 21, 24)))
+NUMBER = re.compile(r"([+-]*)(0[xX][0-9a-fA-F]+|\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?)"
+                    r"(?:([yzafpnumcdhkKMGTPEZY])(i)?)?(B)?", re.ASCII)
+
+
 def rate_of(text):
-    text = str(text).strip().lower()
-    unit = {"k": 1000, "m": 1000000}.get(text[-1])
-    return int(float(text[:-1]) * unit) if unit else int(float(text))
+    """A number like ffmpeg reads an int option, from 0 to 2**63. Raises ValueError for the rest, also what only its expressions give."""
+    if isinstance(text, bytes):
+        text = os.fsdecode(text)
+    m = NUMBER.fullmatch(re.sub("[ \t\n\v\f\r]", "", str(text)))
+    if not m or m[4] and UNITS[m[3]] < 3:
+        raise ValueError("bad number %r" % (text,))
+    num = int(m[2], 16) if m[2][:2] in ("0x", "0X") else float(m[2])
+    if m[3]:
+        num *= 2.0 ** (10 * UNITS[m[3]] // 3) if m[4] else float("1e%d" % UNITS[m[3]])
+    num *= 8 if m[5] else 1
+    if m[1].count("-") % 2:
+        num = -num
+    if not 0 <= num <= 2.0 ** 63:
+        raise ValueError("bitrate out of range %r" % (text,))
+    return round(num)
 
 
 def info_frame(rate, channels, frames, music, delay, padding):
@@ -81,7 +101,7 @@ def encode(data, rate, channels, width, bitrate=None, tags=None, id3v2_version="
                 out_channels = int(v)
             else:
                 return None
-        if bitrate:
+        if bitrate is not None:
             rate_of(bitrate)
     except (ValueError, IndexError, OverflowError):
         return None
@@ -121,7 +141,7 @@ def encode(data, rate, channels, width, bitrate=None, tags=None, id3v2_version="
             lame.lame_set_VBR(gfp, 4)
             lame.lame_set_VBR_quality(gfp, ctypes.c_float(quality))
         elif bitrate:
-            lame.lame_set_brate(gfp, rate_of(bitrate) // 1000)
+            lame.lame_set_brate(gfp, min(rate_of(bitrate) // 1000, 2 ** 31 - 1))
         lame.lame_set_write_id3tag_automatic(gfp, 0)
         if tags:
             lame.id3tag_init(gfp)
