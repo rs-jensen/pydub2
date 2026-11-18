@@ -1300,7 +1300,8 @@ class AudioSegment(object):
         if frame_rate == self.frame_rate:
             return self
 
-        _c_int(frame_rate)
+        if self._data:
+            _c_int(frame_rate)
         if self._data and resample_quality == "high":
             converted = _pydub2.resample(self._data, self.frame_rate, self.channels,
                                          self.sample_width, frame_rate)

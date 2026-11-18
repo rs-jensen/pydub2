@@ -275,3 +275,8 @@ def test_stream_start_and_duration_just_under_the_limit():
     wav, pcm = wav_bytes()
     assert list(pydub2.AudioSegment.stream(io.BytesIO(wav), start_second=1e11)) == []
     assert [len(c.raw_data) for c in pydub2.AudioSegment.stream(io.BytesIO(wav), duration=1e11)] == [1024]
+
+
+def test_empty_segment_takes_a_huge_rate():
+    seg = pydub2.AudioSegment.empty().set_frame_rate(2 ** 40)
+    assert (seg.frame_rate, len(seg)) == (2 ** 40, 0)
