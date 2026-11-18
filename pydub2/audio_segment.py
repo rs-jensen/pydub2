@@ -1346,8 +1346,10 @@ class AudioSegment(object):
         if self.channels == 1:
             return self._spawn(data=remove_data_dc(self._data, offset))
 
-        left_channel = _pydub2.tomono(self._data, self.sample_width, 1, 0)
-        right_channel = _pydub2.tomono(self._data, self.sample_width, 0, 1)
+        if len(self._data) % (self.sample_width * 2):
+            raise ValueError("not a whole number of samples")
+        left_channel = _pydub2.channel(self._data, self.sample_width, 2, 0)
+        right_channel = _pydub2.channel(self._data, self.sample_width, 2, 1)
 
         if not channel or channel == 1:
             left_channel = remove_data_dc(left_channel, offset)
@@ -1355,11 +1357,8 @@ class AudioSegment(object):
         if not channel or channel == 2:
             right_channel = remove_data_dc(right_channel, offset)
 
-        left_channel = _pydub2.tostereo(left_channel, self.sample_width, 1, 0)
-        right_channel = _pydub2.tostereo(right_channel, self.sample_width, 0, 1)
-
-        return self._spawn(data=_pydub2.add(left_channel, right_channel,
-                                            self.sample_width))
+        return self._spawn(data=_pydub2.interleave([left_channel, right_channel], self.sample_width,
+                                                   len(left_channel) // self.sample_width))
 
     def apply_gain(self, volume_change):
         return self._spawn(data=_pydub2.mul(self._data, self.sample_width,

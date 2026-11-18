@@ -74,3 +74,8 @@ def test_24_bit_data_is_widened_once():
 def test_speedup_lets_go_of_each_chunk_once_it_is_trimmed():
     code = "from pydub2.effects import speedup\nspeedup(seg, 1.5)"
     assert peak_x(code, STEREO % ("bytes(range(256)) * %d" % (2 * PCM // 256)), 2 * PCM) < 3.0
+
+
+# 4.0 before and 3.0 after: the audio, the two channels and the result, there were two more copies of the whole audio
+def test_remove_dc_offset_makes_no_stereo_copy_per_channel():
+    assert peak_x("seg.remove_dc_offset()") < 3.5
