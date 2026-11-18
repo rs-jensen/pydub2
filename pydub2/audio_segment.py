@@ -311,6 +311,17 @@ def _pcm_wav(data):
     return h, w
 
 
+def _float_wav(head):
+    try:
+        fmt = [x for x in extract_wav_headers(head) if x.id == b"fmt "][0]
+        tag = struct.unpack_from("<H", head, fmt.position + 8)[0]
+        if tag == 0xFFFE:
+            tag = struct.unpack_from("<H", head, fmt.position + 32)[0]
+    except (CouldntDecodeError, struct.error, IndexError):
+        return False
+    return tag == 3
+
+
 def _own_wav(head, flen, read_at):
     # pydub cuts at the stated data size and keeps a cut last frame, the decoder reads like ffmpeg
     h = extract_wav_headers(head)
@@ -383,7 +394,13 @@ def _span(d, wav, start_second, duration):
 
 
 def _to_16bit(data, width, rounding):
-    # what ffmpeg makes of 8 and 32 bit samples, a float source is rounded and an integer one is cut
+    # what ffmpeg makes of 8, 32 and 64 bit samples, a float source is rounded and an integer one is cut
+    if width == 8:
+        # the high 32 bits give the same 16 bit sample, cut or rounded
+        high = bytearray(len(data) // 2)
+        for i in range(4):
+            high[i::4] = data[4 + i::8]
+        data, width = bytes(high), 4
     if width == 4 and rounding:
         half = (0x8000).to_bytes(4, "little") * (1 << 18)
         step = len(half)
@@ -922,7 +939,7 @@ class AudioSegment(object):
         head = file.read(65536) if data is None else data[:65536]
         own = wav and _pydub_wav(head)
         # the native decoders give 32 bit for what ffmpeg converts to 16 bit, rounded from float and cut from integers
-        narrow = None if not tmp or own else "round" if sniff(head) in ("ogg", "opus") else "cut"
+        narrow = None if not tmp or own else "round" if sniff(head) in ("ogg", "opus") or _float_wav(head) else "cut"
         if close_file:
             file.close()
         # ffmpeg cuts vorbis by packet times that drift from the sample count, only ffmpeg lands on the same sample

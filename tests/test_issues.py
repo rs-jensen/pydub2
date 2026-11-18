@@ -584,6 +584,43 @@ def test_temporary_files_give_16_bit_without_ffmpeg(tmp_path, monkeypatch, fmt, 
     assert (new.sample_width, len(new.raw_data)) == (2, len(old.raw_data))
 
 
+def float_wav(path, x, channels, rate=8000):
+    width = x.dtype.itemsize
+    fmt = struct.pack("<HHIIHH", 3, channels, rate, rate * channels * width, channels * width, width * 8)
+    data = x.astype("<f%d" % width).tobytes()
+    body = b"WAVEfmt " + struct.pack("<I", 16) + fmt + b"data" + struct.pack("<I", len(data)) + data
+    path.write_bytes(b"RIFF" + struct.pack("<I", len(body)) + body)
+
+
+@pytest.mark.parametrize("width", [4, 8])
+@pytest.mark.parametrize("channels", [1, 2, 3])
+def test_temporary_files_round_a_float_wav_to_16_bit(tmp_path, monkeypatch, width, channels):
+    monkeypatch.setattr(pydub2.AudioSegment, "converter", str(tmp_path / "no-ffmpeg"))
+    # fractions of a step, clipping at both ends, and no value halfway between two steps
+    steps = np.array([0, 0.25, 0.75, -0.25, -0.75, 100.3, -100.3, 32767.9, -32768.9, 40000.1, -40000.1])
+    x = np.tile(steps / 32768, channels).astype("<f%d" % width)
+    float_wav(tmp_path / "a.wav", x, channels)
+    seg = pydub2.AudioSegment.from_file_using_temporary_files(str(tmp_path / "a.wav"))
+    want = np.clip(np.rint(x.astype(np.float64) * 32768), -32768, 32767)
+    assert (seg.sample_width, seg.channels) == (2, channels)
+    assert np.frombuffer(seg.raw_data, "<i2").tolist() == want.tolist()
+
+
+@needs_ff
+@pytest.mark.parametrize("width", [4, 8])
+@pytest.mark.parametrize("channels", [1, 2, 3])
+def test_temporary_files_give_16_bit_for_a_float_wav_like_pydub(tmp_path, width, channels):
+    x = np.random.default_rng(width + channels).uniform(-1.1, 1.1, 800 * channels).astype("<f%d" % width)
+    # a value halfway between two steps is rounded to even by ffmpeg and up here, so none is left in
+    x[np.abs(x.astype(np.float64) * 32768 % 1 - 0.5) < 1e-9] = 0
+    float_wav(tmp_path / "a.wav", x, channels)
+    new = pydub2.AudioSegment.from_file_using_temporary_files(str(tmp_path / "a.wav"))
+    old = pydub.AudioSegment.from_file_using_temporary_files(str(tmp_path / "a.wav"))
+    assert old.sample_width == 2
+    assert (new.sample_width, new.channels, new.frame_rate) == (2, channels, 8000)
+    assert new.raw_data == old.raw_data
+
+
 @needs_ff
 def test_temporary_files_keep_the_width_of_a_wav_and_raw_data(tmp_path):
     seg = pydub2.AudioSegment(**tone32(8000, 1))
