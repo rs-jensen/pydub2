@@ -29,7 +29,7 @@ def test_bad_bitrate_mp3(bitrate):
 
 
 class Plain(float):
-    # ffmpeg does not read 5e-05, so give pydub the same number without an exponent
+    # ffmpeg does not read 5e-05, this is the same number written without an exponent
     def __str__(self):
         return format(self, "f")
 
@@ -44,6 +44,10 @@ def test_stream_small_floats(tmp_path, kind, value):
     want = pydub.AudioSegment.from_file(str(tmp_path / "a.flac"), **{kind: Plain(value)}).raw_data
     got = b"".join(c.raw_data for c in pydub2.AudioSegment.stream(str(tmp_path / "a.flac"), **{kind: value}))
     assert got == want
+    if "e" in str(value):
+        # pydub passes 1e-05 on to ffmpeg as it is
+        with pytest.raises(pydub.exceptions.CouldntDecodeError):
+            pydub.AudioSegment.from_file(str(tmp_path / "a.flac"), **{kind: value})
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs a shell script as converter")

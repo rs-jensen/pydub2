@@ -129,6 +129,7 @@ These calls hang or crash in pydub and work in pydub2:
 - `mediainfo` of a file object, files whose name starts with `-`, and `format="wma"`.
 - `eq` and the other `scipy_effects` channel modes.
 - `stereo_to_ms` and `ms_to_stereo` in `pydub2.utils` (they raise `NameError` in pydub).
+- `start_second` or `duration` under 0.0001, which Python writes as `1e-05`: pydub passes the text to ffmpeg, which fails with `CouldntDecodeError`.
 - `strip_silence` and `append` with a crossfade that covers no frame (a few Hz, or under 1 ms) return the audio. pydub raises `ZeroDivisionError` in `fade`. A fade over zero frames does nothing here.
 
 ## pydub quirks kept on purpose
