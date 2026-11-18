@@ -34,14 +34,15 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - mp3 with junk in front of the first frame or the id3 tag (zeros, a stray byte, a tag with a wrong size, a second tag) is decoded without ffmpeg. It finds its first frame like ffmpeg does: two headers in a row within 64k. A file that starts with junk also needs four frames in a row that start within the first 1 MiB.
 - mp3 inside mpeg ts, mpeg ps, mp4, matroska, avi, flv, zip, tar and the like goes to ffmpeg. So does a junk start whose frames are cut up more than twice.
 - Past 64k of junk, or with a long run of repeated sync words in it, the result can differ by a frame or a few samples.
-- Still decoded differently: mp3PRO, a last frame cut inside its first 36 bytes, frames whose granules claim more bits than the frame has, and a short block followed by a normal one (after a dropped frame). A seek into such a damaged stream can differ from the full read for a frame or two after the seek point.
+- Still decoded differently: mp3PRO and a last frame cut inside its first 36 bytes. Frames that decode junk (damaged side info, damaged main data, or a bit reservoir from the wrong frame) follow ffmpeg's rules, but not its fixed point and float arithmetic. Of 1632 damaged test files (junk of 1 byte to 64 kB, fake sync words, cut, doubled and missing frames, each header bit flipped, random main data) 39 differ by more than 1: 34 by 2 to 9 in at most 9 samples, the worst by 296 in one sample of a frame far past full scale. A seek into such a damaged stream can differ from the full read for a frame or two after the seek point.
 - A flac frame with a bad crc is kept as silence of the same length. ffmpeg keeps its damaged samples, which can be loud noise. The length is the same and that one frame differs. ffmpeg 6 drops that frame and the two after it instead.
 - A flac frame with a damaged or missing header is kept as silence too. ffmpeg drops it, so the file is one frame longer than with ffmpeg.
 - A flac frame that dr_flac cannot decode is dropped like ffmpeg does, and decoding goes on after it. The first frame, the last frame and more than 8 damaged frames in a row are dropped, where ffmpeg may keep them. A seek into a silent frame lands on the next good one.
 - Damaged ogg vorbis keeps the audio of a page with a bad checksum, where ffmpeg drops the page (about a second).
 - opus with a bad page makes the built in decoder give up, so `from_file` uses ffmpeg.
 - A file that wav, flac, mp3, ogg or opus reading cannot decode (damaged or chained vorbis) goes to ffmpeg. It raises `CouldntDecodeError` when ffmpeg is missing.
-- mp3 in free format, and an mp3 whose sample rate changes inside the file, go to ffmpeg. ffmpeg cannot read free format either, so such a file raises `CouldntDecodeError` with or without ffmpeg, like pydub. An mp3 with a single audio frame raises like pydub too.
+- mp3 in free format goes to ffmpeg. ffmpeg cannot read free format either, so such a file raises `CouldntDecodeError` with or without ffmpeg, like pydub. An mp3 with a single audio frame raises like pydub too.
+- An mp3 whose sample rate, MPEG version or layer changes inside the file (two files joined, or a frame header damaged into another rate) goes to ffmpeg, which resamples to the rate of the first frame. Without ffmpeg it raises `CouldntDecodeError`. A change between mono and stereo is decoded here, see above.
 
 ### Stream info and tags without ffprobe
 

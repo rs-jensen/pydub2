@@ -66,6 +66,11 @@ What changed in each release.
 - `AudioSegment.from_file_using_temporary_files` gives 16 bit audio for ogg, opus, flac of more than 16 bit and the other formats that go through ffmpeg, as pydub does, where it gave 32 bit. A wav and raw data keep their width.
 - `AudioSegment.stream` reads a named pipe (fifo) once like `from_file` does, where it opened it a second time and waited for ever or said it could not read the file.
 - `AudioSegment(data=file)` with a file whose `read()` gives `None` raises `TypeError` as pydub does when `max_file_size` is set, where it raised `CouldntDecodeError`.
+- mp3 from `lame -p` (with crc) and mp3 with a VBRI frame decode to the same length as with ffmpeg. The Info or VBRI frame was decoded as a frame of silence and the encoder delay was not skipped.
+- mp3 with frames missing or cut short in the middle, or a frame too short for its own data, decodes the frames after it like ffmpeg. They were off by up to the full scale for a frame.
+- mp3 with more frames than its Info tag counts, from a doubled frame or a damaged header, has the length ffmpeg gives. ffmpeg drops the encoder padding where the tag says the audio ends, also in the middle of the file.
+- mp3 frames with a mode extension outside joint stereo (mono, plain stereo) decode like ffmpeg, which applies intensity stereo only in joint stereo and lowers the gain for the mid side bit in any mode.
+- Garbage in damaged mp3 frames decodes like ffmpeg: a granule whose bit reservoir is missing is silent, values that overflow ffmpeg's fixed point unscale are 0, the last values of a granule are not read past 572, and on x86 a sample far past full scale comes out as -32768. Such frames were off by up to the full scale.
 
 ### Security
 
