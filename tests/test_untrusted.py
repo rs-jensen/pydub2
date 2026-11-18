@@ -861,7 +861,8 @@ def test_timeout_stops_what_a_wrapper_started(tmp_path, monkeypatch):
         end = time.time() + 5
         while alive(pid, "sleep") and time.time() < end:
             time.sleep(0.05)
-        assert not alive(pid, "sleep")
+        ps = subprocess.run(["ps", "-o", "pid,ppid,pgid,stat,args", "-p", str(pid)], capture_output=True, text=True)
+        assert not alive(pid, "sleep"), ps.stdout
     finally:
         if alive(pid, "sleep"):
             os.kill(pid, signal.SIGKILL)
