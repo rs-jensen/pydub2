@@ -210,3 +210,27 @@ def test_error_says_what_to_install(monkeypatch):
     monkeypatch.setattr(_ffmpeg, "find", lambda converter: None)
     with pytest.raises(FileNotFoundError, match="pip install pydub2-mp3"):
         AudioSegment.silent(100).export(format="mp3")
+
+
+def mp3_tags(tags):
+    # version 3 keeps the export in the built in writer even when ffmpeg is there
+    return chirp(secs=0.2).export(format="mp3", tags=tags, id3v2_version="3").read()
+
+
+@has_mp3
+@pytest.mark.parametrize("tags", [{"a": "b\0c"}, {"a\0": "b"}, {"title": "a\0"}])
+def test_mp3_tag_with_a_null_byte(tags):
+    with pytest.raises(ValueError):
+        mp3_tags(tags)
+
+
+@has_mp3
+@pytest.mark.parametrize("tags", [{"title": "a\udc80b"}, {"x": "é\udc80"}, {5: "x"}, {None: "x"}])
+def test_mp3_tag_with_odd_text_or_key(tags):
+    assert mp3_tags(tags)[:3] == b"ID3"
+
+
+@has_mp3
+def test_mp3_tag_with_a_lone_surrogate_that_is_not_a_byte():
+    with pytest.raises(UnicodeEncodeError):
+        mp3_tags({"title": "a\ud800"})

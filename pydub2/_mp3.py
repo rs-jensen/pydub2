@@ -128,8 +128,13 @@ def encode(data, rate, channels, width, bitrate=None, tags=None, id3v2_version="
             lame.id3tag_add_v2(gfp)
             lame.id3tag_v2_only(gfp)
             for k, v in tags.items():
+                k = str(k)
+                if "\0" in k or "\0" in str(v):
+                    raise ValueError("embedded null byte")
                 frame = FRAMES.get(k.lower(), "TXXX")
                 text = str(v) if frame != "TXXX" else "%s=%s" % (k, v)
+                # a byte that came in as a lone surrogate, like Python does for a file name
+                text = text.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
                 if text.isascii():
                     lame.id3tag_set_textinfo_latin1(gfp, frame.encode(), text.encode())
                 else:

@@ -79,6 +79,8 @@ def _eq(seg, focus_freq, bandwidth=100, mode="peak", gain_dB=0, order=2):
     filt_mode = ["peak", "low_shelf", "high_shelf"]
     if mode not in filt_mode:
         raise ValueError("Incorrect Mode Selection")
+    if gain_dB != gain_dB:
+        raise ValueError("gain_dB is not a number")
         
     if gain_dB >= 0:
         if mode == "peak":

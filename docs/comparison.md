@@ -169,7 +169,7 @@ Writing mp3 needs the `pydub2-mp3` package, or ffmpeg.
 
 There is no pitch shift and no tempo change that keeps the pitch. `speedup` is pydub's algorithm. `set_frame_rate` changes both speed and pitch.
 
-`play()` is pydub's. It waits until the audio is done and needs simpleaudio, PyAudio or ffplay. You cannot stop it from another thread.
+`play()` is pydub's. It waits until the audio is done and needs simpleaudio, PyAudio or ffplay. You cannot stop it from another thread. `playback.play_async` plays in the background and returns a handle with `stop()`.
 
 For formats pydub2 does not read itself, `mediainfo` needs ffprobe to give the full stream info. With only ffmpeg you get the codec and sample size. Tags of wav, flac, ogg, opus and mp3 files work without ffprobe.
 

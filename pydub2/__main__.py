@@ -409,11 +409,12 @@ def print_file(r):
 
 def dotted(x):
     # the name an expression spells, like pydub.utils.mediainfo
+    parts = []
+    while isinstance(x, ast.Attribute):
+        parts.append(x.attr)
+        x = x.value
     if isinstance(x, ast.Name):
-        return x.id
-    if isinstance(x, ast.Attribute):
-        left = dotted(x.value)
-        return left + "." + x.attr if left else None
+        return ".".join([x.id] + parts[::-1])
 
 
 def arg(call, pos, name):
@@ -461,7 +462,7 @@ def look(tree):
                     add(node, "note", "pydub2 asks %s only for mediainfo and in strict mode, the patch works on pydub2.utils" % t.attr)
         elif isinstance(node, ast.ExceptHandler) and node.type is not None:
             for t in ast.walk(node.type):
-                if dotted(t) in ("audioop.error", "wave.Error"):
+                if isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name) and dotted(t) in ("audioop.error", "wave.Error"):
                     add(node, "change", "pydub2 raises ValueError where pydub raised " + dotted(t))
         elif isinstance(node, ast.Call):
             name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")

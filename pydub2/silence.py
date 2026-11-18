@@ -57,6 +57,8 @@ def detect_silence(audio_segment, min_silence_len=1000, silence_thresh=-16, seek
             audio_segment, "rms", "max_possible_amplitude", "__getitem__", "__init__", "_spawn"):
         return _detect_silence_slow(audio_segment, min_silence_len, silence_thresh, seek_step)
     whole = int(audio_segment.frame_count()) * audio_segment.frame_width
+    # a step past the last start gives the same ranges and the core takes an int
+    seek_step = min(seek_step, seg_len - min_silence_len + 1)
     return _pydub2.detect_silence(audio_segment.raw_data[:whole], int(rate),
                                   audio_segment.channels, audio_segment.sample_width,
                                   min_silence_len, float(silence_thresh), seek_step)

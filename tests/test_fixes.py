@@ -1,3 +1,4 @@
+import decimal
 import io
 import pathlib
 import shutil
@@ -201,3 +202,102 @@ def test_partial_frame_detect_silence():
 def test_compress_nothing_with_odd_width():
     seg = pydub2.AudioSegment(b"", sample_width=5, frame_rate=8000, channels=1)
     assert seg.compress_dynamic_range().raw_data == b""
+
+
+@pytest.mark.parametrize("step", [2 ** 31, 2 ** 40, 2 ** 63])
+def test_silence_seek_step_past_the_end(step):
+    seg = pydub2.AudioSegment(bytes(2000) + b"\x10\x20" * 500, sample_width=2, frame_rate=8000, channels=1)
+    assert silence.detect_silence(seg, 10, -16, step) == silence.detect_silence(seg, 10, -16, 1000)
+    assert silence.detect_silence(seg, 10, -16, step) == [[0, 10]]
+    assert silence.detect_nonsilent(seg, 10, -16, step) == [[10, len(seg)]]
+
+
+@pytest.mark.parametrize("n", [2 ** 31, 2 ** 63, -2 ** 31 - 1])
+def test_huge_rate_and_width_raise_overflow(n):
+    seg = tone(100)
+    with pytest.raises(OverflowError):
+        seg.set_frame_rate(n)
+    with pytest.raises(OverflowError):
+        seg.set_sample_width(n)
+
+
+def test_eq_with_nan_gain():
+    pytest.importorskip("scipy")
+    from pydub2 import scipy_effects
+    seg = tone(200, channels=2)
+    for mode in ("L+R", "M+S"):
+        with pytest.raises(ValueError):
+            scipy_effects.eq(seg, 1000, 100, mode, "peak", float("nan"))
+
+
+def wav_bytes(before_data=b"", rate=8000, pcm=bytes(range(256)) * 4):
+    fmt = struct.pack("<HHIIHH", 1, 1, rate, rate * 2, 2, 16)
+    body = b"WAVEfmt " + struct.pack("<I", 16) + fmt + before_data + b"data" + struct.pack("<I", len(pcm)) + pcm
+    return b"RIFF" + struct.pack("<I", len(body)) + body, pcm
+
+
+@pytest.mark.parametrize("size", [1, 3, 5])
+def test_wav_chunk_without_pad_byte_with_format(size):
+    wav, pcm = wav_bytes(b"junk" + struct.pack("<I", size) + b"x" * size)
+    seg = pydub2.AudioSegment.from_file(io.BytesIO(wav), format="wav")
+    assert (seg.raw_data, seg.frame_rate) == (pcm, 8000)
+
+
+def test_wav_chunk_without_pad_byte_with_format_and_part():
+    wav, pcm = wav_bytes(b"junk" + struct.pack("<I", 3) + b"xxx", rate=1000)
+    seg = pydub2.AudioSegment.from_file(io.BytesIO(wav), format="wav", start_second=0.25, duration=0.25)
+    assert seg.raw_data == pcm[500:1000]
+
+
+def test_wav_chunk_without_pad_byte_with_limit(monkeypatch):
+    wav, pcm = wav_bytes(b"junk" + struct.pack("<I", 3) + b"xxx")
+    monkeypatch.setattr(pydub2, "max_bytes", 100)
+    with pytest.raises(pydub2.exceptions.CouldntDecodeError):
+        pydub2.AudioSegment.from_file(io.BytesIO(wav), format="wav")
+
+
+@needs_ff
+def test_wav_at_a_rate_the_decoder_refuses_from_ffmpeg():
+    wav, pcm = wav_bytes(rate=1332770)
+    seg = pydub2.AudioSegment.from_file(io.BytesIO(wav))
+    assert (seg.raw_data, seg.frame_rate) == (pcm, 1332770)
+
+
+@pytest.mark.parametrize("kw", [{"start_second": 2 ** 64}, {"start_second": 1e300}, {"duration": 2 ** 64},
+                                 {"duration": 1e300}, {"start_second": 1e12}, {"start_second": -1},
+                                 {"duration": float("nan")}, {"duration": float("inf")}])
+def test_stream_start_and_duration_out_of_range(kw):
+    wav, pcm = wav_bytes()
+    with pytest.raises(ValueError):
+        list(pydub2.AudioSegment.stream(io.BytesIO(wav), **kw))
+
+
+def test_stream_start_and_duration_just_under_the_limit():
+    wav, pcm = wav_bytes()
+    assert list(pydub2.AudioSegment.stream(io.BytesIO(wav), start_second=1e11)) == []
+    assert [len(c.raw_data) for c in pydub2.AudioSegment.stream(io.BytesIO(wav), duration=1e11)] == [1024]
+
+
+def test_empty_segment_takes_a_huge_rate():
+    seg = pydub2.AudioSegment.empty().set_frame_rate(2 ** 40)
+    assert (seg.frame_rate, len(seg)) == (2 ** 40, 0)
+
+
+def test_wav_chunk_without_pad_byte_with_24_bit_limit(monkeypatch):
+    # 24 bit data is 4 bytes a sample once it is read, 24000 bytes become 32000
+    fmt = struct.pack("<HHIIHH", 1, 1, 8000, 24000, 3, 24)
+    body = b"WAVEfmt " + struct.pack("<I", 16) + fmt + b"junk" + struct.pack("<I", 3) + b"xxx"
+    body += b"data" + struct.pack("<I", 24000) + bytes(range(240)) * 100
+    wav = b"RIFF" + struct.pack("<I", len(body)) + body
+    assert len(pydub2.AudioSegment.from_file(io.BytesIO(wav), format="wav").raw_data) == 32000
+    monkeypatch.setattr(pydub2, "max_bytes", 28000)
+    with pytest.raises(pydub2.exceptions.CouldntDecodeError):
+        pydub2.AudioSegment.from_file(io.BytesIO(wav), format="wav")
+
+
+@pytest.mark.parametrize("value", [decimal.Decimal("0.5"), decimal.Decimal("1")])
+def test_stream_start_as_a_decimal(value):
+    wav, pcm = wav_bytes(rate=1000, pcm=bytes(range(256)) * 8)
+    plain = list(pydub2.AudioSegment.stream(io.BytesIO(wav), start_second=float(value)))
+    got = list(pydub2.AudioSegment.stream(io.BytesIO(wav), start_second=value))
+    assert [c.raw_data for c in got] == [c.raw_data for c in plain] != []
