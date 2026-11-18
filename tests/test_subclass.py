@@ -1,5 +1,6 @@
 import array
 import inspect
+import io
 import math
 
 import pytest
@@ -54,6 +55,10 @@ CASES = {
     "speedup": ("effects", lambda m, s: m.effects.speedup(s, 1.5, 50, 10), ("append", "__add__", "_spawn")),
     "normalize": ("effects", lambda m, s: m.effects.normalize(s), ("max", "max_possible_amplitude", "apply_gain")),
     "invert_phase": ("effects", lambda m, s: m.effects.invert_phase(s), ("_spawn",)),
+    "export_wav": ("audio_segment", lambda m, s: s.export(io.BytesIO(), format="wav").read(), ("frame_count",)),
+    "export_flac": ("audio_segment", lambda m, s: bool(s.export(io.BytesIO(), format="flac").read()), ("frame_count",)),
+    "export_mp3": ("audio_segment", lambda m, s: bool(s.export(io.BytesIO(), format="mp3").read()), ("frame_count",)),
+    "export_raw": ("audio_segment", lambda m, s: s.export(io.BytesIO(), format="raw").read(), ("frame_count",)),
 }
 
 

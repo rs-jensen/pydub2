@@ -19,6 +19,11 @@ Things to know:
 - It needs the `.pth` file to be read, so it does not work with `python -S`. With `pip install --user`
   it does not work under `python -I`. Normal installs and venvs are fine.
 - `pip list` and `importlib.metadata.version("pydub")` still report the real pydub if it is installed.
+- Without the real pydub, `importlib.metadata.version("pydub")` raises `PackageNotFoundError` and `pip show pydub` finds nothing.
+- pip does not know that this stands in for pydub. A package that requires pydub makes pip install the real pydub, and `pip check` complains about it while only pydub2-compat is installed.
+- When the real pydub is installed too, `import pydub` still gives pydub2, because the hook runs before the normal lookup. The real pydub is used when pydub2 cannot be imported or `PYDUB2_COMPAT=0` is set.
+- `importlib.util.find_spec("pydub")` imports pydub2 to see that it works.
+- A pickle written by pydub loads as a pydub2 `AudioSegment`. A pickle written by pydub2 names `pydub2` and the real pydub cannot read it.
 - `pydub.pyaudioop` and `pydub.audioop` do not exist and raise ImportError, because pydub2 does not need audioop.
 - `python -m pydub.utils` and the like stop with "No code object available".
 - Do not run tests that compare against pydub with this installed, they would test pydub2 against itself.
