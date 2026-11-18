@@ -118,6 +118,28 @@ def test_mp3_info_frame(tmp_path, tag):
     assert close(*both(save(tmp_path, "info.mp3", bytes(info) + m)), 1) < 0.015
 
 
+# ffmpeg looks for the Info tag where it is without a crc (lame -p puts it there), and drops a VBRI frame too.
+# A tag that counts neither frames nor bytes stays audio, but its delay is still skipped
+def test_mp3_vbr_tags_like_ffmpeg(tmp_path):
+    if X64_FF_ON_ARM:
+        pytest.skip(STEREO)
+    m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "40k", "-ar", "32000", "-write_xing", "0",
+                  "-id3v2_version", "0"), "rb").read()
+    n = len(m) // 180
+
+    def frame(head, body):
+        f = bytearray(180)
+        f[:4] = head
+        f[36:36 + len(body)] = body
+        return bytes(f)
+    lame = b"LAME3.100" + bytes(12) + b"\x24\x01\x20"
+    crc = frame(b"\xff\xfa" + m[2:4], b"Info" + struct.pack(">III", 3, n, len(m) + 180) + lame)
+    vbri = frame(m[:4], b"VBRI" + struct.pack(">HHHII", 1, 1105, 75, len(m) + 180, n))
+    empty = frame(m[:4], b"Info" + bytes(4) + lame)
+    for first in (crc, vbri, empty):
+        assert close(*both(save(tmp_path, "tag.mp3", first + m)), 1) < 0.015
+
+
 def save(tmp_path, name, data):
     path = str(tmp_path / name)
     with open(path, "wb") as f:

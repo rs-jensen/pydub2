@@ -344,37 +344,42 @@ static uint64_t mp3_tag(Input &in, uint64_t at, size_t &skip, size_t &cut, uint6
     }
     size_t n = std::min(mp3_size(f), len);
     bool mono = DRMP3_HDR_IS_MONO(f);
-    size_t side = (f[1] & 8) ? (mono ? 17 : 32) : (mono ? 9 : 17);
-    size_t o = 4 + (f[1] & 1 ? 0 : 2) + side;
-    if (o + 8 > n || (memcmp(f + o, "Xing", 4) && memcmp(f + o, "Info", 4))) {
-        return at;
-    }
-    int flags = f[o + 7];
-    o += 8;
+    // ffmpeg looks for the tag where it is in a frame without a crc
+    size_t o = 4 + ((f[1] & 8) ? (mono ? 17 : 32) : (mono ? 9 : 17));
     auto word = [&](size_t q) { return q + 4 <= n ? be32(f + q) : 0u; };
-    uint64_t size = 0;
-    const size_t sizes[] = {4, 4, 100, 4};
-    for (int i = 0; i < 4; i++) {
-        if (flags >> i & 1) {
-            if (i == 0) {
-                count = word(o);
-            } else if (i == 1) {
-                size = word(o);
+    uint64_t size = 0, frames = 0;
+    if (o + 8 <= n && (!memcmp(f + o, "Xing", 4) || !memcmp(f + o, "Info", 4))) {
+        int flags = f[o + 7];
+        o += 8;
+        const size_t sizes[] = {4, 4, 100, 4};
+        for (int i = 0; i < 4; i++) {
+            if (flags >> i & 1) {
+                if (i == 0) {
+                    count = word(o);
+                } else if (i == 1) {
+                    size = word(o);
+                }
+                o += sizes[i];
             }
-            o += sizes[i];
+        }
+        // a file much bigger than the tag says counts as files glued together, ffmpeg then forgets the frame count
+        uint64_t have = in.len - at;
+        if (size && have > size && have - size > size >> 4) {
+            count = 0;
+        }
+        frames = count;
+        if (o + 24 <= n && (!memcmp(f + o, "LAME", 4) || !memcmp(f + o, "Lavf", 4) || !memcmp(f + o, "Lavc", 4))) {
+            skip = (size_t)((f[o + 21] << 4 | f[o + 22] >> 4) + 529);
+            unsigned pad = (f[o + 22] & 15u) << 8 | f[o + 23];
+            cut = pad > 529 ? pad - 529 : 0;
         }
     }
-    // a file much bigger than the tag says counts as files glued together, ffmpeg then forgets the frame count
-    uint64_t have = in.len - at;
-    if (size && have > size && have - size > size >> 4) {
-        count = 0;
+    if (54 <= n && !memcmp(f + 36, "VBRI", 4) && f[40] == 0 && f[41] == 1) {
+        size = word(46);
+        frames = word(50);
     }
-    if (o + 24 <= n && (!memcmp(f + o, "LAME", 4) || !memcmp(f + o, "Lavf", 4) || !memcmp(f + o, "Lavc", 4))) {
-        skip = (size_t)((f[o + 21] << 4 | f[o + 22] >> 4) + 529);
-        unsigned pad = (f[o + 22] & 15u) << 8 | f[o + 23];
-        cut = pad > 529 ? pad - 529 : 0;
-    }
-    return at + mp3_size(f);
+    // a tag that counts neither frames nor bytes is audio to ffmpeg, its delay still counts
+    return frames || size ? at + mp3_size(f) : at;
 }
 
 static int bits(const uint8_t *o, size_t p, int n) {
