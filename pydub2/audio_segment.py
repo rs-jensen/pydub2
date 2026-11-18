@@ -1076,6 +1076,15 @@ class AudioSegment(object):
 
         int(self.frame_count())  # pydub calls it for the wav header and a subclass can override it
 
+        if codec is not None or parameters is not None or format != "wav":
+            args = [] if parameters is None else list(parameters)
+            if codec is not None:
+                args.append(codec)
+            if bitrate is not None and not isinstance(bitrate, int):
+                args.append(bitrate)
+            for arg in args:
+                os.fsencode(arg)
+
         # a partial last frame is dropped, the encoders take whole frames only
         fw = self.channels * self.sample_width
         pcm = self._data[:len(self._data) // fw * fw]

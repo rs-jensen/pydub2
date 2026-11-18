@@ -138,6 +138,24 @@ def test_cover_errors_like_pydub(kw):
     assert got is not None and got == bad_call("pydub", call)
 
 
+ARGS = [dict(bitrate=1.5), dict(bitrate=["64k"]), dict(codec=5), dict(codec=["x"]), dict(parameters=5),
+        dict(parameters=["-ac", 1]), dict(parameters=[None]), dict(parameters=0)]
+
+
+@pytest.mark.parametrize("kw", ARGS)
+@pytest.mark.parametrize("format", ["mp3", "wav", "flac", "ogg", "opus"])
+def test_export_argument_types_like_pydub(format, kw):
+    def call(AS):
+        AS.silent(100).export(io.BytesIO(), format=format, **kw)
+    assert bad_call("pydub2", call) == bad_call("pydub", call)
+
+
+@pytest.mark.parametrize("kw", ARGS[:2] + ARGS[2:4])
+def test_export_argument_types_raise(kw):
+    with pytest.raises(TypeError):
+        pydub2.AudioSegment.silent(100).export(io.BytesIO(), format="flac", **kw)
+
+
 def test_missing_attribute_like_pydub():
     def call(AS):
         AS.silent(100).nope
