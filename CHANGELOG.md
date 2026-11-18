@@ -72,6 +72,14 @@ What changed in each release.
 - mp3 with more frames than its Info tag counts, from a doubled frame or a damaged header, has the length ffmpeg gives. ffmpeg drops the encoder padding where the tag says the audio ends, also in the middle of the file.
 - mp3 frames with a mode extension outside joint stereo (mono, plain stereo) decode like ffmpeg, which applies intensity stereo only in joint stereo and lowers the gain for the mid side bit in any mode.
 - Garbage in damaged mp3 frames decodes like ffmpeg: a granule whose bit reservoir is missing is silent, values that overflow ffmpeg's fixed point unscale are 0, the last values of a granule are not read past 572, and on x86 a sample far past full scale comes out as -32768. Such frames were off by up to the full scale.
+- `detect_silence`, `detect_nonsilent` and `split_on_silence` with a `seek_step` of 2**31 or more give the ranges pydub gives, where they raised `TypeError`.
+- `set_frame_rate` and `set_sample_width` with an int that does not fit in a C int raise `OverflowError` like pydub, where they raised `TypeError`.
+- `scipy_effects.eq` with a `gain_dB` of `nan` raises `ValueError`. It returned `None`, or raised `AttributeError` in the mid-side modes.
+- `AudioSegment.from_file(..., format="wav")` reads a wav that pydub reads itself and the decoder refuses, like an odd sized chunk without its pad byte, where it raised `CouldntDecodeError`.
+- A file that ffmpeg turns into a wav with a rate the decoder refuses, like 1.3 MHz, loads like in pydub, where `from_file` raised `RuntimeError`.
+- `python -m pydub2 doctor --scan` no longer stops with `RecursionError` on a file with a very long chain of attributes like `a.b.c...`.
+- mp3 tags written by `pydub2_mp3` raise `ValueError` for a null byte, like pydub, where they were cut at it. A lone surrogate like `\udc80` and a key that is not a string work as in pydub, where they raised `UnicodeEncodeError` and `AttributeError`.
+- `AudioSegment.stream` with a `start_second` or `duration` of 1e12 or more raises `ValueError` like a negative or `nan` one, where 2**64 and 1e300 raised `TypeError`.
 
 ### Security
 

@@ -197,6 +197,15 @@ def test_scan(capsys, tmp_path):
     assert json.loads(out)["need_change"] == r["need_change"]
 
 
+def test_scan_long_attribute_chain(tmp_path):
+    chain = "a" + ".b" * 1500
+    (tmp_path / "assign.py").write_text("import pydub\n%s.converter = 1\n" % chain)
+    (tmp_path / "handler.py").write_text("import pydub\ntry:\n    pass\nexcept %s.error:\n    pass\n" % chain)
+    r = scan(str(tmp_path))
+    assert (r["files"], r["files_using_pydub"], r["unreadable"]) == (2, 2, [])
+    assert r["imports"] == 2
+
+
 def test_scan_no_pydub(capsys, tmp_path):
     (tmp_path / "a.py").write_text("from pydub2 import AudioSegment\nAudioSegment.from_file('a.m4a')\n")
     code, out = run(capsys, "--scan", str(tmp_path))

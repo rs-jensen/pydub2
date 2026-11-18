@@ -169,6 +169,12 @@ class ClassPropertyDescriptor(object):
         return self
 
 
+def _c_int(n):
+    # audioop raises this for an int that does not fit, the core would raise TypeError
+    if isinstance(n, int) and not -2 ** 31 <= n < 2 ** 31:
+        raise OverflowError("Python int too large to convert to C int")
+
+
 def classproperty(func):
     if not isinstance(func, (classmethod, staticmethod)):
         func = classmethod(func)
@@ -778,7 +784,14 @@ class AudioSegment(object):
         def decoded(data):
             if pydub2.strict:
                 return cls(data=data)
-            data, frame_rate, channels, sample_width = _pydub2.decode(data)
+            try:
+                data, frame_rate, channels, sample_width = _pydub2.decode(data)
+            except RuntimeError:
+                # a header the decoder refuses, like a rate of a few GHz, that pydub reads
+                try:
+                    return cls(data=data)
+                except struct.error:
+                    raise tagged(CouldntDecodeError("cant read this file"), "wav", "cant_decode")
             return cls(data=data, metadata={
                 'sample_width': sample_width,
                 'frame_rate': frame_rate,
@@ -940,7 +953,16 @@ class AudioSegment(object):
             except _Refused:
                 tried = False
             except RuntimeError:
-                pass
+                if own:
+                    obj = cls._pydub_wav_segment(filename, data, head, lim)
+                    if obj is not None:
+                        try:
+                            if start_second is None and duration is None:
+                                return obj
+                            return obj[None if start_second is None else start_second * 1000:
+                                       None if duration is None else ((start_second or 0) + duration) * 1000]
+                        except Exception:
+                            pass
 
         if tried and _ffmpeg.find(cls.converter) is None and any(is_format(f) for f in ("wav", "flac", "mp3", "ogg", "opus")):
             raise tagged(CouldntDecodeError("cant read this file"), sniff(head), "cant_decode")
@@ -960,6 +982,28 @@ class AudioSegment(object):
             return obj[:duration * 1000]
         else:
             return obj[0:duration * 1000]
+
+    @classmethod
+    def _pydub_wav_segment(cls, filename, data, head, lim):
+        # a wav the decoder refuses and pydub reads on its own, like an odd chunk without its pad byte
+        try:
+            h = extract_wav_headers(head)
+            w = read_wav_audio(head, h)
+        except (CouldntDecodeError, struct.error):
+            return None
+        if w.bits_per_sample not in (8, 16, 24, 32) or w.channels < 1 or w.sample_rate < 1:
+            return None
+        fw = w.channels * (4 if w.bits_per_sample == 24 else w.bits_per_sample // 8)
+        size = os.path.getsize(filename) if data is None else len(data)
+        # the header gives the length, so a wav over the limits fails before it is read
+        check_duration(max(0, min(h[-1].size, size - h[-1].position - 8)) // fw, w.sample_rate, fw, lim)
+        if data is None:
+            with open(filename, "rb") as f:
+                data = read_file(f, lim)
+        obj = cls(data=data)
+        # 24 bit data grows to 32 bit, so the header check above can be short
+        check_duration(obj.frame_count(), obj.frame_rate, obj.frame_width, lim)
+        return obj
 
     @classmethod
     def _segment(cls, d, data, narrow=None):
@@ -1010,9 +1054,10 @@ class AudioSegment(object):
             else:
                 with open(filename, "rb") as f:
                     own = _pydub_wav(f.read(65536))
-        span = _span(d, own, start_second, duration)
+        start_second, duration = [float(v) if isinstance(v, Decimal) else v for v in (start_second, duration)]
+        span = _span(d, own, start_second, duration) if _ffmpeg_time(start_second) and _ffmpeg_time(duration) else None
         if not span:
-            raise ValueError("start_second and duration have to be plain numbers, 0 or more")
+            raise ValueError("start_second and duration have to be plain numbers, 0 or more and under 1e12")
         start, n, final = span
         fw = d.channels * d.width
         step = int(chunk_ms * (d.rate / 1000.0))
@@ -1243,6 +1288,7 @@ class AudioSegment(object):
         if sample_width == self.sample_width:
             return self
 
+        _c_int(sample_width)
         frame_width = self.channels * sample_width
 
         return self._spawn(
@@ -1258,6 +1304,8 @@ class AudioSegment(object):
         if frame_rate == self.frame_rate:
             return self
 
+        if self._data:
+            _c_int(frame_rate)
         if self._data and resample_quality == "high":
             converted = _pydub2.resample(self._data, self.frame_rate, self.channels,
                                          self.sample_width, frame_rate)
