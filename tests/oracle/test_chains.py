@@ -427,12 +427,16 @@ PROPS = ["frame_rate", "channels", "sample_width", "frame_width", "dBFS", "max",
          "duration_seconds", "max_possible_amplitude", "array_type"]
 
 
+def is_audioop_error(e):
+    return type(e).__name__ == "error" and type(e).__module__ in ("audioop", "_audioop")
+
+
 def t(f):
     try:
         return f()
     except Exception as e:
         # audioop.error is a ValueError here, see docs/differences.md
-        return ("exc", "ValueError" if type(e).__name__ == "error" else type(e).__name__)
+        return ("exc", "ValueError" if is_audioop_error(e) else type(e).__name__)
 
 
 def flat(L, x, label, out):
