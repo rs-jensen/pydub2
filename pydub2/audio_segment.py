@@ -1080,9 +1080,10 @@ class AudioSegment(object):
                 not (format == "opus" and self.frame_rate < 100):
             rate = 0
             if bitrate and format in ("ogg", "opus"):
-                bitrate = str(bitrate).strip().lower()
-                unit = {"k": 1000, "m": 1000000}.get(bitrate[-1])
-                rate = int(float(bitrate[:-1]) * unit) if unit else int(bitrate)
+                try:
+                    rate = _mp3.rate_of(bitrate)
+                except (ValueError, OverflowError):
+                    raise tagged(CouldntEncodeError("bad bitrate %r" % (bitrate,)), format, "cant_encode")
             data, width = pcm, self.sample_width
             if format == "flac" and width == 4:
                 # ffmpeg writes 32 bit audio as 24 bit flac
