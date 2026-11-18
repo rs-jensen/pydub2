@@ -302,6 +302,7 @@ typedef struct
     drmp3dec_scratch scratch;
     int zeroed, missing, have; /* pydub2: zeroed granules, zero filled bytes of a cut frame, reservoir bytes used */
     drmp3_uint8 scf0[2][39]; /* pydub2: scalefactors of the last granule 0 */
+    drmp3_uint8 last_block[2][2]; /* pydub2: block type and long bands of the last granule */
 } drmp3dec;
 
 /* Initializes a low level decoder. */
@@ -1794,12 +1795,44 @@ static void drmp3_L3_change_sign(float *grbuf)
             grbuf[i] = -grbuf[i];
 }
 
-static void drmp3_L3_imdct_gr(float *grbuf, float *overlap, unsigned block_type, unsigned n_long_bands)
+static void drmp3_L3_imdct_gr(float *grbuf, float *overlap, unsigned block_type, unsigned n_long_bands, drmp3_uint8 *last) /* pydub2: last */
 {
     static const float g_mdct_window[2][18] = {
         { 0.99904822f,0.99144486f,0.97629601f,0.95371695f,0.92387953f,0.88701083f,0.84339145f,0.79335334f,0.73727734f,0.04361938f,0.13052619f,0.21643961f,0.30070580f,0.38268343f,0.46174861f,0.53729961f,0.60876143f,0.67559021f },
         { 1,1,1,1,1,1,0.99144486f,0.92387953f,0.79335334f,0,0,0,0,0,0,0.13052619f,0.38268343f,0.60876143f }
     };
+    /* pydub2: the overlap gets the window of the next block here, in ffmpeg the one of the block it comes from. A damaged
+       stream can join blocks that never follow each other, add the difference for those bands. A short block in ffmpeg
+       drops the last 6 overlap samples below the highest band with data */
+    float fix[32][18];
+    unsigned b, i, mask = 0, sblimit = 0;
+    for (i = 576; block_type == DRMP3_SHORT_BLOCK_TYPE && i >= 36;)
+    {
+        drmp3_uint32 bits[6];
+        i -= 6;
+        DRMP3_COPY_MEMORY(bits, grbuf + i, sizeof(bits));
+        if (bits[0] | bits[1] | bits[2] | bits[3] | bits[4] | bits[5])
+            break;
+    }
+    sblimit = i/18 + 1;
+    for (b = 0; b < 32; b++)
+    {
+        int from = b >= last[1] && (last[0] == 1 || last[0] == DRMP3_SHORT_BLOCK_TYPE);
+        int to = b >= n_long_bands && block_type >= DRMP3_SHORT_BLOCK_TYPE;
+        if (from != to)
+        {
+            for (i = 0; i < 9; i++)
+            {
+                fix[b][i] = overlap[9*b + i]*g_mdct_window[from][i] - overlap[9*b + i]*g_mdct_window[to][i];
+                fix[b][17 - i] = overlap[9*b + i]*g_mdct_window[from][9 + i] - overlap[9*b + i]*g_mdct_window[to][9 + i];
+                if (block_type == DRMP3_SHORT_BLOCK_TYPE && b >= n_long_bands && b < sblimit && i < 6)
+                    fix[b][17 - i] = 0;
+            }
+            mask |= 1u << b;
+        }
+    }
+    last[0] = (drmp3_uint8)block_type;
+    last[1] = (drmp3_uint8)n_long_bands;
     if (n_long_bands)
     {
         drmp3_L3_imdct36(grbuf, overlap, g_mdct_window[0], n_long_bands);
@@ -1810,13 +1843,23 @@ static void drmp3_L3_imdct_gr(float *grbuf, float *overlap, unsigned block_type,
         drmp3_L3_imdct_short(grbuf, overlap, 32 - n_long_bands);
     else
         drmp3_L3_imdct36(grbuf, overlap, g_mdct_window[block_type == DRMP3_STOP_BLOCK_TYPE], 32 - n_long_bands);
+    grbuf -= 18*n_long_bands;
+    for (b = 0; mask; b++, mask >>= 1)
+        for (i = 0; (mask & 1) && i < 18; i++)
+            grbuf[18*b + i] += fix[b][i];
 }
 
-static void drmp3_L3_save_reservoir(drmp3dec *h, drmp3dec_scratch *s)
+static void drmp3_L3_save_reservoir(drmp3dec *h, drmp3dec_scratch *s, const drmp3_uint8 *frame, int frame_bytes) /* pydub2: frame */
 {
     int pos = (s->bs.pos + 7)/8u;
     int remains;
-    if (pos > s->bs.limit/8) pos = 0; /* pydub2: the granules ran past the data, ffmpeg then keeps the end */
+    if (pos > s->bs.limit/8) /* pydub2: the granules ran past the data, ffmpeg then keeps the end of the frame, side info too */
+    {
+        remains = DRMP3_MIN(frame_bytes - DRMP3_HDR_SIZE, DRMP3_MAX_BITRESERVOIR_BYTES);
+        DRMP3_MOVE_MEMORY(h->reserv_buf, frame + frame_bytes - remains, remains);
+        h->reserv = remains;
+        return;
+    }
     remains = s->bs.limit/8u - pos;
     if (remains > DRMP3_MAX_BITRESERVOIR_BYTES)
     {
@@ -1875,7 +1918,7 @@ static void drmp3_L3_decode(drmp3dec *h, drmp3dec_scratch *s, drmp3_L3_gr_info *
         }
 
         drmp3_L3_antialias(s->grbuf[ch], aa_bands);
-        drmp3_L3_imdct_gr(s->grbuf[ch], h->mdct_overlap[ch], gr_info->block_type, n_long_bands);
+        drmp3_L3_imdct_gr(s->grbuf[ch], h->mdct_overlap[ch], gr_info->block_type, n_long_bands, h->last_block[ch]);
         drmp3_L3_change_sign(s->grbuf[ch]);
     }
 }
@@ -2395,7 +2438,7 @@ DRMP3_API int drmp3dec_decode_frame(drmp3dec *dec, const drmp3_uint8 *mp3, int m
                 drmp3d_synth_granule(dec->qmf_state, dec->scratch.grbuf[0], 18, info->channels, (drmp3d_sample_t*)pcm, dec->scratch.syn[0]);
             }
         }
-        drmp3_L3_save_reservoir(dec, &dec->scratch);
+        drmp3_L3_save_reservoir(dec, &dec->scratch, hdr, frame_size);
     } else
     {
 #ifdef DR_MP3_ONLY_MP3

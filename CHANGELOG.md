@@ -61,6 +61,7 @@ What changed in each release.
 - `detect_silence` with a `silence_thresh` that is not a number raises `ValueError` for a string like `"x"`, as pydub does, and not `TypeError`.
 - `detect_silence`, `detect_nonsilent`, `split_on_silence`, `strip_silence`, `speedup`, `compress_dynamic_range`, `low_pass_filter` and `high_pass_filter` call what a subclass of `AudioSegment` overrides (`rms`, `max_possible_amplitude`, `_spawn`, `get_array_of_samples`, `append` and the others pydub calls there), where they went round it.
 - mp3 from `lame -p` (with crc) and mp3 with a VBRI frame decode to the same length as with ffmpeg. The Info or VBRI frame was decoded as a frame of silence and the encoder delay was not skipped.
+- mp3 with frames missing or cut short in the middle, or a frame too short for its own data, decodes the frames after it like ffmpeg. They were off by up to the full scale for a frame.
 
 ### Security
 

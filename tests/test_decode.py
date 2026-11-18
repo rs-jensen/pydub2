@@ -576,6 +576,26 @@ def test_mp3_starts_inside_the_bit_reservoir(tmp_path):
         same_as_ffmpeg(tmp_path, "cut.mp3", m[starts[k]:])
 
 
+# frames gone from the middle join blocks that never follow each other, ffmpeg windows the overlap with the block
+# it came from
+def test_mp3_frames_missing_in_the_middle(tmp_path):
+    m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k", samples=CLICKS), "rb").read()
+    starts = mp3_frames(m)
+    for k in (8, 10, 11, 12, 14, 15):
+        same_as_ffmpeg(tmp_path, "gap.mp3", m[:starts[k]] + m[starts[k + 1]:])
+        same_as_ffmpeg(tmp_path, "gap.mp3", m[:starts[k]] + m[starts[k + 2]:])
+        same_as_ffmpeg(tmp_path, "cut.mp3", m[:starts[k] + 4] + m[starts[k + 1]:])
+
+
+# a wrong bitrate makes a frame too short for its granules, ffmpeg then keeps the end of the frame as the bit reservoir
+@pytest.mark.parametrize("k, bitrate", [(5, 1), (6, 3), (9, 5), (17, 1), (24, 3), (28, 1)])
+def test_mp3_granules_past_the_frame(tmp_path, k, bitrate):
+    m = bytearray(open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k", samples=CLICKS), "rb").read())
+    at = mp3_frames(m)[k]
+    m[at + 2] = m[at + 2] & 15 | bitrate << 4
+    same_as_ffmpeg(tmp_path, "short.mp3", bytes(m))
+
+
 @pytest.mark.parametrize("channels", [2, 3, 4, 5, 6, 7, 8])
 @pytest.mark.parametrize("name, codec", [("a.ogg", "libvorbis"), ("a.opus", "libopus")])
 def test_channel_order(tmp_path, channels, name, codec):
