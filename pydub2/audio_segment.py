@@ -432,11 +432,13 @@ class AudioSegment(object):
         # (stdlib audioop and array modules do not support 24-bit data)
         if self.sample_width == 3:
             # the low byte is padding, 0xff for negative samples like pydub does
-            out = bytearray(len(self._data) // 3 * 4)
-            out[0::4] = self._data[2::3].translate(bytes(128) + b"\xff" * 128)
-            out[1::4] = self._data[0::3]
-            out[2::4] = self._data[1::3]
-            out[3::4] = self._data[2::3]
+            # stray bytes after the last whole sample are dropped
+            d = self._data[:len(self._data) // 3 * 3]
+            out = bytearray(len(d) // 3 * 4)
+            out[0::4] = d[2::3].translate(bytes(128) + b"\xff" * 128)
+            out[1::4] = d[0::3]
+            out[2::4] = d[1::3]
+            out[3::4] = d[2::3]
             self._data = bytes(out)
             self.sample_width = 4
             self.frame_width = self.channels * self.sample_width

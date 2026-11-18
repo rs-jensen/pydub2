@@ -164,3 +164,9 @@ def test_numpy_float(dtype):
     seg = pydub2.AudioSegment.from_numpy(np.array([0, 0.5, -1, 3, -3], dtype=dtype), 8000)
     assert seg.sample_width == 2
     assert list(seg.get_array_of_samples()) == [0, 16384, -32767, 32767, -32767]
+
+
+def test_raw_24_bit_with_stray_bytes():
+    seg = pydub2.AudioSegment.from_file(io.BytesIO(bytes(range(74))), format="raw", sample_width=3, frame_rate=96000,
+                                        channels=2)
+    assert len(seg.raw_data) == 96 and seg.sample_width == 4
