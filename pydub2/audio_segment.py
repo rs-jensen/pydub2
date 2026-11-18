@@ -382,9 +382,10 @@ def _span(d, wav, start_second, duration):
     if (start_second is not None and start_second < 0) or (duration is not None and duration < 0):
         return None
     if wav:
-        # pydub slices the whole wav
+        # pydub slices the whole wav from start_second * 1000 to (start_second + duration) * 1000
         ss = (start_second or 0) * 1000
-        a, b = _slice_frames(d.frames, d.rate, ss, ss + duration * 1000 if duration is not None else float("inf"))
+        end = float("inf") if duration is None else duration * 1000 if start_second is None else (start_second + duration) * 1000
+        a, b = _slice_frames(d.frames, d.rate, ss, end)
         return a, max(0, min(b, d.frames) - a), lambda m: max(0, b - a)
     # ffmpeg cuts with -ss and -t after -i, then pydub slices that
     a = _ffmpeg_frames(start_second or 0, d.rate)
