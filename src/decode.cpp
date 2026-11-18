@@ -48,11 +48,6 @@ static void put(char *out, const float *f, size_t n, int width) {
     }
 }
 
-// ffmpeg hands 3 to 8 vorbis channels out in wav order, out[i] is vorbis channel order[n - 1][i]
-static const uint8_t order[8][8] = {
-    {0}, {0, 1}, {0, 2, 1}, {0, 1, 2, 3}, {0, 2, 1, 3, 4}, {0, 2, 1, 5, 3, 4}, {0, 2, 1, 6, 5, 3, 4}, {0, 2, 1, 7, 5, 6, 3, 4},
-};
-
 // a file or a piece of memory
 struct Input {
     FILE *f = NULL;
