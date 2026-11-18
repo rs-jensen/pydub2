@@ -303,16 +303,18 @@ void reverse(std::string_view data, size_t width, const Alloc &alloc) {
     }
 }
 
-int avg(std::string_view data, size_t width) {
+int avg(std::string_view data, size_t width, size_t step, size_t first) {
     check(data, width);
-    if (data.empty()) {
+    size_t n = data.size() / width;
+    if (step < 1 || first >= n) {
         return 0;
     }
+    size_t count = (n - first + step - 1) / step;
     double sum = 0;
-    for (size_t i = 0; i < data.size(); i += width) {
-        sum += get(&data[i], width);
+    for (size_t i = first; i < n; i += step) {
+        sum += get(&data[i * width], width);
     }
-    return (int)floor(sum / (double)(data.size() / width));
+    return (int)floor(sum / (double)count);
 }
 
 void bias(std::string_view data, size_t width, int bias, const Alloc &alloc) {
@@ -320,6 +322,14 @@ void bias(std::string_view data, size_t width, int bias, const Alloc &alloc) {
     char *out = alloc(data.size());
     for (size_t i = 0; i < data.size(); i += width) {
         put(out + i, width, (int)((uint32_t)get(&data[i], width) + (uint32_t)bias));
+    }
+}
+
+void bias_pairs(std::string_view data, size_t width, int even, int odd, const Alloc &alloc) {
+    check(data, width, 2);
+    char *out = alloc(data.size());
+    for (size_t i = 0; i < data.size(); i += width) {
+        put(out + i, width, (int)((uint32_t)get(&data[i], width) + (uint32_t)(i / width % 2 ? odd : even)));
     }
 }
 

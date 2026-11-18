@@ -118,6 +118,18 @@ static Alloc into(nb::object &out) {
     };
 }
 
+// cuts the bytes into() made, in place
+static Shrink trim(nb::object &out) {
+    return [&out](size_t n) {
+        nb::gil_scoped_acquire g;
+        PyObject *p = out.release().ptr();
+        if (_PyBytes_Resize(&p, (Py_ssize_t)n) < 0) {
+            throw nb::python_error();
+        }
+        out = nb::steal(p);
+    };
+}
+
 static Audio audio(nb::bytes data, int rate, int channels, int width) {
     if (rate < 1 || channels < 1 || channels > 65535 || width < 1 || width > 4) {
         throw std::invalid_argument("bad rate, channels or sample width");
@@ -262,7 +274,7 @@ NB_MODULE(_pydub2, m) {
         nb::object out;
         {
             nb::gil_scoped_release g;
-            encode(a, format, bitrate, t, interrupt(), into(out));
+            encode(a, format, bitrate, t, interrupt(), into(out), trim(out));
         }
         return out;
     }, nb::arg("data"), nb::arg("rate"), nb::arg("channels"), nb::arg("width"), nb::arg("format"), nb::arg("bitrate") = 0,
@@ -441,11 +453,11 @@ NB_MODULE(_pydub2, m) {
         return out;
     });
 
-    m.def("avg", [](nb::bytes data, long long width) {
+    m.def("avg", [](nb::bytes data, long long width, long long step, long long first) {
         std::string_view s = str(data);
         nb::gil_scoped_release g;
-        return avg(s, width);
-    });
+        return avg(s, width, step, first);
+    }, nb::arg("data"), nb::arg("width"), nb::arg("step") = 1, nb::arg("first") = 0);
 
     m.def("bias", [](nb::bytes data, long long width, int bias_) {
         std::string_view s = str(data);
@@ -453,6 +465,16 @@ NB_MODULE(_pydub2, m) {
         {
             nb::gil_scoped_release g;
             bias(s, width, bias_, into(out));
+        }
+        return out;
+    });
+
+    m.def("bias_pairs", [](nb::bytes data, long long width, int even, int odd) {
+        std::string_view s = str(data);
+        nb::object out;
+        {
+            nb::gil_scoped_release g;
+            bias_pairs(s, width, even, odd, into(out));
         }
         return out;
     });

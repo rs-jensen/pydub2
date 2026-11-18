@@ -115,7 +115,7 @@ MiB of peak memory, and as a multiple of the 101 MiB of samples, for 10 minutes 
 | `from_file` mp3, 10 s from the middle | 5 (0.1x) | 50 | 2 (0.0x) |
 | `AudioSegment.stream` mp3, 10 s pieces | does not exist | | 5 (0.1x) |
 | `export` wav to `BytesIO` | 202 (2.0x) | 0 | 202 (2.0x) |
-| `export` flac to a path | 176 (1.7x) | 136 | 179 (1.8x) |
+| `export` flac to a path | 176 (1.7x) | 136 | 177 (1.7x) |
 | `export` mp3 to a path | 110 (1.1x) | 136 | 125 (1.2x) |
 | `export` ogg to a path | 109 (1.1x) | 136 | 120 (1.2x) |
 | `export` opus to a path | 108 (1.1x) | 136 | 117 (1.2x) |
@@ -132,7 +132,7 @@ MiB of peak memory, and as a multiple of the 101 MiB of samples, for 10 minutes 
 | `compress_dynamic_range` | 3638 (36.0x) | 0 | 202 (2.0x) |
 | `low_pass_filter` | 404 (4.0x) | 0 | 202 (2.0x) |
 | `detect_silence` | 101 (1.0x) | 0 | 101 (1.0x) |
-| `speedup(1.5)` | 348 (3.5x) | 0 | 270 (2.7x) |
+| `speedup(1.5)` | 348 (3.5x) | 0 | 181 (1.8x) |
 
 Notes on the table:
 

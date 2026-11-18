@@ -21,14 +21,14 @@ What changed in each release.
 - Loading through ffmpeg needs a third less memory: the peak for 200 MB of aiff went from 629 MB to 425 MB.
 - `detect_speech` needs a fixed amount of extra memory, not 3 times the audio. On 40 minutes it went from 1.3 GB to 19 MB. The ranges are the same.
 - Writing ogg, opus and mp3 needs a third of the memory it did. 10 minutes of 16 bit stereo peaked at 3.2, 3.1 and 3.4 times the size of the audio, now 1.2 times. The files are the same.
-- Writing flac to a file needs 1.8 times the size of the audio where it needed 2.5. The encoded file is no longer copied once more.
+- Writing flac to a file needs 1.7 times the size of the audio where it needed 2.5. The file is written straight into the bytes you get, with no copy at the end.
 - `set_frame_rate` without `resample_quality` needs a third less memory and is up to 2 times faster on 10 minutes of audio. Going from 44.1 to 48 kHz peaked at 3.2 times the size of the audio and now peaks at 2.1.
 - `overlay` with `loop=True` needs half the memory or less and is up to 1.6 times faster. On 10 minutes it peaked at 4.0 times the size of the audio, 5.0 with `gain_during_overlay`, and now peaks at 2.0 for both. Overlaying at a `position` no longer copies the audio before and after it.
 - `fade`, `fade_in` and `fade_out` do not copy the parts of the audio they leave alone. A fade of 2 seconds in 10 minutes peaked at 3.0 times the size of the audio and now peaks at 2.0, and is twice as fast.
 - `split_to_mono` and `from_mono_audiosegments` copy each sample once, and are 4 times faster on 10 minutes of stereo. `split_to_mono` peaked at 3.5 times the size of the audio and now peaks at 2.0, and `from_mono_audiosegments` needed 2.5 times the size of the result on top of its input and now needs 1.
 - `set_sample_width(3)` is 6 times faster and building a segment from 24 bit data 3 times, and both need less memory. `set_sample_width(3)` on 10 minutes of 16 bit stereo peaked at 6.5 times the size of the audio and now peaks at 3.0.
-- `speedup` needs a fifth less memory. On 10 minutes it peaked at 3.5 times the size of the audio and now peaks at 2.7. It does not copy the chunks it keeps a second time.
-- `remove_dc_offset` of stereo audio is 4 times faster and needs a quarter less memory. On 10 minutes it peaked at 4.0 times the size of the audio and now peaks at 3.0.
+- `speedup` needs half the memory. On 10 minutes it peaked at 3.5 times the size of the audio and now peaks at 1.8. The chunks it keeps are views of the audio and are copied once, into the result.
+- `remove_dc_offset` of stereo audio is 4 times faster and needs half the memory. On 10 minutes it peaked at 4.0 times the size of the audio and now peaks at 2.0.
 - Writing opus from 44.1 kHz audio on arm64 is about 40 percent faster. 10 minutes now take about 6.2 s.
 - `overlay` is 3 times faster and `normalize` and `apply_gain` are 1.9 times faster on 60 s of audio.
 - The `FileNotFoundError` for a missing ffmpeg says what it looked for, and suggests the `ffmpeg` extra only when `AudioSegment.converter` is not set.

@@ -78,8 +78,10 @@ def speedup(seg, playback_speed=1.5, chunk_size=150, crossfade=25):
     # DEBUG
     #print("chunk: {0}, rm: {1}".format(chunk_size, ms_to_remove_per_chunk))
 
-    chunks = make_chunks(seg, chunk_size + ms_to_remove_per_chunk)
-    if len(chunks) < 2:
+    length = chunk_size + ms_to_remove_per_chunk
+    # the same number of chunks make_chunks cuts
+    count = int(math.ceil(len(seg) / float(length)))
+    if count < 2:
         raise Exception("Could not speed up AudioSegment, it was too short {2:0.2f}s for the current settings:\n{0}ms chunks at {1:0.1f}x speedup".format(
             chunk_size, playback_speed, seg.duration_seconds))
 
@@ -89,14 +91,10 @@ def speedup(seg, playback_speed=1.5, chunk_size=150, crossfade=25):
 
     # we don't want to truncate the last chunk since it is not guaranteed to be
     # the full chunk length
-    last_chunk = chunks.pop()
-    # trimmed in place, so each whole chunk is let go as its trimmed copy is made
-    for i, chunk in enumerate(chunks):
-        chunks[i] = chunk[:-ms_to_remove_per_chunk]
-    del chunk
-
-    out = chunks[0]
+    out = seg[:length][:-ms_to_remove_per_chunk]
     if crossfade < 0 or overrides(out, "append", "__add__"):
+        chunks = [out] + [seg[i * length:(i + 1) * length][:-ms_to_remove_per_chunk] for i in range(1, count - 1)]
+        last_chunk = seg[(count - 1) * length:count * length]
         # pydub fades 0 ms at the first append and divides by zero
         if crossfade < 0 and len(chunks) > 1 and (not len(out[-crossfade:]) or not len(chunks[1][:crossfade])):
             raise ZeroDivisionError("division by zero")
@@ -106,16 +104,16 @@ def speedup(seg, playback_speed=1.5, chunk_size=150, crossfade=25):
 
     # same as chaining out.append(chunk, crossfade) but only the tail of the
     # output is touched each time, appending to a growing copy is quadratic
-    if crossfade > len(out) and len(chunks) > 1:
+    if crossfade > len(out) and count > 2:
         raise ValueError("Crossfade is longer than the original AudioSegment ({}ms > {}ms)".format(
             crossfade, len(out)))
     width = out.frame_width
     rate = out.frame_rate / 1000.0
     pieces = [out._data]
     size = len(out._data)
-    for i in range(1, len(chunks)):
-        # the pieces hold what is left of each chunk, the list need not hold all of them as well
-        chunk, chunks[i] = chunks[i], None
+    for i in range(1, count - 1):
+        # a chunk is a view of seg, so the pieces are the only copy of what is kept
+        chunk = seg._view(i * length, (i + 1) * length)._view(None, -ms_to_remove_per_chunk)
         if crossfade > len(chunk):
             raise ValueError("Crossfade is longer than the appended AudioSegment ({}ms > {}ms)".format(
                 crossfade, len(chunk)))
@@ -131,9 +129,9 @@ def speedup(seg, playback_speed=1.5, chunk_size=150, crossfade=25):
             piece = pieces.pop()
             size -= len(piece)
             tail.insert(0, piece)
-        tail = b"".join(tail)
+        tail = tail[0] if len(tail) == 1 else b"".join(tail)
         pieces.append(tail[:start - size])
-        tail = tail[start - size:end - size]
+        tail = bytes(tail[start - size:end - size])
         size = start
         # slicing pads with silence when the output is a frame short
         tail += b"\0" * (end - start - len(tail))
@@ -143,9 +141,9 @@ def speedup(seg, playback_speed=1.5, chunk_size=150, crossfade=25):
             pieces.append(data)
             size += len(data)
 
-    pieces.append(last_chunk._data)
+    pieces.append(seg._view((count - 1) * length, count * length)._data)
     return out._spawn(pieces)
-    
+
 
 @register_pydub_effect
 def strip_silence(seg, silence_len=1000, silence_thresh=-16, padding=100):

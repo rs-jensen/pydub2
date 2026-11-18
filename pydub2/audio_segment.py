@@ -569,7 +569,7 @@ class AudioSegment(object):
                     "missing frames: %s" % missing_frames)
             silence = _pydub2.mul(data[:self.frame_width],
                                   self.sample_width, 0)
-            data += (silence * missing_frames)
+            data = bytes(data) + silence * missing_frames
 
         return self._spawn(data)
 
@@ -582,6 +582,18 @@ class AudioSegment(object):
             if 0 <= first <= last <= len(self._data):
                 return memoryview(self._data)[first:last]
         return self[start:end]._data
+
+    def _view(self, start, end):
+        """self[start:end], sharing the samples with self when none have to be cut off or made up."""
+        data = self._piece(start, end)
+        cls = type(self)
+        if not isinstance(data, memoryview) or cls is not AudioSegment and (hasattr(cls, "_data") or any(
+                getattr(cls, n) is not getattr(AudioSegment, n) for n in _SPAWN_HOOKS)):
+            return self._spawn(bytes(data))
+        out = cls.__new__(cls)
+        out.__dict__.update(sample_width=self.sample_width, frame_rate=self.frame_rate, channels=self.channels,
+                            frame_width=self.frame_width, _data=data)
+        return out
 
     def get_sample_slice(self, start_sample=None, end_sample=None):
         """
@@ -1449,17 +1461,16 @@ class AudioSegment(object):
 
         if len(self._data) % (self.sample_width * 2):
             raise ValueError("not a whole number of samples")
-        left_channel = _pydub2.channel(self._data, self.sample_width, 2, 0)
-        right_channel = _pydub2.channel(self._data, self.sample_width, 2, 1)
-
-        if not channel or channel == 1:
-            left_channel = remove_data_dc(left_channel, offset)
-
-        if not channel or channel == 2:
-            right_channel = remove_data_dc(right_channel, offset)
-
-        return self._spawn(data=_pydub2.interleave([left_channel, right_channel], self.sample_width,
-                                                   len(left_channel) // self.sample_width))
+        # left and right are the even and the odd samples, each gets its own offset
+        offsets = [0, 0]
+        for i in (0, 1):
+            if not channel or channel == i + 1:
+                offsets[i] = offset or _pydub2.avg(self._data, self.sample_width, 2, i)
+        try:
+            data = _pydub2.bias_pairs(self._data, self.sample_width, -offsets[0], -offsets[1])
+        except TypeError:
+            raise ValueError("offset does not fit in the sample width")
+        return self._spawn(data=data)
 
     def apply_gain(self, volume_change):
         return self._spawn(data=_pydub2.mul(self._data, self.sample_width,

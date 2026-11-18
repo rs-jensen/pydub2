@@ -1,3 +1,7 @@
+import os
+import subprocess
+import sys
+
 import pytest
 
 from test_untrusted import peak_mb
@@ -19,6 +23,18 @@ def peak_x(code, setup=STEREO % SAW, pcm=PCM):
     return (peak_mb("import pydub2\n" + setup + code) - peak_mb("import pydub2")) * 1e6 / pcm
 
 
+def live_x(code, setup=STEREO % SAW):
+    """Peak of the memory python hands out while the setup and the call run, as a multiple of the PCM.
+
+    This is what tracemalloc sees, so it does not depend on whether the allocator gives pages back. Bytes made in C++
+    through the C API count, memory the extension takes with malloc or std::vector does not."""
+    body = "import tracemalloc\ntracemalloc.start()\n" + setup + code + "\nprint(tracemalloc.get_traced_memory()[1])"
+    out = subprocess.run([sys.executable, "-c", "import pydub2\n" + body], capture_output=True, text=True,
+                         env=dict(os.environ, PYTHONPATH=os.pathsep.join(sys.path)))
+    assert out.returncode == 0, out.stderr
+    return float(out.stdout) / PCM
+
+
 def export(format):
     return "with tempfile.TemporaryDirectory() as d:\n    seg.export(d + '/out', format=%r)" % format
 
@@ -29,7 +45,7 @@ def test_export_holds_the_audio_once(format):
     assert peak_x(export(format)) < 2.0
 
 
-# 3.0 before and 2.0 after with noise, which flac cannot shrink: the audio, the file and one block
+# 3.0 before and 2.0 after with noise, which flac cannot shrink: the audio and the file, written in place
 def test_export_flac_does_not_copy_the_file():
     assert peak_x(export("flac"), STEREO % NOISE) < 2.5
 
@@ -70,12 +86,11 @@ def test_24_bit_data_is_widened_once():
     assert peak_x("AudioSegment(raw, sample_width=3, frame_rate=44100, channels=2)", RAW24) < 2.2
 
 
-# 3.4 before and 2.6 after with twice the PCM so the gap is well over the noise: the audio, the pieces and the result
-def test_speedup_lets_go_of_each_chunk_once_it_is_trimmed():
-    code = "from pydub2.effects import speedup\nspeedup(seg, 1.5)"
-    assert peak_x(code, STEREO % ("bytes(range(256)) * %d" % (2 * PCM // 256)), 2 * PCM) < 3.0
+# 3.1 before and 1.7 after: the audio and the result, the chunks used to be copied and held as well
+def test_speedup_copies_only_what_it_keeps():
+    assert live_x("from pydub2.effects import speedup\nspeedup(seg, 1.5)") < 2.3
 
 
-# 4.0 before and 3.0 after: the audio, the two channels and the result, there were two more copies of the whole audio
-def test_remove_dc_offset_makes_no_stereo_copy_per_channel():
-    assert peak_x("seg.remove_dc_offset()") < 3.5
+# 4.0 before and 2.0 after: the audio and the result, the channels were copied out and back
+def test_remove_dc_offset_makes_no_copy_per_channel():
+    assert live_x("seg.remove_dc_offset()") < 2.5
