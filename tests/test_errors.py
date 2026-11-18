@@ -225,6 +225,7 @@ def bad_call(module, call):
 
 COVERS = [dict(format="ogg", cover="x.jpg"), dict(format="mp3", cover="x.txt"), dict(format="mp3", cover=5),
           dict(format="flac", cover="x.png"), dict(format="mp3", cover="x.JPG.gif")]
+COVERS += [dict(format=f, cover=c) for f in ("mp3", "ogg", "opus", "flac", "m4a") for c in (5, 1.5, b"x", b"x.png", [])]
 
 
 @pytest.mark.parametrize("kw", COVERS)

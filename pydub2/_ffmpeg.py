@@ -125,7 +125,7 @@ def from_wav(converter, wav, format, codec=None, bitrate=None, parameters=None, 
     if cover is not None:
         if isinstance(cover, os.PathLike):
             cover = os.fspath(cover)
-        if format != "mp3" or not cover.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")):
+        if not cover.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")) or format != "mp3":
             raise AttributeError("Currently cover images are only supported by MP3 files. "
                                  "The allowed image formats are: .tif, .jpg, .bmp, .jpeg and .png.")
         args += ["-protocol_whitelist", "file", "-i", "file:" + cover, "-map", "0", "-map", "1", "-c:v", "mjpeg"]
