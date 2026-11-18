@@ -321,7 +321,7 @@ bool fade(std::string_view before, std::optional<double> before_gain, std::strin
     }
     total += after.size();
     for (long long i = 0; i < count; i++) {
-        Chunk c;
+        Chunk c{};
         if (!chunk(i, c)) {
             return false;
         }
@@ -349,7 +349,7 @@ bool fade(std::string_view before, std::optional<double> before_gain, std::strin
         };
         copy(before, before_gain);
         for (long long i = 0; i < count; i++) {
-            Chunk c;
+            Chunk c{};
             chunk(i, c);
             if (c.from == frames) {
                 break;
