@@ -256,6 +256,67 @@ def test_wav_chunk_without_pad_byte_with_limit(monkeypatch):
         pydub2.AudioSegment.from_file(io.BytesIO(wav), format="wav")
 
 
+PCM_GUID = b"\x00\x00\x00\x00\x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71"
+
+
+def extensible_wav(tag, bits, channels=3, rate=8000, before_data=b"", frames=100):
+    # what ffmpeg writes for more than 2 channels, a-law and mu-law as 8 bit, float as 32 bit
+    pcm = bytes((i * 7) % 256 for i in range(frames * channels * bits // 8))
+    width = channels * bits // 8
+    fmt = struct.pack("<HHIIHHHHI", 0xFFFE, channels, rate, rate * width, width, bits, 22, bits, 7)
+    fmt += struct.pack("<H", tag) + PCM_GUID[2:]
+    body = b"WAVEfmt " + struct.pack("<I", len(fmt)) + fmt + before_data + b"data" + struct.pack("<I", len(pcm)) + pcm
+    return b"RIFF" + struct.pack("<I", len(body)) + body, pcm
+
+
+NO_PAD = b"junk" + struct.pack("<I", 3) + b"xxx"
+NOT_PCM = [pytest.param(6, 8, b"", id="alaw"), pytest.param(7, 8, b"", id="mulaw"),
+           pytest.param(6, 8, NO_PAD, id="alaw-no-pad"), pytest.param(7, 8, NO_PAD, id="mulaw-no-pad"),
+           pytest.param(3, 32, NO_PAD, id="float-no-pad")]
+
+
+@pytest.mark.parametrize("tag, bits, before_data", NOT_PCM)
+@pytest.mark.parametrize("how", ["path", "path-wav", "bytesio-wav"])
+def test_extensible_wav_that_is_not_pcm_is_not_read_as_pcm(tmp_path, monkeypatch, tag, bits, before_data, how):
+    wav, pcm = extensible_wav(tag, bits, before_data=before_data)
+    path = tmp_path / "x.wav"
+    path.write_bytes(wav)
+    monkeypatch.setattr(pydub2.AudioSegment, "converter", str(tmp_path / "missing"))
+    with pytest.raises(pydub2.exceptions.CouldntDecodeError):
+        if how == "bytesio-wav":
+            pydub2.AudioSegment.from_file(io.BytesIO(wav), format="wav")
+        else:
+            pydub2.AudioSegment.from_file(path, format="wav" if how == "path-wav" else None)
+
+
+@needs_ff
+@pytest.mark.parametrize("tag, bits", [(6, 8), (7, 8)])
+@pytest.mark.parametrize("format", [None, "wav"])
+def test_extensible_alaw_and_mulaw_wav_from_a_path_is_decoded(tmp_path, tag, bits, format):
+    wav, pcm = extensible_wav(tag, bits)
+    path = tmp_path / "x.wav"
+    path.write_bytes(wav)
+    seg = pydub2.AudioSegment.from_file(path, format=format)
+    assert seg.raw_data != pcm
+    assert seg.raw_data == pydub2.AudioSegment.from_file(io.BytesIO(wav)).raw_data
+
+
+@pytest.mark.parametrize("channels", [1, 3])
+def test_extensible_pcm_wav_with_a_chunk_without_pad_byte_from_a_path(tmp_path, channels):
+    wav, pcm = extensible_wav(1, 16, channels=channels, before_data=NO_PAD)
+    path = tmp_path / "x.wav"
+    path.write_bytes(wav)
+    seg = pydub2.AudioSegment.from_file(path)
+    assert (seg.raw_data, seg.channels, seg.frame_rate) == (pcm, channels, 8000)
+
+
+@needs_ff
+def test_float_wav_at_a_rate_the_decoder_refuses_from_ffmpeg_is_not_read_as_pcm():
+    wav, pcm = wav_bytes(rate=1332770)
+    with pytest.raises(pydub2.exceptions.CouldntDecodeError):
+        pydub2.AudioSegment.from_file(io.BytesIO(wav), parameters=["-acodec", "pcm_f32le"])
+
+
 @needs_ff
 def test_wav_at_a_rate_the_decoder_refuses_from_ffmpeg():
     wav, pcm = wav_bytes(rate=1332770)

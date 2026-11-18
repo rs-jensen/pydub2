@@ -73,6 +73,19 @@ def _encode(data, rate, *args):
         raise tagged(CouldntEncodeError(str(e)), args[2], "cant_encode")
 
 
+def _bits_per_second(bitrate, format, channels, converter):
+    # None leaves the bitrate to ffmpeg, which reads more than the built in encoders do and has the last word on a bad one
+    try:
+        rate = _mp3.rate_of(bitrate)
+        if format in ("ogg", "opus") and rate >= 2 ** 31 or format == "opus" and rate and not 500 <= rate <= 256000 * channels:
+            raise ValueError("bitrate out of range")
+    except (ValueError, OverflowError):
+        if _ffmpeg.find(converter) is None:
+            raise tagged(CouldntEncodeError("bad bitrate %r" % (bitrate,)), format, "cant_encode")
+        return None
+    return rate
+
+
 def _vorbis_tags(tags, format):
     # what ffmpeg makes of -metadata, the muxer renames four keys
     if not isinstance(tags, dict):
@@ -271,11 +284,42 @@ def fix_wav_headers(data):
     data[pos + 4:pos + 8] = struct.pack('<I', len(data) - pos - 8)
 
 
+_PCM_GUID = b"\x01\x00\x00\x00\x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71"
+
+
 def _pydub_wav(head):
     try:
         return bool(read_wav_audio(head))
     except (CouldntDecodeError, struct.error):
         return False
+
+
+def _pcm_wav(data):
+    # (headers, format) of a wav that pydub reads right, which is integer pcm, also as the sub-format of WAVE_FORMAT_EXTENSIBLE
+    try:
+        h = extract_wav_headers(data)
+        w = read_wav_audio(data, h)
+        fmt = [x for x in h if x.id == b"fmt "][0]
+        pos = fmt.position + 8
+        tag = struct.unpack_from("<H", data, pos)[0]
+        if tag == 0xFFFE and (fmt.size < 40 or data[pos + 24:pos + 40] != _PCM_GUID):
+            return None
+    except (CouldntDecodeError, struct.error):
+        return None
+    if w.bits_per_sample not in (8, 16, 24, 32) or w.channels < 1 or w.sample_rate < 1:
+        return None
+    return h, w
+
+
+def _float_wav(head):
+    try:
+        fmt = [x for x in extract_wav_headers(head) if x.id == b"fmt "][0]
+        tag = struct.unpack_from("<H", head, fmt.position + 8)[0]
+        if tag == 0xFFFE:
+            tag = struct.unpack_from("<H", head, fmt.position + 32)[0]
+    except (CouldntDecodeError, struct.error, IndexError):
+        return False
+    return tag == 3
 
 
 def _own_wav(head, flen, read_at):
@@ -350,7 +394,13 @@ def _span(d, wav, start_second, duration):
 
 
 def _to_16bit(data, width, rounding):
-    # what ffmpeg makes of 8 and 32 bit samples, a float source is rounded and an integer one is cut
+    # what ffmpeg makes of 8, 32 and 64 bit samples, a float source is rounded and an integer one is cut
+    if width == 8:
+        # the high 32 bits give the same 16 bit sample, cut or rounded
+        high = bytearray(len(data) // 2)
+        for i in range(4):
+            high[i::4] = data[4 + i::8]
+        data, width = bytes(high), 4
     if width == 4 and rounding:
         half = (0x8000).to_bytes(4, "little") * (1 << 18)
         step = len(half)
@@ -804,10 +854,9 @@ class AudioSegment(object):
                 data, frame_rate, channels, sample_width = _pydub2.decode(data)
             except RuntimeError:
                 # a header the decoder refuses, like a rate of a few GHz, that pydub reads
-                try:
-                    return cls(data=data)
-                except struct.error:
+                if _pcm_wav(data) is None:
                     raise tagged(CouldntDecodeError("cant read this file"), "wav", "cant_decode")
+                return cls(data=data)
             return cls(data=data, metadata={
                 'sample_width': sample_width,
                 'frame_rate': frame_rate,
@@ -906,7 +955,7 @@ class AudioSegment(object):
         head = file.read(65536) if data is None else data[:65536]
         own = wav and _pydub_wav(head)
         # the native decoders give 32 bit for what ffmpeg converts to 16 bit, rounded from float and cut from integers
-        narrow = None if not tmp or own else "round" if sniff(head) in ("ogg", "opus") else "cut"
+        narrow = None if not tmp or own else "round" if sniff(head) in ("ogg", "opus") or _float_wav(head) else "cut"
         if close_file:
             file.close()
         # ffmpeg cuts vorbis by packet times that drift from the sample count, only ffmpeg lands on the same sample
@@ -1002,13 +1051,10 @@ class AudioSegment(object):
     @classmethod
     def _pydub_wav_segment(cls, filename, data, head, lim):
         # a wav the decoder refuses and pydub reads on its own, like an odd chunk without its pad byte
-        try:
-            h = extract_wav_headers(head)
-            w = read_wav_audio(head, h)
-        except (CouldntDecodeError, struct.error):
+        pcm = _pcm_wav(head)
+        if pcm is None:
             return None
-        if w.bits_per_sample not in (8, 16, 24, 32) or w.channels < 1 or w.sample_rate < 1:
-            return None
+        h, w = pcm
         fw = w.channels * (4 if w.bits_per_sample == 24 else w.bits_per_sample // 8)
         size = os.path.getsize(filename) if data is None else len(data)
         # the header gives the length, so a wav over the limits fails before it is read
@@ -1210,22 +1256,24 @@ class AudioSegment(object):
             if bitrate is not None and not isinstance(bitrate, int):
                 args.append(bitrate)
             for arg in args:
-                os.fsencode(arg)
+                if b"\0" in os.fsencode(arg):
+                    raise ValueError("embedded null byte")
 
         # a partial last frame is dropped, the encoders take whole frames only
         fw = self.channels * self.sample_width
         pcm = self._data[:len(self._data) // fw * fw]
 
         # wav ignores tags and bitrate in pydub too
-        if codec is None and parameters is None and (
+        native = codec is None and parameters is None and (
                 format == "wav" or (format in ("flac", "ogg", "opus") and cover is None and not pydub2.strict)) and \
-                not (format == "opus" and self.frame_rate < 100):
-            rate = 0
-            if bitrate and format in ("ogg", "opus"):
-                try:
-                    rate = _mp3.rate_of(bitrate)
-                except (ValueError, OverflowError):
-                    raise tagged(CouldntEncodeError("bad bitrate %r" % (bitrate,)), format, "cant_encode")
+                not (format == "opus" and self.frame_rate < 100)
+        rate = 0
+        if native and bitrate is not None and format != "wav":
+            rate = _bits_per_second(bitrate, format, self.channels, self.converter)
+            native = rate is not None
+        if native:
+            if format not in ("ogg", "opus"):
+                rate = 0
             data, width = pcm, self.sample_width
             if format == "flac" and width == 4:
                 # ffmpeg writes 32 bit audio as 24 bit flac
@@ -1256,6 +1304,8 @@ class AudioSegment(object):
                 return _write_out(out_f, out)
 
         if format == "mp3" and codec is None and cover is None and not pydub2.strict:
+            if bitrate is not None:
+                _bits_per_second(bitrate, format, self.channels, self.converter)
             if _mp3.available():
                 mp3 = _mp3.encode(pcm, self.frame_rate, self.channels, self.sample_width,
                                   bitrate, tags, id3v2_version, parameters, self.converter)
