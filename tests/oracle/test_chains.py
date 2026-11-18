@@ -855,6 +855,19 @@ def cls_of(steps, d):
 
 FFMPEG_OPS = {"load", "stream", "export"}
 HAVE_FFMPEG = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
+# the ffmpeg encoder pydub needs for each export format, an ffmpeg built without it gives pydub nothing to compare with
+ENCODERS = {None: "libmp3lame", "mp3": "libmp3lame", "ogg": "libvorbis", "opus": "libopus"}
+
+
+def missing_encoders():
+    if not HAVE_FFMPEG:
+        return set()
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True).stdout
+    have = {line.split()[1] for line in out.splitlines() if line.startswith(" A")}
+    return set(ENCODERS.values()) - have
+
+
+MISSING_ENCODERS = missing_encoders()
 
 
 def compare(spec, steps, seed):
@@ -862,6 +875,8 @@ def compare(spec, steps, seed):
         used = [op for op, *_ in steps if op in FFMPEG_OPS]
         if used:
             return "skip", used[0]
+    if any(op == "export" and ENCODERS.get(a[0]) in MISSING_ENCODERS for op, a, *_ in steps):
+        return "skip", "export"
     ra, hung = timed(PD, spec, steps, seed)
     if hung:
         return "skip", steps[min(len(ra), len(steps)) - 1][0] if ra else "init"
@@ -939,6 +954,12 @@ def test_alaw_loads_and_raw_exports_compare_the_samples():
     out = io.BytesIO()
     s.export(out, format="raw")
     assert sp_export(P2, s, "raw") == out.getvalue()
+
+
+def test_export_without_the_encoder_pydub_needs_is_not_compared(monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "MISSING_ENCODERS", {"libvorbis"})
+    spec = dict(w=2, ch=1, rate=8000, n=100, kind="noise", seed=0, extra=False)
+    assert compare(spec, [("export", ("ogg",), {}, 0)], 0) == ("skip", "export")
 
 
 @pytest.mark.skipif(not HAVE_FFMPEG, reason="needs ffmpeg")
