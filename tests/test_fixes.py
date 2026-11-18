@@ -170,3 +170,20 @@ def test_raw_24_bit_with_stray_bytes():
     seg = pydub2.AudioSegment.from_file(io.BytesIO(bytes(range(74))), format="raw", sample_width=3, frame_rate=96000,
                                         channels=2)
     assert len(seg.raw_data) == 96 and seg.sample_width == 4
+
+
+def partial_frame():
+    # 70 whole frames of 3 channels and 2 stray bytes
+    mono = pydub2.AudioSegment(struct.pack("<h", 10) * 210, sample_width=2, frame_rate=1000, channels=1)
+    return mono._spawn(struct.pack("<h", 10) * 212, {"channels": 3, "frame_width": 6})
+
+
+def test_partial_frame_set_channels():
+    assert len(partial_frame().set_channels(1).raw_data) == 140
+
+
+@pytest.mark.parametrize("name", ["low_pass_filter", "high_pass_filter"])
+def test_partial_frame_filter(name):
+    seg = partial_frame()
+    out = getattr(seg, name)(100)
+    assert len(out.raw_data) == 424 and out.raw_data[-2:] == seg.raw_data[-2:]

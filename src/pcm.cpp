@@ -186,10 +186,13 @@ void tostereo(std::string_view data, size_t width, double lfac, double rfac, con
 }
 
 void downmix(std::string_view data, size_t width, size_t channels, const Alloc &alloc) {
-    check(data, width, channels);
+    check({}, width, channels);
+    check(data, width);
     long long n = (long long)channels;
-    char *out = alloc(data.size() / channels);
-    for (size_t i = 0, j = 0; i < data.size(); i += width * channels, j += width) {
+    // a partial last frame is left out, like pydub does
+    size_t frames = data.size() / (width * channels);
+    char *out = alloc(frames * width);
+    for (size_t i = 0, j = 0; j < frames * width; i += width * channels, j += width) {
         long long sum = 0;
         for (size_t c = 0; c < channels; c++) {
             long long v = get(&data[i + c * width], width);
@@ -283,7 +286,8 @@ static int toint(double v, size_t width) {
 }
 
 void lowpass(std::string_view data, size_t width, size_t channels, double alpha, const Alloc &alloc) {
-    check(data, width, channels);
+    check({}, width, channels);
+    check(data, width);
     char *out = alloc(data.size());
     memcpy(out, data.data(), data.size());
     size_t n = data.size() / width / channels;
@@ -301,7 +305,8 @@ void lowpass(std::string_view data, size_t width, size_t channels, double alpha,
 }
 
 void highpass(std::string_view data, size_t width, size_t channels, double alpha, const Alloc &alloc) {
-    check(data, width, channels);
+    check({}, width, channels);
+    check(data, width);
     char *out = alloc(data.size());
     memcpy(out, data.data(), data.size());
     size_t n = data.size() / width / channels;
