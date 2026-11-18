@@ -351,7 +351,7 @@ void ratecv(std::string_view data, size_t width, size_t channels, int inrate, in
     uint64_t frames = 0;
     if (len) {
         uint64_t q = (len - 1) / inrate;
-        if (q && outrate > UINT64_MAX / q) {
+        if (q && (uint64_t)outrate > UINT64_MAX / q) {
             throw std::bad_alloc();
         }
         frames = q * outrate + (len - 1) % inrate * (uint64_t)outrate / inrate + 1;
