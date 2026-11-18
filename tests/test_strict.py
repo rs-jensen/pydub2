@@ -184,4 +184,8 @@ def test_env_unknown_value_warns(value):
     out = subprocess.run([sys.executable, "-c", "import pydub2; print(pydub2.strict)"], env=env,
                          capture_output=True, text=True)
     assert out.stdout.strip() == "False"
-    assert "PYDUB2_STRICT" in out.stderr
+    assert "__init__.py" in out.stderr and "RuntimeWarning: PYDUB2_STRICT" in out.stderr
+
+
+def test_env_name_is_not_left_in_the_module():
+    assert not hasattr(pydub2, "_env")
