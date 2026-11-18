@@ -16,9 +16,10 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - `from_file_using_temporary_files` of a wav path with a `start_second` or `duration` that pydub cannot slice, like `nan`, raises `ValueError` in pydub (it seeks a file it already closed). pydub2 goes on to ffmpeg like `from_file` does, and ffmpeg refuses it with `CouldntDecodeError`.
 - A wrong `format` is ignored for wav, flac, mp3, ogg and opus data, which is read as what it is. pydub raises `CouldntDecodeError`, because ffmpeg is told the wrong format.
 - Sample widths other than 8, 16, 24 and 32 bit that ffprobe reports for a file are read as 16 bit.
+- `stream` leaves out a partial last frame of a wav, where `from_file` keeps the stray bytes like pydub.
 - `stream` raises `CouldntDecodeError` for a wav with an odd chunk that has no pad byte after it. `from_file` reads such a file like pydub does.
 - ffmpeg cannot read some wav from a pipe that has no whole frame and an odd chunk without its pad byte or a chunk after the data, so pydub raises `CouldntDecodeError` for them. pydub2 reads them.
-- A wav with a sample rate of 0 raises `CouldntDecodeError`, where pydub reads it into a segment with a `frame_rate` of 0.
+- A wav with a sample rate or a channel count of 0 raises `CouldntDecodeError`, where pydub reads it into a segment that `len` cannot measure.
 
 ### How the samples differ
 

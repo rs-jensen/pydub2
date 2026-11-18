@@ -371,8 +371,8 @@ def sp_load(L, s, variant, how, src, **kw):
             seg = load(**kw)
         except Exception as e:
             name = type(e).__name__
-            # a wav with a rate of 0 is damaged to pydub2 and read by pydub unless ffmpeg gets it, see docs/differences.md
-            if s.frame_rate < 1 and name == "CouldntDecodeError":
+            # a wav with a rate or a channel count of 0 is damaged to pydub2, and pydub cannot cut it or ffmpeg refuses it, see docs/differences.md
+            if (s.frame_rate < 1 or s.channels < 1) and (L is PD or name == "CouldntDecodeError"):
                 return ["rate 0"]
             if L is not PD:
                 raise
@@ -390,7 +390,7 @@ def sp_load(L, s, variant, how, src, **kw):
                     seg = seg.set_sample_width(2)
             else:
                 raise
-    if L is PD and s.frame_rate < 1:
+    if L is PD and (s.frame_rate < 1 or s.channels < 1):
         return ["rate 0"]
     if params_only:
         return ["load", seg.frame_rate, seg.channels, int(seg.frame_count())]
@@ -407,8 +407,8 @@ def sp_stream(L, s, variant, chunk, **kw):
             f.write(data)
         if L is P2:
             return list(L.AS.stream(path, chunk, **kw))
-        if s.frame_rate < 1 or variant == "chunk_nopad":
-            # stream does not take a wav with a rate of 0 or a chunk without its pad byte, see docs/differences.md
+        if s.frame_rate < 1 or s.channels < 1 or variant == "chunk_nopad":
+            # stream does not take a wav with a rate or a channel count of 0 or a chunk without its pad byte, see docs/differences.md
             raise L.exceptions.CouldntDecodeError("cant read this file")
         # pydub has no stream, the same file read whole and cut into chunks is what it has to give
         if not all(v is None or (isinstance(v, (int, float, fractions.Fraction, np.number)) and
@@ -418,7 +418,8 @@ def sp_stream(L, s, variant, chunk, **kw):
         step = int(chunk * (seg.frame_rate / 1000.0))
         if step < 1:
             raise ValueError("chunk_ms is too small")
-        raw = seg.raw_data
+        # a partial last frame stays in what from_file reads, stream leaves it out
+        raw = seg.raw_data[:int(seg.frame_count()) * seg.frame_width]
         return [seg._spawn(raw[i:i + step * seg.frame_width]) for i in range(0, len(raw), step * seg.frame_width)]
 
 
