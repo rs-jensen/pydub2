@@ -225,6 +225,9 @@ void interleave(const std::vector<std::string_view> &parts, size_t width, size_t
         }
     }
     size_t channels = parts.size();
+    if (frames > SIZE_MAX / (width * channels)) {
+        throw std::bad_alloc();
+    }
     char *out = alloc(frames * channels * width);
     memset(out, 0, frames * channels * width);
     by_width(width, [&](auto w) {

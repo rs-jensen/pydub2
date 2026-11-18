@@ -140,6 +140,11 @@ def test_errors():
         core.lin2lin(b"\0" * 4, 2, 5)
 
 
+def test_interleave_refuses_a_size_that_wraps():
+    with pytest.raises(MemoryError):
+        core.interleave([b"\0" * 4] * 4, 4, 1 << 62)
+
+
 @pytest.mark.parametrize("channels", [0])
 @pytest.mark.parametrize("data", [b"", b"\0" * 8])
 def test_no_channels(channels, data):
