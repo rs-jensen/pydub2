@@ -12,7 +12,7 @@ def peak_x(code):
     return (peak_mb("import pydub2\n" + MAKE + code) - peak_mb("import pydub2")) * 1e6 / PCM
 
 
-# measured on Linux with 10 minutes: ogg 3.2 before and 1.2 after, opus 3.1 and 1.2, mp3 3.4 and 1.1, flac 2.5 and 1.8
-@pytest.mark.parametrize("format, bound", [("ogg", 1.7), ("opus", 1.7)])
+# measured on Linux with 10 minutes: ogg 3.2 before and 1.2 after, opus 3.1 and 1.2, mp3 3.4 and 1.2, flac 2.5 and 1.8
+@pytest.mark.parametrize("format, bound", [("ogg", 1.7), ("opus", 1.7), ("mp3", 1.7)])
 def test_export_holds_the_audio_once(format, bound):
     assert peak_x("seg.export(io.BytesIO(), format=%r)" % format) < bound

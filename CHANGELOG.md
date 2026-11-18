@@ -20,7 +20,7 @@ What changed in each release.
 - Loading ogg vorbis, opus and flac needs about half the memory it did: the peak is now close to the size of the decoded audio. 10 minutes of ogg now peak at 237 MiB and of flac at 133 MiB, about half of before. This also holds with `pydub2.max_duration` set.
 - Loading through ffmpeg needs a third less memory: the peak for 200 MB of aiff went from 629 MB to 425 MB.
 - `detect_speech` needs a fixed amount of extra memory, not 3 times the audio. On 40 minutes it went from 1.3 GB to 19 MB. The ranges are the same.
-- Writing ogg and opus needs a third of the memory it did. 10 minutes of 16 bit stereo peaked at 3.2 and 3.1 times the size of the audio, now 1.2 times. The files are the same.
+- Writing ogg, opus and mp3 needs a third of the memory it did. 10 minutes of 16 bit stereo peaked at 3.2, 3.1 and 3.4 times the size of the audio, now 1.2 times. The files are the same.
 - Writing opus from 44.1 kHz audio on arm64 is about 40 percent faster. 10 minutes now take about 6.2 s.
 - `overlay` is 3 times faster and `normalize` and `apply_gain` are 1.9 times faster on 60 s of audio.
 - The `FileNotFoundError` for a missing ffmpeg says what it looked for, and suggests the `ffmpeg` extra only when `AudioSegment.converter` is not set.
