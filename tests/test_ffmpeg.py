@@ -300,3 +300,16 @@ def test_float_wav_ties_round_to_even_like_ffmpeg(tmp_path):
     got = AudioSegment.from_file_using_temporary_files(str(path))
     want = pydub.AudioSegment.from_file_using_temporary_files(str(path))
     assert got.sample_width == 2 and got.raw_data == want.raw_data
+
+
+def test_double_wav_near_a_tie_rounds_like_ffmpeg(tmp_path):
+    ties = np.array([0.5, 1.5, 2.5, 100.5, -0.5, -1.5, -2.5, -100.5])
+    samples = (np.concatenate([ties + 2.0 ** -25, ties - 2.0 ** -25]) / 32768).astype("<f8")
+    data = samples.tobytes()
+    fmt = struct.pack("<HHIIHH", 3, 1, 8000, 64000, 8, 64)
+    body = b"WAVEfmt " + struct.pack("<I", 16) + fmt + b"data" + struct.pack("<I", len(data)) + data
+    path = tmp_path / "a.wav"
+    path.write_bytes(b"RIFF" + struct.pack("<I", len(body)) + body)
+    got = AudioSegment.from_file_using_temporary_files(str(path))
+    want = pydub.AudioSegment.from_file_using_temporary_files(str(path))
+    assert got.sample_width == 2 and got.raw_data == want.raw_data

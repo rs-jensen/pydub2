@@ -395,8 +395,8 @@ def _span(d, wav, start_second, duration):
 
 def _to_16bit(data, width, rounding):
     # what ffmpeg makes of 8, 32 and 64 bit samples, a float source is rounded and an integer one is cut
-    if width == 8:
-        # the high 32 bits give the same 16 bit sample, cut or rounded
+    if width == 8 and not rounding:
+        # the high 32 bits give the same 16 bit sample when it is cut
         high = bytearray(len(data) // 2)
         for i in range(4):
             high[i::4] = data[4 + i::8]
