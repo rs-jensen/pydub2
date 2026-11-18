@@ -734,13 +734,6 @@ class AudioSegment(object):
         if isinstance(file, bytes):
             file = filename
         file, close_file = _fd_or_path_or_tempfile(file, 'rb', tempfile=False)
-        if lim[2] is not None:
-            # a name or a file that can seek says its size, so one over max_file_size is not read
-            size = file_size(file) or 0
-            if size > lim[2] and close_file:
-                file.close()
-            check_size(size, lim)
-
         if format:
             format = format.lower()
             format = AUDIO_FILE_EXT_ALIASES.get(format, format)
@@ -767,6 +760,12 @@ class AudioSegment(object):
             })
 
         wav = is_format("wav")
+        if lim[2] is not None:
+            # a name or a file that can seek says its size, so one over max_file_size is not read, a wav from 0
+            size = file_size(file, 0 if wav else None) or 0
+            if size > lim[2] and close_file:
+                file.close()
+            check_size(size, lim)
         if not wav and (is_format("raw") or is_format("pcm")):
             sample_width = kwargs['sample_width']
             frame_rate = kwargs['frame_rate']

@@ -236,12 +236,12 @@ def check_size(size, lim):
         raise tagged(CouldntDecodeError("this file is larger than max_file_size"), reason="too_big")
 
 
-def file_size(f):
-    # None for a pipe or a socket
+def file_size(f, start=None):
+    # what is left to read from start, from the current position when it is None, and None for a pipe or a socket
     try:
         at = f.tell()
         try:
-            return f.seek(0, 2)
+            return f.seek(0, 2) - (at if start is None else start)
         finally:
             f.seek(at)
     except (AttributeError, OSError, ValueError):

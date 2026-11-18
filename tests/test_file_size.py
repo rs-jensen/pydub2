@@ -179,6 +179,40 @@ def test_the_position_comes_back_when_a_seek_fails():
     assert f.tell() == 4
 
 
+@pytest.mark.parametrize("format", ["flac", "ogg", "mp3"])
+def test_the_size_is_what_is_left_to_read(cap, format):
+    data = audio(format)
+    want = AudioSegment.from_file(io.BytesIO(data), format).raw_data
+    junk = b"\0" * 100
+    cap(len(data))
+    for load in (lambda f: AudioSegment.from_file(f, format).raw_data,
+                 lambda f: b"".join(c.raw_data for c in AudioSegment.stream(f))):
+        f = Counted(junk + data)
+        f.seek(len(junk))
+        assert load(f) == want
+        assert f.taken == len(data)
+    cap(len(data) - 1)
+    f = Counted(junk + data)
+    f.seek(len(junk))
+    with pytest.raises(CouldntDecodeError, match=TOO_BIG):
+        AudioSegment.from_file(f, format)
+    assert f.taken == 0 and f.tell() == len(junk)
+
+
+def test_a_wav_is_measured_from_the_start(cap):
+    data = audio("wav")
+    cap(len(data) - 1)
+    f = Counted(data)
+    f.seek(10)
+    with pytest.raises(CouldntDecodeError, match=TOO_BIG):
+        AudioSegment.from_file(f, "wav")
+    assert f.taken == 0
+    cap(len(data))
+    f = Counted(data)
+    f.seek(10)
+    assert len(AudioSegment.from_file(f, "wav")) == 1000
+
+
 class Idle(io.RawIOBase):
     """A non-blocking file with nothing to give yet."""
 
