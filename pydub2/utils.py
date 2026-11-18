@@ -1080,6 +1080,8 @@ def mediainfo_json(filepath, read_ahead_limit=-1):
 def mediainfo(filepath):
     """Return dictionary with media info(codec, duration, size, bitrate...) from filepath
     """
+    if not hasattr(filepath, "read"):
+        os.fsdecode(filepath)
     if not _has_prober():
         f, src = _open(filepath)
         native = None

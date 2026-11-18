@@ -1,5 +1,6 @@
 import array
 import inspect
+import io
 import math
 
 import pytest
@@ -54,6 +55,10 @@ CASES = {
     "speedup": ("effects", lambda m, s: m.effects.speedup(s, 1.5, 50, 10), ("append", "__add__", "_spawn")),
     "normalize": ("effects", lambda m, s: m.effects.normalize(s), ("max", "max_possible_amplitude", "apply_gain")),
     "invert_phase": ("effects", lambda m, s: m.effects.invert_phase(s), ("_spawn",)),
+    "export_wav": ("audio_segment", lambda m, s: s.export(io.BytesIO(), format="wav").read(), ("frame_count",)),
+    "export_flac": ("audio_segment", lambda m, s: bool(s.export(io.BytesIO(), format="flac").read()), ("frame_count",)),
+    "export_mp3": ("audio_segment", lambda m, s: bool(s.export(io.BytesIO(), format="mp3").read()), ("frame_count",)),
+    "export_raw": ("audio_segment", lambda m, s: s.export(io.BytesIO(), format="raw").read(), ("frame_count",)),
 }
 
 
@@ -119,4 +124,31 @@ def test_overridden_property(name, case):
         out[lib.__name__] = result(call(lib, s))
         seen[lib.__name__] = log
     assert seen["pydub"] and seen["pydub2"] == seen["pydub"]
+    assert out["pydub2"] == out["pydub"]
+
+
+def partial_frame(lib, log, *names):
+    # 70 whole frames of 3 channels and 2 stray samples
+    samples = array.array("h", [int(9000 * math.sin(i * 0.3)) for i in range(212)])
+    seg = tracked(lib.AudioSegment, log, *names)(samples.tobytes(), frame_rate=1000, channels=1, sample_width=2)
+    return seg._spawn(samples.tobytes(), {"channels": 3, "frame_width": 6})
+
+
+@pytest.mark.parametrize("case", ["compress", "low_pass", "high_pass", "detect_silence", "detect_nonsilent"])
+def test_override_slow_path_with_partial_last_frame(case):
+    calls = {
+        "compress": lambda m, s: m.effects.compress_dynamic_range(s),
+        "low_pass": lambda m, s: m.effects.low_pass_filter(s, 100),
+        "high_pass": lambda m, s: m.effects.high_pass_filter(s, 100),
+        "detect_silence": lambda m, s: m.silence.detect_silence(s, 10, -90),
+        "detect_nonsilent": lambda m, s: m.silence.detect_nonsilent(s, 10, -90),
+    }
+    names = {"compress": ("rms", "get_frame"), "low_pass": ("get_array_of_samples",),
+             "high_pass": ("get_array_of_samples",), "detect_silence": ("rms",), "detect_nonsilent": ("rms",)}[case]
+    out = {}
+    for lib in (pydub, pydub2):
+        try:
+            out[lib.__name__] = result(calls[case](lib, partial_frame(lib, set(), *names)))
+        except Exception as e:
+            out[lib.__name__] = type(e), str(e)
     assert out["pydub2"] == out["pydub"]

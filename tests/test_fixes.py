@@ -10,7 +10,7 @@ import pytest
 
 import _pydub2
 import pydub2
-from pydub2 import silence, utils
+from pydub2 import effects, silence, utils
 from pydub2.exceptions import CouldntEncodeError
 from pydub2.generators import Sine
 
@@ -164,3 +164,40 @@ def test_numpy_float(dtype):
     seg = pydub2.AudioSegment.from_numpy(np.array([0, 0.5, -1, 3, -3], dtype=dtype), 8000)
     assert seg.sample_width == 2
     assert list(seg.get_array_of_samples()) == [0, 16384, -32767, 32767, -32767]
+
+
+def test_raw_24_bit_with_stray_bytes():
+    seg = pydub2.AudioSegment.from_file(io.BytesIO(bytes(range(74))), format="raw", sample_width=3, frame_rate=96000,
+                                        channels=2)
+    assert len(seg.raw_data) == 96 and seg.sample_width == 4
+
+
+def partial_frame():
+    # 70 whole frames of 3 channels and 2 stray bytes
+    mono = pydub2.AudioSegment(struct.pack("<h", 10) * 210, sample_width=2, frame_rate=1000, channels=1)
+    return mono._spawn(struct.pack("<h", 10) * 212, {"channels": 3, "frame_width": 6})
+
+
+def test_partial_frame_set_channels():
+    assert len(partial_frame().set_channels(1).raw_data) == 140
+
+
+@pytest.mark.parametrize("name", ["low_pass_filter", "high_pass_filter"])
+def test_partial_frame_filter(name):
+    seg = partial_frame()
+    # the function, not the method: importing scipy_effects replaces the methods
+    out = getattr(effects, name)(seg, 100)
+    assert len(out.raw_data) == 424 and out.raw_data[-2:] == seg.raw_data[-2:]
+
+
+def test_partial_frame_compress():
+    assert len(partial_frame().compress_dynamic_range().raw_data) == 420
+
+
+def test_partial_frame_detect_silence():
+    assert silence.detect_nonsilent(partial_frame(), min_silence_len=10, silence_thresh=-90) == [[0, 70]]
+
+
+def test_compress_nothing_with_odd_width():
+    seg = pydub2.AudioSegment(b"", sample_width=5, frame_rate=8000, channels=1)
+    assert seg.compress_dynamic_range().raw_data == b""

@@ -440,11 +440,13 @@ class AudioSegment(object):
         # (stdlib audioop and array modules do not support 24-bit data)
         if self.sample_width == 3:
             # the low byte is padding, 0xff for negative samples like pydub does
-            out = bytearray(len(self._data) // 3 * 4)
-            out[0::4] = self._data[2::3].translate(bytes(128) + b"\xff" * 128)
-            out[1::4] = self._data[0::3]
-            out[2::4] = self._data[1::3]
-            out[3::4] = self._data[2::3]
+            # stray bytes after the last whole sample are dropped
+            d = self._data[:len(self._data) // 3 * 3]
+            out = bytearray(len(d) // 3 * 4)
+            out[0::4] = d[2::3].translate(bytes(128) + b"\xff" * 128)
+            out[1::4] = d[0::3]
+            out[2::4] = d[1::3]
+            out[3::4] = d[2::3]
             self._data = bytes(out)
             self.sample_width = 4
             self.frame_width = self.channels * self.sample_width
@@ -1085,6 +1087,17 @@ class AudioSegment(object):
 
         if format in ("raw", "pcm"):
             return _write_out(out_f, self._data)
+
+        int(self.frame_count())  # pydub calls it for the wav header and a subclass can override it
+
+        if codec is not None or parameters is not None or format != "wav":
+            args = [] if parameters is None else list(parameters)
+            if codec is not None:
+                args.append(codec)
+            if bitrate is not None and not isinstance(bitrate, int):
+                args.append(bitrate)
+            for arg in args:
+                os.fsencode(arg)
 
         # a partial last frame is dropped, the encoders take whole frames only
         fw = self.channels * self.sample_width

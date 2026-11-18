@@ -153,6 +153,9 @@ def module_diffs(name):
         own = getattr(a, "__module__", None) == name
         values = name == "pydub.audio_segment" and n == "AudioSegment"
         check(key, a, b, diffs, own=own, values=values)
+        if kind(a).startswith("data") and isinstance(a, (bool, int, float, str, bytes, tuple, list, dict, set)) \
+                and not same_value(a, b):
+            diffs.append((key, repr(a)[:100], repr(b)[:100]))
     return [d for d in diffs if d[0] not in ALLOWED]
 
 

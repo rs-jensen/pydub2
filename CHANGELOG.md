@@ -29,6 +29,7 @@ What changed in each release.
 ### Fixed
 
 - `rms`, `dBFS`, `detect_silence`, `compress_dynamic_range` and `normalize` of 32 bit audio now match the audioop you have. The first call asks that audioop, so macOS arm64 and the Pythons that fuse the sum give pydub's numbers where they were off by 1 (`rms`) or 1e-8 dB (`dBFS`).
+- 24 bit data with stray bytes after the last whole sample loads like pydub does, and `set_channels`, `low_pass_filter`, `high_pass_filter`, `compress_dynamic_range` and `detect_silence` leave a partial last frame out of the work instead of raising `ValueError`.
 - A wav export of 8 or 24 bit audio with an odd number of bytes is what the `wave` module of the running Python writes, so there is no pad byte before Python 3.15.
 - A damaged flac file whose header says the maximum block size is 0 no longer makes the seek compute an infinite byte offset, which is undefined in C.
 - A damaged ogg vorbis file whose last granule position is close to the 64 bit limits no longer overflows a signed integer when its length is worked out, which is undefined in C++.
