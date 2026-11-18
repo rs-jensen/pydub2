@@ -281,7 +281,7 @@ class Plain(float):
 
 VARIANTS = ["pcm", "pcm", "pcm", "ext", "float", "extfloat", "alaw", "mulaw", "extalaw", "ext24", "odd", "odd_tail",
             "chunk", "chunk_nopad"]
-# pydub reads these (and 64 bit float) as integer pcm or alaw bytes, pydub2 decodes them, so only rate, channels and length are compared
+# pydub reads these as integer pcm or alaw bytes, pydub2 decodes them, so only rate, channels and length are compared
 WRONG_IN_PYDUB = {"extfloat", "alaw", "mulaw", "extalaw"}
 GUID = b"\x00\x00\x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71"
 
@@ -291,8 +291,10 @@ def ck(tag, body, pad=True):
 
 
 def wav_variant(s, variant):
-    w, ch, rate = s.sample_width, s.channels, s.frame_rate
+    w, ch, rate = s.sample_width, s.channels, max(s.frame_rate, 0)
     audioop = pydub.audio_segment.audioop
+    if w not in (1, 2, 4):
+        raise ValueError("no wav of this width")
     raw = s.raw_data
     if variant not in ("odd", "odd_tail"):
         raw = raw[:len(raw) // s.frame_width * s.frame_width]
@@ -304,9 +306,7 @@ def wav_variant(s, variant):
         if variant == "ext24" and w == 4:
             raw = (np.frombuffer(raw, "<u4") & 0xFFFFFF00).astype("<u4").tobytes()
     elif variant in ("float", "extfloat"):
-        a = np.frombuffer(audioop.lin2lin(raw, w, 4), "<i4") / 2.0 ** 31
-        a = a.astype("<f4" if w < 4 else "<f8")
-        raw, code, bits = a.tobytes(), 3, 32 if w < 4 else 64
+        raw, code, bits = (np.frombuffer(audioop.lin2lin(raw, w, 4), "<i4") / 2.0 ** 31).astype("<f4").tobytes(), 3, 32
         ext = 3 if variant == "extfloat" else None
     elif variant in ("alaw", "mulaw", "extalaw"):
         enc = audioop.lin2ulaw if variant == "mulaw" else audioop.lin2alaw
@@ -338,23 +338,22 @@ def fits_native(v):
     return v is None or (isinstance(v, (int, float, fractions.Fraction, np.number)) and 0 <= v < 1e12)
 
 
-def fits_ffmpeg(k, v):
-    return v is None or (isinstance(v, (int, float, fractions.Fraction, np.number)) and (abs(v) < 1e6 if k == "start_second" else 0 <= v < 1e6))
-
-
 def sp_load(L, s, variant, how, src, **kw):
     kw = {k: num(v) for k, v in kw.items()}
     data = wav_variant(s, variant)
     wrong = kw.get("format") not in (None, "wav", "WAV") and isinstance(kw.get("format"), str)
     # pydub2 has no decoder of its own for these, so the format goes to ffmpeg there too
     via_ffmpeg = variant in WRONG_IN_PYDUB
-    # and pydub reads the other two wrongly from a file object or a pipe, see docs/differences.md
-    params_only = via_ffmpeg or (variant == "float" and s.sample_width == 4) or (variant == "ext24" and src in ("bytes", "file"))
+    # and so does ffmpeg for the other one, which pydub has read a file object, a pipe or a nameless path, see docs/differences.md
+    params_only = via_ffmpeg or (variant == "ext24" and (src in ("bytes", "file") or (how == "from_file_using_temporary_files" and src == "pathlib")))
     if L is PD:
         kw = {k: for_pydub(v) if k != "format" else v for k, v in kw.items()}
+        # pydub2 reads wav data as what it is, ffmpeg is told the format and fails, or reads the audio as a stereo mp3
+        if wrong and kw["format"] not in ("raw", "pcm") and not via_ffmpeg and all(fits_native(v) for k, v in kw.items() if k != "format"):
+            del kw["format"]
     if variant in ("extfloat", "extalaw"):
-        # pydub reads these in python and pydub2 has ffmpeg do it, which takes only a format and seconds it can parse
-        kw = {k: v for k, v in kw.items() if (k == "format" and not wrong) or (k != "format" and fits_ffmpeg(k, v))}
+        # pydub reads these in python and pydub2 has ffmpeg do it, which cuts and takes formats in its own way
+        kw = {k: v for k, v in kw.items() if k == "format" and not wrong}
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "a.wav")
         with open(path, "wb") as f:
@@ -371,20 +370,28 @@ def sp_load(L, s, variant, how, src, **kw):
         try:
             seg = load(**kw)
         except Exception as e:
+            name = type(e).__name__
+            # a wav with a rate of 0 is damaged to pydub2 and read by pydub unless ffmpeg gets it, see docs/differences.md
+            if s.frame_rate < 1 and name == "CouldntDecodeError":
+                return ["rate 0"]
             if L is not PD:
                 raise
-            name = type(e).__name__
             if name == "CouldntDecodeError" and wrong and not via_ffmpeg and all(fits_native(v) for k, v in kw.items() if k != "format"):
                 # a wrong format is ignored for wav data that pydub2 reads itself, pydub hands it to ffmpeg
                 seg = load(**{k: v for k, v in kw.items() if k != "format"})
             elif how == "from_file_using_temporary_files" and isinstance(e, ValueError) and "closed file" in str(e):
                 # pydub cannot slice what it read and raises here, pydub2 goes on to ffmpeg like from_file, with 16 bit
                 seg = load("from_file", **kw).set_sample_width(2)
-            elif name == "CouldntDecodeError" and variant == "odd_tail" and s.channels >= 6 and not len(s.raw_data) and src in ("bytes", "file"):
-                # ffmpeg cannot read an empty wav with 6 channels and a chunk after the data from a pipe, pydub2 does
+            elif name == "CouldntDecodeError" and variant in ("odd", "odd_tail") and not int(s.frame_count()) and src in ("bytes", "file") and \
+                    all(fits_native(v) for k, v in kw.items() if k != "format"):
+                # ffmpeg cannot read a wav without a whole frame and with an unpadded chunk from a pipe, pydub2 does
                 seg = load(src="path", **kw)
+                if how == "from_file_using_temporary_files":
+                    seg = seg.set_sample_width(2)
             else:
                 raise
+    if L is PD and s.frame_rate < 1:
+        return ["rate 0"]
     if params_only:
         return ["load", seg.frame_rate, seg.channels, int(seg.frame_count())]
     return seg
@@ -400,8 +407,8 @@ def sp_stream(L, s, variant, chunk, **kw):
             f.write(data)
         if L is P2:
             return list(L.AS.stream(path, chunk, **kw))
-        if variant == "chunk_nopad":
-            # stream does not take a chunk without its pad byte, from_file does, see docs/differences.md
+        if s.frame_rate < 1 or variant == "chunk_nopad":
+            # stream does not take a wav with a rate of 0 or a chunk without its pad byte, see docs/differences.md
             raise L.exceptions.CouldntDecodeError("cant read this file")
         # pydub has no stream, the same file read whole and cut into chunks is what it has to give
         if not all(v is None or (isinstance(v, (int, float, fractions.Fraction, np.number)) and
@@ -485,8 +492,8 @@ def sp_export(L, s, fmt, **kw):
     if L is PD:
         # pydub takes no format from the target and has no muxer called m4a or aac, see docs/differences.md
         fmt = {None: "mp3", "m4a": "ipod", "aac": "adts"}.get(fmt, fmt)
-        if fmt == "opus" and s.channels in (3, 4) and native_bitrate(kw.get("bitrate"), s.channels):
-            # ffmpeg has no channel layout for these in libopus, pydub2 writes them unless a bitrate sends it to ffmpeg
+        if fmt == "opus" and s.channels in (3, 4) and s.frame_rate >= 100 and kw.get("cover") is None and native_bitrate(kw.get("bitrate"), s.channels):
+            # ffmpeg has no channel layout for these in libopus, pydub2 writes them unless something sends it to ffmpeg
             s = L.AS(data=bytes(len(s.raw_data) // s.channels * 2), sample_width=s.sample_width, frame_rate=s.frame_rate, channels=2)
     with tempfile.TemporaryDirectory() as d:
         if "cover" in kw:

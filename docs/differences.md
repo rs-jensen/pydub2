@@ -17,7 +17,8 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - A wrong `format` is ignored for wav, flac, mp3, ogg and opus data, which is read as what it is. pydub raises `CouldntDecodeError`, because ffmpeg is told the wrong format.
 - Sample widths other than 8, 16, 24 and 32 bit that ffprobe reports for a file are read as 16 bit.
 - `stream` raises `CouldntDecodeError` for a wav with an odd chunk that has no pad byte after it. `from_file` reads such a file like pydub does.
-- ffmpeg cannot read an empty wav with 6 or more channels and a chunk after the data from a pipe, so pydub raises `CouldntDecodeError` for it. pydub2 reads it.
+- ffmpeg cannot read some wav from a pipe that has no whole frame and an odd chunk without its pad byte or a chunk after the data, so pydub raises `CouldntDecodeError` for them. pydub2 reads them.
+- A wav with a sample rate of 0 raises `CouldntDecodeError`, where pydub reads it into a segment with a `frame_rate` of 0.
 
 ### How the samples differ
 
