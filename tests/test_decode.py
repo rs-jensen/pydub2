@@ -596,6 +596,24 @@ def test_mp3_granules_past_the_frame(tmp_path, k, bitrate):
     same_as_ffmpeg(tmp_path, "short.mp3", bytes(m))
 
 
+# more frames than the Info tag counts put the padding in the middle, where ffmpeg drops it. Its parser keeps the old
+# frame duration for a while after junk or a header of another mpeg version, which moves the padding
+def test_mp3_padding_in_the_middle(tmp_path):
+    m = open(make(tmp_path, "a.mp3", 2, "-c:a", "libmp3lame", "-b:a", "128k", samples=CLICKS), "rb").read()
+    starts = mp3_frames(m)
+    for k in (10, 20, 30):
+        same_as_ffmpeg(tmp_path, "dup.mp3", m[:starts[k + 1]] + m[starts[k]:])
+    d = _pydub2.Decoder(m[:starts[11]] + m[starts[10]:])
+    whole = d.read()
+    for at in range(len(CLICKS) - 3000, len(whole) // 4, 211):
+        d.seek(at)
+        assert d.read(1500) == whole[at * 4:(at + 1500) * 4]
+    for k, bitrate in ((13, 1), (14, 5), (16, 1), (16, 5), (18, 3), (27, 1), (36, 1)):
+        d = bytearray(m)
+        d[starts[k] + 2] = d[starts[k] + 2] & 15 | bitrate << 4
+        same_as_ffmpeg(tmp_path, "rate.mp3", bytes(d))
+
+
 @pytest.mark.parametrize("channels", [2, 3, 4, 5, 6, 7, 8])
 @pytest.mark.parametrize("name, codec", [("a.ogg", "libvorbis"), ("a.opus", "libopus")])
 def test_channel_order(tmp_path, channels, name, codec):

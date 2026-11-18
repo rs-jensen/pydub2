@@ -486,6 +486,8 @@ struct Mp3 : Dec {
     // decoded floats from frame start on, pos is the next frame to hand out
     std::vector<float> buf;
     uint64_t start = 0, pos = 0;
+    // padding ffmpeg drops in the middle, in decoded frames
+    uint64_t hole = 0, hole_at = 0;
 
     void init() {
         uint64_t count = 0, len = in.len, at = mp3_id3(in), off = 0;
@@ -549,9 +551,10 @@ struct Mp3 : Dec {
             first = find(next);
         }
         // like its parser: the 4 byte window starts empty after a frame, junk other than zeros drops the next frame
-        uint64_t t = 0, e = count * drmp3_hdr_frame_samples(load(first)), drop = 0;
+        uint64_t t = 0, e = count * drmp3_hdr_frame_samples(load(first)), drop = 0, out = 0, dur = 0;
         bool none = true, after = false;
-        int gaps = 0;
+        int gaps = 0, heads = 0;
+        uint32_t last = 0;
         cut = e < cut ? 0 : cut;
         for (uint64_t p = first; p < len;) {
             uint64_t h = p;
@@ -579,11 +582,17 @@ struct Mp3 : Dec {
             if (zero) {
                 fr.push_back({h, n, bad});
             }
-            // the padding goes by the time of all frames, dropped ones too, and only the first carries the delay
-            uint64_t dur = drmp3_hdr_frame_samples(f);
+            // the padding goes by the time of all frames, dropped ones too, and only the first carries the delay. The
+            // parser keeps the old duration for two frames after junk and three after a new version, layer or rate
+            heads = last && ((be32(f) ^ last) & 0xfffe0c00) ? -3 : h != p ? -2 : heads;
+            last = be32(f);
+            dur = ++heads > 0 ? drmp3_hdr_frame_samples(f) : dur;
             if (keep && cut && t < e && t + dur > e - cut) {
-                drop += std::min(t + dur - (e - cut), dur);
+                uint64_t d = std::min(t + dur - (e - cut), dur);
+                hole_at = drop ? hole_at : out + dur - d;
+                drop += d;
             }
+            out += keep ? dur : 0;
             after = after || (keep && t >= e);
             skip = t || keep ? skip : 0;
             t += dur;
@@ -601,9 +610,10 @@ struct Mp3 : Dec {
         for (Frame &f : fr) {
             n += f.bad ? 0 : spf;
         }
-        // where the padding is not at the end ffmpeg drops it in the middle, we keep it
+        // where the padding is not at the end ffmpeg drops it in the middle
         cut = after ? 0 : drop;
-        frames = n > skip + cut ? n - skip - cut : 0;
+        hole = after && hole_at >= skip ? drop : 0;
+        frames = n > skip + cut + hole ? n - skip - cut - hole : 0;
         exact = true;
         pos = skip;
         memset(&dec, 0, sizeof(dec));
@@ -680,10 +690,17 @@ struct Mp3 : Dec {
             uint64_t have = start + buf.size() / c;
             uint64_t end = have - std::min<uint64_t>(have, cut);
             // a frame can only be converted once we know if the padding starts in it
-            uint64_t lim = eof ? end : end / spf * spf;
+            uint64_t lim = eof ? end : end / spf * spf, stop = eof ? end : UINT64_MAX;
+            if (hole && pos == hole_at) {
+                pos += hole;
+            }
+            if (hole && pos < hole_at) {
+                lim = std::min(lim, hole_at);
+                stop = std::min(stop, hole_at);
+            }
             if (pos < lim) {
                 size_t m = (size_t)std::min<uint64_t>(n - done, lim - pos);
-                convert(out + done * c * 2, pos, pos + m, eof ? end : UINT64_MAX);
+                convert(out + done * c * 2, pos, pos + m, stop);
                 pos += m;
                 done += m;
                 continue;
@@ -706,8 +723,9 @@ struct Mp3 : Dec {
     }
 
     void seek(uint64_t to) {
-        to = std::min(to, frames);
-        uint64_t want = (skip + to) / spf, g = 0;
+        to = std::min(to, frames) + skip;
+        to += hole && to >= hole_at ? hole : 0;
+        uint64_t want = to / spf, g = 0;
         size_t at = 0;
         for (; at < fr.size() && (fr[at].bad || g++ < want); at++) {
         }
@@ -726,7 +744,7 @@ struct Mp3 : Dec {
         }
         buf.clear();
         start = want * spf;
-        pos = skip + to;
+        pos = to;
         eof = false;
     }
 };
