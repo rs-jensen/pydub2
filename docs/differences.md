@@ -117,7 +117,7 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 
 These files are read properly:
 
-- WAVE_FORMAT_EXTENSIBLE wav (ffmpeg writes it for more than 2 channels) with a-law, mu-law or float samples: pydub reads the bytes as integer pcm and gives noise.
+- WAVE_FORMAT_EXTENSIBLE wav (ffmpeg writes it for more than 2 channels and for float wav of any channel count) with a-law, mu-law or float samples: pydub reads the bytes as integer pcm and gives noise.
 - flac at 24 bit and 192 kHz with 6 or 8 channels: pydub gives 0 frames.
 - wav with 12 bit samples in 16 bit: pydub gives a sample width of 1 and twice the frames.
 - WAVE_FORMAT_EXTENSIBLE wav with 24 valid bits in 32 bit samples, from a file object: ffmpeg takes it for 24 bit float and pydub gives noise.
