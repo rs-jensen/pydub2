@@ -165,6 +165,26 @@ def test_data_and_spawn_refuse_a_file_object_over_the_limit(cap):
     assert AudioSegment(data=Counted(data)).raw_data == seg.raw_data
 
 
+class Idle(io.RawIOBase):
+    """A non-blocking file with nothing to give yet."""
+
+    def readable(self):
+        return True
+
+    def read(self, *a):
+        return None
+
+
+@pytest.mark.parametrize("limit", [None, 1 << 20])
+def test_a_read_that_gives_none_is_no_data(cap, limit):
+    cap(limit)
+    # pydub hands ffmpeg nothing and raises CouldntDecodeError
+    with pytest.raises(CouldntDecodeError):
+        AudioSegment.from_file(Idle(), "flac")
+    with pytest.raises(CouldntDecodeError):
+        list(AudioSegment.stream(Idle()))
+
+
 def test_a_float_limit_stops_a_pipe(cap):
     cap(1e6)
     f = Pipe(audio("flac"), True)

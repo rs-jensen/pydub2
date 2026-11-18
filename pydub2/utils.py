@@ -250,7 +250,8 @@ def file_size(f):
 def read_file(f, lim):
     # a file can grow after its size was read, so with a limit the read stops one byte past it either way
     if lim[2] is None:
-        return bytes(f.read())
+        # a non-blocking file gives None for no data, pydub then hands ffmpeg nothing
+        return bytes(f.read() or b"")
     check_size(file_size(f) or 0, lim)
     return read_upto(f, lim)
 
@@ -262,10 +263,11 @@ def read_upto(f, lim, n=-1):
         n = top if n < 0 else min(n, top)
     parts = []
     while n > 0:
-        parts.append(f.read(min(n, 1 << 24)))
-        if not parts[-1]:
+        part = f.read(min(n, 1 << 24))
+        if not part:
             break
-        n -= len(parts[-1])
+        parts.append(part)
+        n -= len(part)
     data = b"".join(parts)
     check_size(len(data), lim)
     return data
