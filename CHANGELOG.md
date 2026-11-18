@@ -33,6 +33,7 @@ What changed in each release.
 - A wav export of 8 or 24 bit audio with an odd number of bytes is what the `wave` module of the running Python writes, so there is no pad byte before Python 3.15.
 - A damaged flac file whose header says the maximum block size is 0 no longer makes the seek compute an infinite byte offset, which is undefined in C.
 - A damaged ogg vorbis file whose last granule position is close to the 64 bit limits no longer overflows a signed integer when its length is worked out, which is undefined in C++.
+- Starting an mp3 export no longer rewrites the quantizer tables that the mp3 exports running in other threads are reading. pydub2-mp3 patches LAME 3.100 at build time to fill them once.
 - The Windows wheels no longer need the Visual C++ redistributable. `import pydub2` failed with "DLL load failed" on a machine without it.
 - On Windows, Ctrl-C reaches ffmpeg again when you run from a console, and ffmpeg is stopped when a call is interrupted or times out.
 - `export` no longer fails on Windows when a virus scanner still holds the temporary file ffmpeg wrote.

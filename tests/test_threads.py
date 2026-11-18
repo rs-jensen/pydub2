@@ -1,3 +1,4 @@
+import ctypes
 import hashlib
 import io
 import os
@@ -295,3 +296,22 @@ signal.setitimer(signal.ITIMER_REAL, 0)
 assert size == 5 * (20 << 20) and seen in ([], [size])
 """
     subprocess.run([sys.executable, "-c", code], check=True, timeout=120)
+
+
+def test_lame_fills_its_tables_once():
+    # a second init writing them again races with the encoders of other threads, tsan sees it
+    from pydub2 import _mp3
+    lame = _mp3.lib()
+    if lame is None:
+        pytest.skip("no lame")
+    try:
+        pow43 = (ctypes.c_float * 2).in_dll(lame, "pow43")
+    except ValueError:
+        pytest.skip("this lame does not export its tables")
+    SEG[:100].export(io.BytesIO(), format="mp3")
+    pow43[1] = 7.0
+    try:
+        SEG[:100].export(io.BytesIO(), format="mp3")
+        assert pow43[1] == 7.0
+    finally:
+        pow43[1] = 1.0

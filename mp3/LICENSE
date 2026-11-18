@@ -15,7 +15,8 @@ The full list is in the headers of the source files.
 
 This wheel uses LAME as the LAME project asks: it is a separate shared library
 (libmp3lame.so, libmp3lame.dylib or libmp3lame.dll in the pydub2_mp3 folder),
-it is built from the unmodified release tarball, and LAME is acknowledged here
+it is built from the release tarball with one patch (lame_patch.cmake in the source, it fills the
+quantizer tables once), and LAME is acknowledged here
 with a link to its web site, https://lame.sourceforge.io
 
 Source code: the exact source of the library in this wheel is the release
