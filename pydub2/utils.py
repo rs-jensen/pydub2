@@ -248,16 +248,16 @@ def file_size(f, start=None):
         return None
 
 
-def read_file(f, lim):
+def read_file(f, lim, none_error=False):
     # a file can grow after its size was read, so with a limit the read stops one byte past it either way
     if lim[2] is None:
         # a non-blocking file gives None for no data, pydub then hands ffmpeg nothing
         return bytes(f.read() or b"")
     check_size(file_size(f) or 0, lim)
-    return read_upto(f, lim)
+    return read_upto(f, lim, none_error=none_error)
 
 
-def read_upto(f, lim, n=-1):
+def read_upto(f, lim, n=-1, none_error=False):
     # read(n) sets aside n bytes first, so a cap far past the file is read in pieces
     if lim[2] is not None:
         top = int(lim[2]) + 1
@@ -265,6 +265,9 @@ def read_upto(f, lim, n=-1):
     parts = []
     while n > 0:
         part = f.read(min(n, 1 << 24))
+        if part is None and none_error:
+            # what len() says of it in pydub
+            raise TypeError("object of type 'NoneType' has no len()")
         if not part:
             break
         parts.append(part)
@@ -283,8 +286,7 @@ def read_capped(d, n, lim=None):
     cap = frame_cap(d.rate, fw, lim)
     if cap >= 0:
         n = cap if n < 0 else min(n, cap)
-    # a count the core cant take reads to the end
-    pcm = d.read(-1 if n >= 2 ** 62 else n)
+    pcm = d.read(n)
     check_duration(len(pcm) // fw, d.rate, fw, lim)
     return pcm
 

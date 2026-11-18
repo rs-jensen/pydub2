@@ -67,7 +67,8 @@ chained vorbis file or an mp3 export with unusual `parameters`.
 ## New compared with pydub
 
 Read a long file piece by piece. `AudioSegment.stream` yields `chunk_ms` long segments and holds
-only the current one in memory. It reads wav, flac, mp3, ogg and opus.
+only the current one in memory. It reads wav, flac, mp3, ogg and opus. A file object or a named pipe is
+read whole first.
 
 ```python
 for chunk in AudioSegment.stream("long.flac", chunk_ms=10000):
@@ -202,7 +203,7 @@ are read once at the start of each load. A limit that is not `None` or a number 
 
 A file object, such as a `BytesIO` or an uploaded file, and a named pipe are read into memory whole
 before they are decoded. `max_bytes` and `max_duration` bound what the file decodes to, not that read.
-`max_file_size` bounds the read. A path is refused from its size before anything is read. A file object
+`max_file_size` bounds the read, and it is the only limit that bounds a named pipe or a socket. A path is refused from its size before anything is read. A file object
 that can seek is measured from where it stands to its end, because that is what is read. A wav is the
 exception, it is read from the start as in pydub, and so are `mediainfo` and `mediainfo_json`, so those
 measure the whole file. A pipe or a socket is read in pieces and stops one byte past the limit, and so

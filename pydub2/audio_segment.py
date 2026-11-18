@@ -320,6 +320,15 @@ def _slice_frames(n, rate, start, end):
     return int(min(start, ms) * (rate / 1000.0)), int(min(end, ms) * (rate / 1000.0))
 
 
+class _Refused(Exception):
+    pass
+
+
+def _ffmpeg_time(v):
+    # a position the decoder here cuts at, anything negative, not finite or too large is left to ffmpeg like pydub does
+    return v is None or (isinstance(v, numbers.Real) and 0 <= v < 1e12)
+
+
 def _span(d, wav, start_second, duration):
     # (first frame, frame count or -1, final length from the count read) of what pydub returns, None if odd
     if start_second is None and duration is None:
@@ -338,6 +347,17 @@ def _span(d, wav, start_second, duration):
         return None
     end = float("inf") if duration is None else duration * 1000
     return a, n, lambda m: _slice_frames(m, d.rate, 0, end)[1]
+
+
+def _to_16bit(data, width, rounding):
+    # what ffmpeg makes of 8 and 32 bit samples, a float source is rounded and an integer one is cut
+    if width == 4 and rounding:
+        half = (0x8000).to_bytes(4, "little") * (1 << 18)
+        step = len(half)
+        data = b"".join(_pydub2.lin2lin(_pydub2.add(data[i:i + step], half[:len(data[i:i + step])], 4), 4, 2)
+                        for i in range(0, len(data), step))
+        return data
+    return _pydub2.lin2lin(data, width, 2)
 
 
 def _fit(data, m, want, fw, rate):
@@ -418,7 +438,7 @@ class AudioSegment(object):
             # normal construction
             lim = None if isinstance(data, (basestring, bytes)) else limits()
             if lim and lim[2] is not None:
-                data = read_file(data, lim)
+                data = read_file(data, lim, none_error=True)
             try:
                 data = data if isinstance(data, (basestring, bytes)) else data.read()
             except(OSError):
@@ -730,10 +750,15 @@ class AudioSegment(object):
 
     @classmethod
     def from_file_using_temporary_files(cls, file, format=None, codec=None, parameters=None, start_second=None, duration=None, **kwargs):
-        return cls.from_file(file, format, codec, parameters, start_second, duration, **kwargs)
+        # pydub gives 16 bit for what it hands to ffmpeg here, as it does not ask ffprobe for the width
+        return cls._load(True, file, format, codec, parameters, start_second, duration, **kwargs)
 
     @classmethod
     def from_file(cls, file, format=None, codec=None, parameters=None, start_second=None, duration=None, **kwargs):
+        return cls._load(False, file, format, codec, parameters, start_second, duration, **kwargs)
+
+    @classmethod
+    def _load(cls, tmp, file, format, codec, parameters, start_second, duration, **kwargs):
         lim = limits()
         try:
             filename = fsdecode(file)
@@ -864,6 +889,8 @@ class AudioSegment(object):
         # pydub reads pcm wav itself, without codec or parameters, and cuts it in python
         head = file.read(65536) if data is None else data[:65536]
         own = wav and _pydub_wav(head)
+        # the native decoders give 32 bit for what ffmpeg converts to 16 bit, rounded from float and cut from integers
+        narrow = None if not tmp or own else "round" if sniff(head) in ("ogg", "opus") else "cut"
         if close_file:
             file.close()
         # ffmpeg cuts vorbis by packet times that drift from the sample count, only ffmpeg lands on the same sample
@@ -871,7 +898,8 @@ class AudioSegment(object):
             head[27 + head[26]:][:7] == b"\x01vorbis" and _ffmpeg.find(cls.converter)
 
         # pydub hands anything else to ffmpeg
-        plain = all(v is None or isinstance(v, numbers.Real) for v in (start_second, duration))
+        plain = all(v is None or isinstance(v, numbers.Real) for v in (start_second, duration)) if own else \
+            _ffmpeg_time(start_second) and _ffmpeg_time(duration)
         tried = False
         if not pydub2.strict and (own or (codec is None and parameters is None)) and not cut and plain:
             tried = True
@@ -895,36 +923,52 @@ class AudioSegment(object):
                     finally:
                         if fh is not None:
                             fh.close()
-                span = None if stray else _span(d, own, start_second, duration)
+                try:
+                    span = None if stray else _span(d, own, start_second, duration)
+                except (ArithmeticError, ValueError):
+                    # pydub slices the wav and hands it to ffmpeg when that fails
+                    raise _Refused()
                 if span:
                     start, n, final = span
                     if start:
-                        d.seek(min(start, 1 << 62))
+                        d.seek(start)
                     pcm = read_capped(d, n, lim)
                     fw = d.channels * d.width
-                    return cls._segment(d, _fit(pcm, len(pcm) // fw, final(len(pcm) // fw), fw, d.rate))
-                obj = cls._segment(d, read_capped(d, -1, lim) + stray)
-                if start_second is None and duration is None:
-                    return obj
-                elif start_second is not None and duration is None:
-                    return obj[start_second*1000:]
-                elif start_second is None and duration is not None:
-                    return obj[:duration*1000]
-                else:
-                    return obj[start_second*1000:(start_second+duration)*1000]
+                    try:
+                        return cls._segment(d, _fit(pcm, len(pcm) // fw, final(len(pcm) // fw), fw, d.rate), narrow)
+                    except TooManyMissingFrames:
+                        raise _Refused()
+                obj = cls._segment(d, read_capped(d, -1, lim) + stray, narrow)
+                try:
+                    if start_second is None and duration is None:
+                        return obj
+                    elif start_second is not None and duration is None:
+                        return obj[start_second*1000:]
+                    elif start_second is None and duration is not None:
+                        return obj[:duration*1000]
+                    else:
+                        return obj[start_second*1000:(start_second+duration)*1000]
+                except Exception:
+                    raise _Refused()
+            except _Refused:
+                tried = False
             except RuntimeError:
                 if own:
                     obj = cls._pydub_wav_segment(filename, data, head, lim)
                     if obj is not None:
-                        if start_second is None and duration is None:
-                            return obj
-                        return obj[None if start_second is None else start_second * 1000:
-                                   None if duration is None else ((start_second or 0) + duration) * 1000]
+                        try:
+                            if start_second is None and duration is None:
+                                return obj
+                            return obj[None if start_second is None else start_second * 1000:
+                                       None if duration is None else ((start_second or 0) + duration) * 1000]
+                        except Exception:
+                            pass
 
         if tried and _ffmpeg.find(cls.converter) is None and any(is_format(f) for f in ("wav", "flac", "mp3", "ogg", "opus")):
             raise tagged(CouldntDecodeError("cant read this file"), sniff(head), "cant_decode")
         try:
-            wav = _ffmpeg.to_wav(cls.converter, None if piped else filename, data, format, codec, parameters, start_second, duration, lim)
+            wav = _ffmpeg.to_wav(cls.converter, None if piped else filename, data, format, codec, parameters, start_second, duration, lim,
+                                 not tmp)
         except (CouldntDecodeError, FileNotFoundError) as e:
             e.format = sniff(head) or getattr(e, "format", None)
             raise
@@ -959,20 +1003,28 @@ class AudioSegment(object):
         return cls(data=data)
 
     @classmethod
-    def _segment(cls, d, data):
+    def _segment(cls, d, data, narrow=None):
+        width = d.width
+        if narrow and width != 2:
+            data, width = _to_16bit(data, width, narrow == "round"), 2
         return cls(data=data, metadata={
-            'sample_width': d.width,
+            'sample_width': width,
             'frame_rate': d.rate,
             'channels': d.channels,
-            'frame_width': d.channels * d.width
+            'frame_width': d.channels * width
         })
 
     @classmethod
     def stream(cls, file, chunk_ms=10000, start_second=None, duration=None):
-        """Yields the file in chunk_ms pieces without loading all of it. wav, flac, mp3, ogg and opus only."""
+        """Yields the file in chunk_ms pieces. wav, flac, mp3, ogg and opus only. A path is not loaded whole, a file object or a fifo is."""
         lim = limits()
         filename = None if hasattr(file, "read") else fsdecode(file)
         data = read_file(file, lim) if filename is None else None
+        named = filename
+        if filename is not None and os.path.exists(filename) and not os.path.isfile(filename) and not os.path.isdir(filename):
+            # a fifo or a device gives its bytes once, so they are read here and not by name
+            with open(filename, "rb") as f:
+                data, filename = read_file(f, lim), None
         try:
             d = _pydub2.Decoder(data if filename is None else filename)
         except RuntimeError:
@@ -981,7 +1033,7 @@ class AudioSegment(object):
                 with open(filename, "rb") as f:
                     data = f.read(4096)
             if sniff(data[:4096]) in ("wav", "flac", "mp3", "ogg", "opus") or \
-                    (filename or "").lower().endswith((".wav", ".flac", ".mp3", ".ogg", ".opus")):
+                    (named or "").lower().endswith((".wav", ".flac", ".mp3", ".ogg", ".opus")):
                 raise CouldntDecodeError("cant read this file")
             raise CouldntDecodeError("stream only reads wav, flac, mp3, ogg and opus")
         if filename is not None and lim[2] is not None:
@@ -993,19 +1045,22 @@ class AudioSegment(object):
             except RuntimeError:
                 raise CouldntDecodeError("cant read this file")
         own = False
-        if filename is not None and filename.lower().endswith(".wav"):
-            with open(filename, "rb") as f:
-                own = _pydub_wav(f.read(65536))
-        span = _span(d, own, start_second, duration)
+        if named is not None and named.lower().endswith(".wav"):
+            if filename is None:
+                own = _pydub_wav(data[:65536])
+            else:
+                with open(filename, "rb") as f:
+                    own = _pydub_wav(f.read(65536))
+        span = _span(d, own, start_second, duration) if _ffmpeg_time(start_second) and _ffmpeg_time(duration) else None
         if not span:
-            raise ValueError("start_second and duration have to be plain numbers, 0 or more")
+            raise ValueError("start_second and duration have to be plain numbers, 0 or more and under 1e12")
         start, n, final = span
         fw = d.channels * d.width
         step = int(chunk_ms * (d.rate / 1000.0))
         if step < 1:
             raise ValueError("chunk_ms is too small")
         if start:
-            run(d.seek, min(start, 1 << 62))
+            run(d.seek, start)
         cap = frame_cap(d.rate, fw, lim)
 
         def chunks(d):
