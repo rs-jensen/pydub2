@@ -10,7 +10,7 @@ on:
         description: JSON list of runners, empty for all
         default: ""
       tag:
-        description: Run the version check as if this tag was pushed, for example v0.0.1
+        description: Run the version check as if this tag was pushed, for example v0.1.0
         default: ""
   push:
     tags: ["v*"]
@@ -203,23 +203,6 @@ jobs:
           path: release-notes.md
           if-no-files-found: ignore
 
-  publish-pydub2:
-    if: github.ref_type == 'tag'
-    needs: [wheels, sdist, mp3, compat, check, twine, version]
-    runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: main-*
-          path: dist
-          merge-multiple: true
-      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
-        with:
-          attestations: true
-
   publish-mp3:
     if: github.ref_type == 'tag'
     needs: [wheels, sdist, mp3, compat, check, twine, version]
@@ -237,9 +220,26 @@ jobs:
         with:
           attestations: true
 
+  publish-pydub2:
+    if: github.ref_type == 'tag'
+    needs: [wheels, sdist, mp3, compat, check, twine, version, publish-mp3]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: main-*
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          attestations: true
+
   publish-compat:
     if: github.ref_type == 'tag'
-    needs: [wheels, sdist, mp3, compat, check, twine, version]
+    needs: [wheels, sdist, mp3, compat, check, twine, version, publish-pydub2]
     runs-on: ubuntu-latest
     environment: pypi-compat
     permissions:

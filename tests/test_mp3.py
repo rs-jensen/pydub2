@@ -13,6 +13,8 @@ import pytest
 from pydub2 import AudioSegment, _ffmpeg, _mp3
 
 pydub = pytest.importorskip("pydub")
+# with pydub2-compat installed, import pydub gives pydub2, and then it cannot be the reference
+real_pydub = pydub.__name__ != "pydub2"
 has_mp3 = pytest.mark.skipif(not _mp3.available(), reason="pydub2-mp3 not installed")
 has_ff = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="no ffmpeg")
 
@@ -240,8 +242,9 @@ def test_mp3_tag_with_a_lone_surrogate_that_is_not_a_byte():
 @has_mp3
 def test_a_width_the_wave_module_refuses_is_not_written():
     seg = AudioSegment.from_file(io.BytesIO(b""), format="raw", sample_width=5, frame_rate=16000, channels=1)
-    old = pydub.AudioSegment.from_file(io.BytesIO(b""), format="raw", sample_width=5, frame_rate=16000, channels=1)
-    with pytest.raises(wave.Error):
-        old.export(io.BytesIO(), format="mp3")
+    if real_pydub:
+        old = pydub.AudioSegment.from_file(io.BytesIO(b""), format="raw", sample_width=5, frame_rate=16000, channels=1)
+        with pytest.raises(wave.Error):
+            old.export(io.BytesIO(), format="mp3")
     with pytest.raises(ValueError):
         seg.export(io.BytesIO(), format="mp3")
