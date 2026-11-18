@@ -423,15 +423,15 @@ NB_MODULE(_pydub2, m) {
         return out;
     });
 
-    m.def("lin2lin", [](nb::bytes data, long long width, long long new_width) {
+    m.def("lin2lin", [](nb::bytes data, long long width, long long new_width, bool nearest) {
         std::string_view s = str(data);
         nb::object out;
         {
             nb::gil_scoped_release g;
-            lin2lin(s, width, new_width, into(out));
+            lin2lin(s, width, new_width, into(out), nearest);
         }
         return out;
-    });
+    }, nb::arg("data"), nb::arg("width"), nb::arg("new_width"), nb::arg("nearest") = false);
 
     m.def("tomono", [](nb::bytes data, long long width, double lfac, double rfac) {
         std::string_view s = str(data);

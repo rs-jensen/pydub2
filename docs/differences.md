@@ -16,11 +16,17 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - `from_file_using_temporary_files` of a wav path with a `start_second` or `duration` that pydub cannot slice, like `nan`, raises `ValueError` in pydub (it seeks a file it already closed). pydub2 goes on to ffmpeg like `from_file` does, and ffmpeg refuses it with `CouldntDecodeError`.
 - A wrong `format` is ignored for wav, flac, mp3, ogg and opus data, which is read as what it is. pydub raises `CouldntDecodeError`, because ffmpeg is told the wrong format.
 - Sample widths other than 8, 16, 24 and 32 bit that ffprobe reports for a file are read as 16 bit.
+- `stream` leaves out a partial last frame of a wav, where `from_file` keeps the stray bytes like pydub.
+- `stream` raises `CouldntDecodeError` for a wav with an odd chunk that has no pad byte after it. `from_file` reads such a file like pydub does.
+- ffmpeg cannot read some wav from a pipe that has no whole frame and an odd chunk without its pad byte or a chunk after the data, so pydub raises `CouldntDecodeError` for them. pydub2 reads them.
+- A wav with a sample rate or a channel count of 0 raises `CouldntDecodeError`. pydub reads such a wav path whole into a segment that `len` cannot measure, and otherwise raises, not always `CouldntDecodeError`.
 
 ### How the samples differ
 
 - mp3 decodes to the same length as ffmpeg. A few samples in 1000 are off by 1 LSB (up to 1.5 in 100 against an x86 ffmpeg), because minimp3 does its float synthesis a little differently from ffmpeg's mp3float.
 - ogg vorbis has the same length as ffmpeg. Samples differ by under 1024 at 32 bit scale, from float rounding in a different decoder.
+- `from_file_using_temporary_files` of a 32 bit float wav rounds the samples to 32 bit and then to 16 bit. A quiet sample (under 128 at 16 bit scale) very close to halfway between two values can be 1 off from ffmpeg, which rounds once. Quiet noise has a few such samples in a million.
+- `from_file_using_temporary_files` of a float wav with a sample of 65536 times full scale or more, inf or nan, which only a damaged file has: ffmpeg wraps it around in an int or makes it -32768 or 0, and pydub2 clips it to full scale. nan, and a 32 bit float of 2**32 times full scale or more, give -32768.
 - opus goes through libopus, where ffmpeg uses its own opus decoder. The length is the same, but samples can differ a lot, up to about a quarter of full scale at low bitrates.
 - Chained opus (several opus streams one after the other) decodes without ffmpeg. libopus starts each link fresh where ffmpeg's decoder carries its state across, so a few samples after each join can differ.
 - A chain whose links have another channel count needs ffmpeg.
@@ -75,6 +81,7 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - Exported ogg, opus and flac files never match ffmpeg byte for byte, but they use its settings. opus is unconstrained vbr at 64k per stream plus 32k per coupled pair (96k stereo). vorbis is q3, or ABR without slow rate management when a bitrate is given. flac is level 5 with ffmpeg's block size.
 - Sizes are within a few percent of ffmpeg's. opus at 16 kHz is within 7%. flac is within 3 percent for speech, music and noise, sometimes smaller and sometimes larger. Pure sine tones differ more: one test file came out 15 percent smaller and another 33 percent larger. We write no padding block, ffmpeg writes 8 kB.
 - opus: the OpusHead input rate is the real rate, where ffmpeg writes the rate it resampled to (48000 for 44100). The tags name libopusenc where ffmpeg's say Lavf and Lavc.
+- opus with 3 or 4 channels is written. ffmpeg's libopus has no channel layout for them, so pydub raises `CouldntEncodeError`.
 - opus below 100 Hz goes to ffmpeg, because libopusenc corrupts memory when it resamples up from so low. ffmpeg encodes down to 1 Hz. Without ffmpeg it raises `FileNotFoundError`.
 - opus above 768 kHz raises `CouldntEncodeError`, because libopusenc's resampler takes minutes at such rates. ffmpeg encodes any rate.
 - vorbis tags name libVorbis. A vorbis file has more, smaller ogg pages than ffmpeg's. The last granule is the input length. ffmpeg's own decoder can read vorbis a few ms too long.

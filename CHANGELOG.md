@@ -72,6 +72,15 @@ What changed in each release.
 - A bitrate of `"64m"` is 0.064 bits, as in ffmpeg, where it was 64 million. `0x40k`, `64Ki` and `64kB` are read like ffmpeg reads them.
 - A bitrate with a null byte raises `ValueError` on export of flac, as with pydub, where flac took it.
 - `AudioSegment.stream` takes a `start_second` or `duration` under 0.0001 (written `1e-05` by Python) and cuts it like a longer one, where it raised `ValueError`.
+- `export` to flac of a rate over 65535 that is not a multiple of 10, like 67685 Hz, writes the file as ffmpeg does, where it raised `CouldntEncodeError`.
+- Part of a wav loaded with `start_second` and `duration` ends at `(start_second + duration) * 1000` ms as in pydub, where it ended at `start_second * 1000 + duration * 1000` and could be a frame off.
+- `export` to wav or flac with a `codec` or `parameters` of a segment with a partial last frame leaves that frame out like ffmpeg, where it raised `ValueError`.
+- `export` to mp3 of a segment with a sample width other than 1 to 4 raises `ValueError` with pydub2-mp3 too, as pydub raises, where it wrote a file.
+- `detect_silence`, `detect_nonsilent` and `split_on_silence` of a segment with a partial last frame raise like pydub when a window reaches that frame, where they left it out.
+- `detect_silence`, `detect_nonsilent` and `split_on_silence` of an empty segment with a `frame_rate` of 2**31 or more return `[]` as in pydub, where they raised `TypeError`.
+- A float wav (or another float source) read as 16 bit rounds a sample that falls exactly between two values to the even one, as ffmpeg does, where it rounded up and was 1 off in about 1 sample in 256.
+- A `start_second` or `duration` that is a `Fraction`, a `bool` or under 0.0001 works when `from_file` hands the file to ffmpeg (a-law wav, a `codec`, a negative start), and a `Fraction` or `bool` works in `AudioSegment.stream` of flac, mp3, ogg and opus. ffmpeg was given text like `1/2` or `1e-05` and refused it.
+- `AudioSegment.from_file_using_temporary_files` of a `pathlib.Path` or a file object hands a wav to ffmpeg and gives 16 bit, as in pydub. It knows a wav by its name for a `str` or `bytes` path only.
 - An ffmpeg that exits with 0 and writes no file gives an empty export, as with pydub, and not `FileNotFoundError`.
 - `export` of an empty segment to mp3 or opus, of mp3 from a rate as low as 10 Hz, and of opus below 100 Hz give what pydub gives, where they raised `RuntimeError` or `CouldntEncodeError`. Opus below 100 Hz goes through ffmpeg.
 - `AudioSegment.from_file` and `AudioSegment.stream` read a named pipe (fifo) once and decode the bytes, where they opened it a second time and waited for ever for a second writer or said they could not read the file.

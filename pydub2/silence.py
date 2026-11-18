@@ -53,8 +53,10 @@ def detect_silence(audio_segment, min_silence_len=1000, silence_thresh=-16, seek
     if seek_step == 0:
         raise ValueError("seek_step cant be 0")
     rate = audio_segment.frame_rate
-    if seek_step < 0 or min_silence_len < 0 or rate < 0 or not float(rate).is_integer() or overrides(
-            audio_segment, "rms", "max_possible_amplitude", "__getitem__", "__init__", "_spawn"):
+    # pydub reads a partial last frame in the last window and audioop refuses it, the slow path does the same
+    if seek_step < 0 or min_silence_len < 0 or not 0 <= rate < 2 ** 31 or not float(rate).is_integer() or overrides(
+            audio_segment, "rms", "max_possible_amplitude", "__getitem__", "__init__", "_spawn") or \
+            len(audio_segment.raw_data) % audio_segment.frame_width:
         return _detect_silence_slow(audio_segment, min_silence_len, silence_thresh, seek_step)
     whole = int(audio_segment.frame_count()) * audio_segment.frame_width
     # a step past the last start gives the same ranges and the core takes an int

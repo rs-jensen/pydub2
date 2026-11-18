@@ -140,7 +140,9 @@ def _export_pcm(seg, format, codec, parameters):
         width = {None: 2, "pcm_s16le": 2, "pcm_s24le": 3, "pcm_s32le": 4}.get(codec, 0)
         if not width or fmt and fmt != {2: "s16", 3: "s32", 4: "s32"}[width]:
             return None
-    seg = seg.set_sample_width(4 if width == 3 else width)
+    # ffmpeg drops a partial last frame
+    fw = seg.channels * seg.sample_width
+    seg = seg._spawn(seg._data[:len(seg._data) // fw * fw]).set_sample_width(4 if width == 3 else width)
     if format == "flac" and width == 3:
         return _encode(_pydub2.lin2lin(seg._data, 4, 3), seg.frame_rate, seg.channels, 3, format, 0)
     if width != 3:
@@ -352,7 +354,7 @@ def _own_wav(head, flen, read_at):
 def _ffmpeg_frames(x, rate):
     # ffmpeg reads str(x) to the microsecond and rounds to the nearest frame
     try:
-        us = int(Decimal(str(x)) * 1000000)
+        us = int(Decimal(_ffmpeg.seconds(x)) * 1000000)
     except (ArithmeticError, ValueError):
         return None
     return (us * rate + 500000) // 1000000
@@ -380,9 +382,10 @@ def _span(d, wav, start_second, duration):
     if (start_second is not None and start_second < 0) or (duration is not None and duration < 0):
         return None
     if wav:
-        # pydub slices the whole wav
+        # pydub slices the whole wav from start_second * 1000 to (start_second + duration) * 1000
         ss = (start_second or 0) * 1000
-        a, b = _slice_frames(d.frames, d.rate, ss, ss + duration * 1000 if duration is not None else float("inf"))
+        end = float("inf") if duration is None else duration * 1000 if start_second is None else (start_second + duration) * 1000
+        a, b = _slice_frames(d.frames, d.rate, ss, end)
         return a, max(0, min(b, d.frames) - a), lambda m: max(0, b - a)
     # ffmpeg cuts with -ss and -t after -i, then pydub slices that
     a = _ffmpeg_frames(start_second or 0, d.rate)
@@ -395,19 +398,13 @@ def _span(d, wav, start_second, duration):
 
 def _to_16bit(data, width, rounding):
     # what ffmpeg makes of 8, 32 and 64 bit samples, a float source is rounded and an integer one is cut
-    if width == 8:
-        # the high 32 bits give the same 16 bit sample, cut or rounded
+    if width == 8 and not rounding:
+        # the high 32 bits give the same 16 bit sample when it is cut
         high = bytearray(len(data) // 2)
         for i in range(4):
             high[i::4] = data[4 + i::8]
         data, width = bytes(high), 4
-    if width == 4 and rounding:
-        half = (0x8000).to_bytes(4, "little") * (1 << 18)
-        step = len(half)
-        data = b"".join(_pydub2.lin2lin(_pydub2.add(data[i:i + step], half[:len(data[i:i + step])], 4), 4, 2)
-                        for i in range(0, len(data), step))
-        return data
-    return _pydub2.lin2lin(data, width, 2)
+    return _pydub2.lin2lin(data, width, 2, bool(rounding))
 
 
 def _fit(data, m, want, fw, rate):
@@ -830,6 +827,8 @@ class AudioSegment(object):
             filename = fsdecode(file)
         except TypeError:
             filename = None
+        # from_file_using_temporary_files in pydub only looks at the name of a str or bytes path
+        named = filename if not tmp or isinstance(file, (str, bytes)) else None
         if isinstance(file, bytes):
             file = filename
         file, close_file = _fd_or_path_or_tempfile(file, 'rb', tempfile=False)
@@ -842,8 +841,8 @@ class AudioSegment(object):
             if format == f:
                 return True
 
-            if filename:
-                return filename.lower().endswith(".{0}".format(f))
+            if named:
+                return named.lower().endswith(".{0}".format(f))
 
             return False
 
@@ -1429,6 +1428,9 @@ class AudioSegment(object):
         if self.channels == 1:
             return [self]
 
+        # pydub puts the samples in an array first, which fails for a width with no array type or a part of a sample
+        if len(self._data) % array.array(self.array_type).itemsize:
+            raise ValueError("bytes length not a multiple of item size")
         return [
             self._spawn(_pydub2.channel(self._data, self.sample_width, self.channels, i),
                         overrides={"channels": 1, "frame_width": self.sample_width})

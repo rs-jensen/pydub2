@@ -227,20 +227,45 @@ void add(std::string_view a, std::string_view b, size_t width, const Alloc &allo
     });
 }
 
-void lin2lin(std::string_view data, size_t width, size_t new_width, const Alloc &alloc) {
-    check(data, width);
+void lin2lin(std::string_view data, size_t width, size_t new_width, const Alloc &alloc, bool nearest) {
+    // nearest also takes the 64 bit samples of a double wav down to 24 bit or less
+    bool wide = nearest && width == 8 && new_width < 4;
+    if (!wide) {
+        check(data, width);
+    } else if (data.size() % 8) {
+        throw std::invalid_argument("not a whole number of samples");
+    }
     check("", new_width);
     char *out = alloc(data.size() / width * new_width);
-    by_width(width, [&](auto w) {
-        constexpr size_t W = decltype(w)::value;
-        by_width(new_width, [&](auto nw) {
-            constexpr size_t N = decltype(nw)::value;
-            size_t count = data.size() / W;
-            for (size_t k = 0; k < count; k++) {
-                put32(out + k * N, N, get32(&data[k * W], W));
-            }
+    bool narrow = nearest && new_width < width;
+    if (!narrow) {
+        by_width(width, [&](auto w) {
+            constexpr size_t W = decltype(w)::value;
+            by_width(new_width, [&](auto nw) {
+                constexpr size_t N = decltype(nw)::value;
+                size_t count = data.size() / W;
+                for (size_t k = 0; k < count; k++) {
+                    put32(out + k * N, N, get32(&data[k * W], W));
+                }
+            });
         });
-    });
+        return;
+    }
+    int64_t top = ((int64_t)1 << (8 * new_width - 1)) - 1;
+    int shift = 32 - 8 * (int)new_width;
+    for (size_t i = 0, j = 0; i < data.size(); i += width, j += new_width) {
+        int64_t v;
+        if (wide) {
+            // the high half, with its lowest bit set when the low half is not 0, rounds like the whole sample
+            memcpy(&v, &data[i], 8);
+            v = (v >> 32) | ((v & 0xFFFFFFFF) != 0);
+        } else {
+            v = get32(&data[i], width);
+        }
+        // ties go to the even sample like lrintf, where ffmpeg rounds a float
+        v = (v + ((int64_t)1 << (shift - 1)) - 1 + ((v >> shift) & 1)) >> shift;
+        put(out + j, new_width, (int)std::min(top, std::max(-top - 1, v)));
+    }
 }
 
 void mix(std::string_view head, std::string_view tail, std::string_view over, size_t width, size_t n, bool gain, double factor,

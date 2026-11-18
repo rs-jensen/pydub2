@@ -183,6 +183,21 @@ def test_rms_drops_what_a_double_drops_past_2_to_the_53():
     assert core.rms(buf, 2) == audioop.rms(buf, 2) == 29619
 
 
+def test_lin2lin_nearest_rounds_ties_to_even_and_clips():
+    vals = [0x8000, 0x18000, -0x8000, -0x18000, 0x8001, -0x8001, 0x7FFF8000, -0x7FFF8000, 2 ** 31 - 1, -2 ** 31]
+    assert core.lin2lin(pack(4, vals), 4, 2, True) == pack(2, [0, 2, 0, -2, 1, -1, 32767, -32768, 32767, -32768])
+
+
+def test_lin2lin_nearest_rounds_64_bit_samples_like_the_whole_sample():
+    vals = [1 << 47, (1 << 47) + 1, (3 << 47) - 1, -(1 << 47) - 1, -(3 << 47), 2 ** 63 - 1, -2 ** 63]
+    assert core.lin2lin(pack(8, vals), 8, 2, True) == pack(2, [0, 1, 1, -1, -2, 32767, -32768])
+    with pytest.raises(ValueError):
+        core.lin2lin(b"\0" * 12, 8, 2, True)
+    for args in ((8, 2), (8, 4, True)):
+        with pytest.raises(ValueError):
+            core.lin2lin(b"\0" * 8, *args)
+
+
 def test_rms_32_bit_sum_like_audioop():
     for vals in ([1608362628, 1608362630, -1608362626], [2017695478, 2017695481, 2017695479, 2017695478]):
         buf = pack(4, vals)

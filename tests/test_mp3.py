@@ -5,6 +5,7 @@ import math
 import os
 import shutil
 import subprocess
+import wave
 
 import numpy as np
 import pytest
@@ -234,3 +235,13 @@ def test_mp3_tag_with_odd_text_or_key(tags):
 def test_mp3_tag_with_a_lone_surrogate_that_is_not_a_byte():
     with pytest.raises(UnicodeEncodeError):
         mp3_tags({"title": "a\ud800"})
+
+
+@has_mp3
+def test_a_width_the_wave_module_refuses_is_not_written():
+    seg = AudioSegment.from_file(io.BytesIO(b""), format="raw", sample_width=5, frame_rate=16000, channels=1)
+    old = pydub.AudioSegment.from_file(io.BytesIO(b""), format="raw", sample_width=5, frame_rate=16000, channels=1)
+    with pytest.raises(wave.Error):
+        old.export(io.BytesIO(), format="mp3")
+    with pytest.raises(ValueError):
+        seg.export(io.BytesIO(), format="mp3")
