@@ -10,7 +10,7 @@ import pytest
 
 import _pydub2
 import pydub2
-from pydub2 import silence, utils
+from pydub2 import effects, silence, utils
 from pydub2.exceptions import CouldntEncodeError
 from pydub2.generators import Sine
 
@@ -185,7 +185,8 @@ def test_partial_frame_set_channels():
 @pytest.mark.parametrize("name", ["low_pass_filter", "high_pass_filter"])
 def test_partial_frame_filter(name):
     seg = partial_frame()
-    out = getattr(seg, name)(100)
+    # the function, not the method: importing scipy_effects replaces the methods
+    out = getattr(effects, name)(seg, 100)
     assert len(out.raw_data) == 424 and out.raw_data[-2:] == seg.raw_data[-2:]
 
 
