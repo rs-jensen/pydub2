@@ -885,8 +885,9 @@ class AudioSegment(object):
             if n < 0 and lim[2] is None:
                 data = file.read(-1)
             else:
-                data = read_upto(file, lim, n * fw)
-                check_duration(len(data) // fw, frame_rate, fw, lim)
+                data = read_upto(file, lim, n * fw, keep_none=True)
+                if data is not None:
+                    check_duration(len(data) // fw, frame_rate, fw, lim)
             if start_second is None and duration is None:
                 return cls(data=data, metadata=metadata)
             elif start_second is not None and duration is None:

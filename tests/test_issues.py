@@ -676,3 +676,29 @@ def test_plain_numbers_cut_without_ffmpeg(tmp_path, monkeypatch, fmt, kind, make
     v = make() * 1000
     want = whole[v:] if kind == "start_second" else whole[:v]
     assert len(seg) == len(want)
+
+
+class NoData:
+    # a non-blocking file, read gives None when nothing is there
+    def __init__(self, data=None):
+        self.data = data
+
+    def read(self, n=-1):
+        data, self.data = self.data, None
+        return data
+
+
+@pytest.mark.parametrize("limit", [None, 10])
+def test_raw_reader_that_gives_none_fails_like_pydub(limit, monkeypatch):
+    monkeypatch.setattr(pydub2, "max_duration", limit)
+    kw = dict(format="raw", sample_width=2, frame_rate=8000, channels=1)
+    old = pydub.AudioSegment.from_file(NoData(), **kw)
+    new = pydub2.AudioSegment.from_file(NoData(), **kw)
+    assert old._data is None and new._data is None
+    with pytest.raises(TypeError) as e_old:
+        len(old)
+    with pytest.raises(TypeError) as e_new:
+        len(new)
+    assert str(e_new.value) == str(e_old.value)
+    data = b"\1\0" * 800
+    assert pydub2.AudioSegment.from_file(NoData(data), **kw).raw_data == pydub.AudioSegment.from_file(NoData(data), **kw).raw_data
