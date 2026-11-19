@@ -713,6 +713,8 @@ def test_mp3_frames_missing_in_the_middle(tmp_path):
             carry = dropped_frame(m[at + 3], main_data_before(m, starts, k + gone, 512))
             same_as_ffmpeg(tmp_path, "gap.mp3", m[:starts[k]] + carry + m[at:])
     assert hits > 3
+    if X64_FF_ON_ARM:
+        pytest.skip(STEREO)
     # the same without the help, where junk from the reservoir decodes in the frame after the gap and a cut frame
     # can make the next frames start in data that sends the file to ffmpeg
     for k in (8, 10, 11, 12, 14, 15):
