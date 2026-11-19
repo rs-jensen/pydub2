@@ -34,6 +34,11 @@ class MissingAudioParameter(PydubException):
     pass
 
 
+class FFmpegNeeded(CouldntDecodeError, FileNotFoundError):
+    # a wav, flac, mp3, ogg or opus file only ffmpeg reads, pydub raises FileNotFoundError when ffmpeg is missing
+    pass
+
+
 def tagged(e, format=None, reason=None, hint=None):
     # for tools: what was sniffed, a short stable code and the command that fixes it
     e.format, e.reason, e.hint = format, reason, hint

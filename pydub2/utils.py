@@ -373,6 +373,102 @@ def sniff(head):
             return "aac"
 
 
+# starts that sniff does not know, only ffmpeg reads these
+MAGIC = [(b"\x0b\x77", "ac3"), (b".snd", "au"), (b"caff", "caf"), (b"riff\x2e\x91\xcf\x11", "w64"), (b"wvpk", "wv"),
+         (b"#!AMR", "amr"), (b"MAC ", "ape"), (b"TTA1", "tta"), (b"MPCK", "mpc"), (b"\x7f\xfe\x80\x01", "dts"),
+         (b"FLV", "flv"), (b"Creative Voice File", "voc"), (b"MThd", "midi")]
+
+
+def behind_id3(f, head):
+    # an id3 tag can sit in front of any format
+    at = 0
+    while head[:3] == b"ID3" and len(head) >= 10:
+        at += 10 + (head[6] << 21 | head[7] << 14 | head[8] << 7 | head[9]) + (10 if head[5] & 0x10 else 0)
+        f.seek(at)
+        head = f.read(4096)
+    return at, head
+
+
+def what(f, head):
+    # the format by its first bytes, None when not known
+    h = behind_id3(f, head)[1]
+    if h[:4] == b"RIFF" and h[8:12] == b"AVI ":
+        return "avi"
+    fmt = sniff(h) or next((name for magic, name in MAGIC if h.startswith(magic)), None)
+    if fmt == "mp3" and h[:1] == b"\xff":
+        return {2: "mp3", 4: "mp2", 6: "mp1"}[h[1] & 6]
+    if fmt == "webm" and b"webm" not in h[:64]:
+        return "matroska"
+    return fmt
+
+
+def native_format(head):
+    # the choice detect() in src/decode.cpp makes, all else goes to the mp3 decoder
+    if head[:4] in (b"RIFF", b"RF64") and head[8:12] == b"WAVE":
+        return "wav"
+    if head[:4] == b"fLaC":
+        return "flac"
+    if head[:4] == b"OggS" and len(head) > 27:
+        packet = head[27 + head[26]:]
+        if packet.startswith(b"OpusHead"):
+            return "opus"
+        if packet.startswith(b"\x01vorbis"):
+            return "ogg"
+    return "mp3"
+
+
+def chunks(f):
+    # the chunks of a riff file with the start of each, a thousand at most like the decoder
+    at = 12
+    for _ in range(1000):
+        f.seek(at)
+        h = f.read(34)
+        if len(h) < 8:
+            return
+        n = struct.unpack("<I", h[4:8])[0]
+        yield at, h[:4], n, h[8:]
+        at += 8 + n + (n & 1)
+
+
+def damaged(f, head, fmt):
+    # the built in decoder takes this file by its start and still failed, ffmpeg is no fix for that
+    if fmt is None or native_format(head) != fmt:
+        return False
+    if fmt in ("ogg", "opus"):
+        return not ogg_chained(f)
+    if fmt != "wav":
+        return True
+    for _, cid, n, data in chunks(f):
+        if cid == b"fmt ":
+            # an extensible wav keeps its real tag further in
+            tag = data[24:26] if data[:2] == b"\xfe\xff" else data[:2]
+            # pcm and float are what pydub2 reads itself
+            return len(tag) < 2 or struct.unpack("<H", tag)[0] in (1, 3)
+    return True
+
+
+def ogg_chained(f):
+    # a second start page means chained streams, which the built in decoder leaves to ffmpeg
+    at, first = 0, True
+    size = f.seek(0, 2)
+    while at + 27 <= size:
+        f.seek(at)
+        h = f.read(27)
+        if h[:4] != b"OggS":
+            return False
+        if h[5] & 2 and not first:
+            return True
+        first = False
+        at += 27 + h[26] + sum(f.read(h[26]))
+    return False
+
+
+def needs_ffmpeg(f, head):
+    # what doctor says of a file the built in decoders refused: ffmpeg reads it, and it is not just damaged
+    fmt = what(f, head)
+    return fmt is not None and not damaged(f, head, fmt)
+
+
 def source(filepath, read_ahead_limit=-1, exe=None):
     # sniffing the start of a file is not enough, so ffmpeg is also told which demuxers it may use
     allow = ["-format_whitelist", allowed_demuxers(exe)] if exe else []

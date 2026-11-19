@@ -8,7 +8,7 @@ import subprocess
 import sys
 import struct
 import wave
-from .utils import dict_set, fsdecode, get_encoder_name, mediainfo_json, sniff
+from .utils import dict_set, fsdecode, get_encoder_name, mediainfo_json, needs_ffmpeg, sniff
 from .logging_utils import log_conversion, log_subprocess_output
 import base64
 from decimal import Decimal
@@ -48,6 +48,7 @@ from .exceptions import (
     InvalidTag,
     CouldntDecodeError,
     CouldntEncodeError,
+    FFmpegNeeded,
     MissingAudioParameter,
     tagged,
 )
@@ -1057,8 +1058,13 @@ class AudioSegment(object):
                         except Exception:
                             pass
 
-        if tried and _ffmpeg.find(cls.converter) is None and any(is_format(f) for f in ("wav", "flac", "mp3", "ogg", "opus")):
-            raise tagged(CouldntDecodeError("cant read this file"), sniff(head), "cant_decode")
+        own_formats = ("wav", "flac", "mp3", "ogg", "opus")
+        if tried and _ffmpeg.find(cls.converter) is None and (sniff(head) in own_formats or any(is_format(f) for f in own_formats)):
+            with open(filename, "rb") if data is None else BytesIO(data) as f:
+                if not needs_ffmpeg(f, head):
+                    raise tagged(CouldntDecodeError("cant read this file"), sniff(head), "cant_decode")
+            text, hint = _ffmpeg.missing(cls.converter, "this file")
+            raise tagged(FFmpegNeeded("cant read this file: " + text), sniff(head), "needs_ffmpeg", hint)
         try:
             wav = _ffmpeg.to_wav(cls.converter, None if piped else filename, data, format, codec, parameters, start_second, duration, lim,
                                  not tmp)

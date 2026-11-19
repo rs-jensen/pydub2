@@ -102,6 +102,7 @@ Speed and memory numbers in this section are from Linux x86-64 (Intel Xeon, 4 co
 - An mp3 export at a `frame_rate` more than 256 times 48000 goes through ffmpeg and gives pydub's file, where it raised `RuntimeError: rates too far apart`.
 - `AudioSegment.converter = None`, which `which("ffmpeg")` gives when no ffmpeg is on `PATH`, means the usual lookup, so the ffmpeg extra is used and a missing ffmpeg raises `FileNotFoundError` with the usual text. Every ffmpeg call raised `TypeError` before.
 - `export` with `codec="libvorbis"` for ogg, `"libopus"` for opus, `"libmp3lame"` for mp3 or `"flac"` for flac uses the built in encoder and works without ffmpeg, as it does without `codec`. Without ffmpeg, another codec or a `cover` gives a `FileNotFoundError` that names the codec or the cover.
+- Without ffmpeg, a wav, ogg or mp3 file that only ffmpeg reads (a-law, mu-law and ADPCM wav, chained ogg, ogg flac, an m4a named .mp3) says that it needs ffmpeg and how to get it, as `python -m pydub2 doctor` does, and is also a `FileNotFoundError` like in pydub. A path, a file object and `BytesIO` now give the same error, and a damaged file object of these formats no longer says that ffmpeg is missing.
 
 ### Security
 
