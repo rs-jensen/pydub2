@@ -4,6 +4,7 @@ import re
 import shutil
 import subprocess
 import sys
+import warnings
 import threading
 
 import pytest
@@ -353,11 +354,22 @@ def test_set_frame_rate_float_like_pydub():
     seg = pydub2.AudioSegment.silent(100, frame_rate=44100)
     old = pydub.AudioSegment.silent(100, frame_rate=44100)
     for rate in float_rates():
-        with pytest.raises(TypeError) as theirs:
-            old.set_frame_rate(rate)
         with pytest.raises(TypeError) as mine:
             seg.set_frame_rate(rate)
-        assert str(mine.value) == str(theirs.value)
+        if sys.version_info >= (3, 10):
+            with pytest.raises(TypeError) as theirs:
+                old.set_frame_rate(rate)
+            assert str(mine.value) == str(theirs.value)
+            continue
+        # audioop in Python 3.9 has older words ("integer argument expected, got float")
+        # and still takes numpy.float32 through __int__ with a DeprecationWarning
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                old.set_frame_rate(rate)
+        except TypeError:
+            continue
+        assert type(rate).__name__ == "float32"
 
 
 def test_set_frame_rate_takes_numpy_ints():

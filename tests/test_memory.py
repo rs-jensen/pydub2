@@ -1,11 +1,12 @@
 import os
 import subprocess
 import sys
+import sysconfig
 
 import pytest
 
 from pydub2 import _ffmpeg, _mp3
-from test_untrusted import peak_mb
+from test_untrusted import WIN_PEAK, peak_mb
 
 # 24 MB of 16 bit stereo, about 2 minutes 16 s at 44.1 kHz
 PCM = 24_000_000
@@ -19,9 +20,34 @@ MONO = IMPORTS + "mono = [AudioSegment(bytes(range(256)) * %d, sample_width=2, f
 RAW24 = IMPORTS + "raw = bytes(range(192)) * %d\n" % (PCM // 4 * 3 // 192)
 
 
+# The free-threaded build always uses mimalloc, which commits memory on Windows in pieces of 32 MiB, so a 24 MB
+# buffer counts 1.4 times there: fade_in went to 2.80, set_sample_width(3) to 4.20. tracemalloc shows the same live
+# memory as the regular build (2.00 and 3.00), so there the peak working set is measured, as on Linux and macOS.
+WORKING_SET = sys.platform == "win32" and bool(sysconfig.get_config_var("Py_GIL_DISABLED"))
+
+
+class Peak(float):
+    """The peak working set, with the peak commit next to it when an assertion fails."""
+    def __repr__(self):
+        return "%.3f (commit %.3f)" % (self, self.commit)
+
+
+def windows_peaks(code):
+    code = "import _pydub2\n" + code + "\n" + WIN_PEAK.replace("print(c.h / 1e6)", "print(c.a / 1e6, c.h / 1e6)")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                         env=dict(os.environ, PYTHONPATH=os.pathsep.join(sys.path)))
+    assert out.returncode == 0, out.stderr
+    return [float(v) for v in out.stdout.split()]
+
+
 def peak_x(code, setup=STEREO % SAW, pcm=PCM):
     """Peak of a fresh process over a bare import of pydub2, as a multiple of the PCM, the audio included."""
-    return (peak_mb("import pydub2\n" + setup + code) - peak_mb("import pydub2")) * 1e6 / pcm
+    if not WORKING_SET:
+        return (peak_mb("import pydub2\n" + setup + code) - peak_mb("import pydub2")) * 1e6 / pcm
+    (ws, commit), (ws0, commit0) = windows_peaks("import pydub2\n" + setup + code), windows_peaks("import pydub2")
+    peak = Peak((ws - ws0) * 1e6 / pcm)
+    peak.commit = (commit - commit0) * 1e6 / pcm
+    return peak
 
 
 def live_x(code, setup=STEREO % SAW):

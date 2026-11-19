@@ -11,6 +11,7 @@ import re
 import stat
 import struct
 import sys
+import tokenize
 
 import _pydub2
 import pydub2
@@ -413,6 +414,58 @@ def call(node, name, add):
                 add(node, "ffmpeg", "codec " + goes)
 
 
+# 17 attributes in a row, also over line breaks, comments without a dot, and names that are not ascii
+GAP = rb"(?:\s|\\|#[^\r\n.]*[\r\n])*"
+LONG_CHAIN = re.compile(rb"(?:\." + GAP + rb"[\w\x80-\xff]+" + GAP + rb"){17}")
+
+
+def parse(source):
+    # deep nesting runs into a limit that depends on the platform: 1000 levels on Windows on arm with
+    # Python 3.13, the size of the C stack on 3.14, and Python 3.9 and 3.10 crash on Windows where the
+    # stack runs out. A long chain like a.b.c... is the usual cause, so those are cut short first
+    short = short_chains(source) if LONG_CHAIN.search(source) else None
+    if short is not None:
+        return ast.parse(short)
+    try:
+        return ast.parse(source)
+    except RecursionError:
+        # a chain the search did not see
+        short = short_chains(source)
+        if short is None:
+            raise
+    return ast.parse(short)
+
+
+def short_chains(source, keep=8):
+    # cut each chain of more than 2 * keep attributes to its first name and last keep attributes,
+    # a.b1.b2 ... .b99.AudioSegment.converter keeps a and the end, and every line keeps its number
+    try:
+        lines = io.StringIO(importlib.util.decode_source(source)).readlines()
+        cuts, run, dot = [], [], None
+        for tok in tokenize.generate_tokens(iter(lines + [""]).__next__):
+            if tok.type in (tokenize.NL, tokenize.COMMENT):
+                continue
+            if dot is not None and tok.type == tokenize.NAME:
+                run.append((dot, tok.end))
+                dot = None
+                continue
+            dot = None
+            if tok.type == tokenize.OP and tok.string == ".":
+                dot = tok.start
+                continue
+            if len(run) > 2 * keep:
+                cuts.append((run[0][0], run[-keep - 1][1]))
+            run = []
+    except (SyntaxError, tokenize.TokenError, ValueError):
+        return None
+    if not cuts:
+        return None
+    for (r1, c1), (r2, c2) in reversed(cuts):
+        # a backslash for each line break that was cut keeps the lines after it where they were
+        lines[r1 - 1:r2] = [lines[r1 - 1][:c1] + " \\\n" * (r2 - r1) + lines[r2 - 1][c2:]]
+    return "".join(lines)
+
+
 def skip(root, d):
     return d in SKIP_DIRS or d.startswith(".") or os.path.exists(os.path.join(root, d, "pyvenv.cfg"))
 
@@ -441,7 +494,7 @@ def scan(top):
                     cant(path, "larger than 2 MB")
                     continue
                 with open_regular(path, follow=False) as f:
-                    tree = ast.parse(f.read())
+                    tree = parse(f.read())
             except SyntaxError as e:
                 cant(path, "cant parse line %s: %s" % (e.lineno, e.msg))
                 continue

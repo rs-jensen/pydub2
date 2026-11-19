@@ -207,6 +207,31 @@ def test_scan_long_attribute_chain(tmp_path):
     assert r["imports"] == 2
 
 
+# deeper than ast.parse goes anywhere, Windows on arm stops at 1000 levels with Python 3.13. The scan runs with
+# the 1 MB stack of the main thread on Windows, where Python 3.9 crashed in ast.parse
+def test_scan_chain_deeper_than_ast_parse_goes(tmp_path):
+    chain = "a" + ".b" * 100000
+    (tmp_path / "assign.py").write_text("import pydub\n%s.AudioSegment.ffmpeg = 1\n" % chain)
+    (tmp_path / "split.py").write_text("import pydub\nx = (a  # one\n%s.c)\nAudioSegment.ffmpeg = 1\n" % ("\n.b" * 50000))
+    (tmp_path / "handler.py").write_text("import pydub\ntry:\n    pass\nexcept %s.error:\n    pass\n" % chain)
+    (tmp_path / "comments.py").write_text("import pydub\nx = (a\n%s)\nAudioSegment.ffmpeg = 1\n" % (".b  # note\n" * 100000))
+    (tmp_path / "accents.py").write_text("import pydub\na%s.AudioSegment.ffmpeg = 1\n" % (".é" * 100000), encoding="utf-8")
+    got = []
+    size = threading.stack_size(1 << 20)
+    try:
+        t = threading.Thread(target=lambda: got.append(scan(str(tmp_path))))
+        t.start()
+    finally:
+        threading.stack_size(size)
+    t.join()
+    r = got[0]
+    assert (r["files"], r["files_using_pydub"], r["unreadable"]) == (5, 5, [])
+    got = {(os.path.basename(f["file"]), f["line"], f["kind"]) for f in r["findings"]}
+    assert got == {("assign.py", 1, "import"), ("assign.py", 2, "change"), ("split.py", 1, "import"),
+                   ("split.py", 50004, "change"), ("handler.py", 1, "import"), ("comments.py", 1, "import"),
+                   ("comments.py", 100004, "change"), ("accents.py", 1, "import"), ("accents.py", 2, "change")}
+
+
 def test_scan_no_pydub(capsys, tmp_path):
     (tmp_path / "a.py").write_text("from pydub2 import AudioSegment\nAudioSegment.from_file('a.m4a')\n")
     code, out = run(capsys, "--scan", str(tmp_path))
