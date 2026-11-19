@@ -314,3 +314,54 @@ def test_detect_silence_threshold_type(thresh):
         mod = pydub.silence if AS.__module__.startswith("pydub.") else pydub2.silence
         return mod.detect_silence(AS.silent(1000), 100, thresh)
     assert bad_call("pydub2", call) == bad_call("pydub", call)
+
+
+FLOAT_RATES = [22050.0, 22050.5, "22050", None]
+
+
+def not_an_int(v):
+    t = type(v)
+    name = t.__qualname__ if t.__module__ == "builtins" else t.__module__ + "." + t.__qualname__
+    return "^'%s' object cannot be interpreted as an integer$" % name
+
+
+def float_rates():
+    np = pytest.importorskip("numpy")
+    return FLOAT_RATES + [np.float64(22050), np.float32(22050)]
+
+
+@pytest.mark.parametrize("quality", [None, "high"])
+def test_set_frame_rate_needs_an_int_like_pydub(quality):
+    seg = pydub2.AudioSegment.silent(100, frame_rate=44100)
+    for rate in float_rates():
+        # audioop.ratecv in pydub raises this, the bindings of the core gave their signature
+        with pytest.raises(TypeError, match=not_an_int(rate)):
+            seg.set_frame_rate(rate, resample_quality=quality)
+        if isinstance(rate, float) or type(rate).__module__ == "numpy":
+            with pytest.raises(TypeError, match=not_an_int(rate)):
+                pydub2.AudioSegment.silent(100, frame_rate=rate).set_frame_rate(8000, quality)
+    # a float rate on one side of overlay and append goes through set_frame_rate in pydub too
+    with pytest.raises(TypeError, match="^'float' object cannot be interpreted as an integer$"):
+        seg.overlay(pydub2.AudioSegment.silent(100, frame_rate=22050.0))
+    with pytest.raises(TypeError, match="^'float' object cannot be interpreted as an integer$"):
+        seg.append(pydub2.AudioSegment.silent(100, frame_rate=48000.0))
+
+
+def test_set_frame_rate_float_like_pydub():
+    pydub = pytest.importorskip("pydub")
+    seg = pydub2.AudioSegment.silent(100, frame_rate=44100)
+    old = pydub.AudioSegment.silent(100, frame_rate=44100)
+    for rate in float_rates():
+        with pytest.raises(TypeError) as theirs:
+            old.set_frame_rate(rate)
+        with pytest.raises(TypeError) as mine:
+            seg.set_frame_rate(rate)
+        assert str(mine.value) == str(theirs.value)
+
+
+def test_set_frame_rate_takes_numpy_ints():
+    np = pytest.importorskip("numpy")
+    seg = pydub2.AudioSegment.silent(100, frame_rate=44100)
+    for kind in (np.int16, np.int32, np.int64, np.uint16):
+        for quality in (None, "high"):
+            assert seg.set_frame_rate(kind(22050), quality) == seg.set_frame_rate(22050, quality)

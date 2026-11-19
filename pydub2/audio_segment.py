@@ -2,6 +2,7 @@ from __future__ import division
 
 import array
 import numbers
+import operator
 import os
 from tempfile import TemporaryFile, NamedTemporaryFile
 import subprocess
@@ -1430,15 +1431,21 @@ class AudioSegment(object):
 
         if self._data:
             _c_int(frame_rate)
-        if self._data and resample_quality == "high":
-            converted = _pydub2.resample(self._data, self.frame_rate, self.channels,
-                                         self.sample_width, frame_rate)
-        elif self._data:
-            converted = _pydub2.ratecv(self._data, self.sample_width,
-                                       self.channels, self.frame_rate,
-                                       frame_rate)
-        else:
-            converted = self._data
+        try:
+            if self._data and resample_quality == "high":
+                converted = _pydub2.resample(self._data, self.frame_rate, self.channels,
+                                             self.sample_width, frame_rate)
+            elif self._data:
+                converted = _pydub2.ratecv(self._data, self.sample_width,
+                                           self.channels, self.frame_rate,
+                                           frame_rate)
+            else:
+                converted = self._data
+        except TypeError:
+            # audioop's text for a rate that is no int, like 22050.0, the core would show its signature
+            operator.index(self.frame_rate)
+            operator.index(frame_rate)
+            raise
 
         return self._spawn(data=converted,
                            overrides={'frame_rate': frame_rate})
