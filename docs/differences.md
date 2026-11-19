@@ -118,7 +118,7 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - ffmpeg is started without a console window on Windows. Output of ffprobe and ffmpeg that is not utf-8 is decoded with errors ignored.
 - ffmpeg, ffprobe and ffplay are looked up on `PATH`, never in the current directory. An ffmpeg next to avconv wins over avconv.
 - ffprobe and ffplay are also looked for in the folder of `AudioSegment.converter` when it has one and `PATH` has none.
-- `from_file` and `export` use the `converter` of the class they are called on, so a subclass of `AudioSegment` can have its own. `converter` can be a `pathlib.Path`.
+- `from_file` and `export` use the `converter` of the class they are called on, so a subclass of `AudioSegment` can have its own. `converter` can be a `pathlib.Path`. It can also be `None`, which `utils.which("ffmpeg")` gives when it finds nothing, and then ffmpeg is looked up as if `converter` was not set. In pydub every ffmpeg call then fails with `TypeError` or `FileNotFoundError`.
 - A private ffmpeg set as `converter` (absolute, relative or with spaces in the path) is enough for reading, `mediainfo` and export. In pydub the ffprobe call fails with `FileNotFoundError`.
 - A monkeypatched `get_prober_name` is used for `mediainfo` and `mediainfo_json`. `get_encoder_name`, `get_prober_name` and `get_player_name` return the full path they found, and `get_prober_name` gives no warning when it finds nothing.
 - Setting `AudioSegment.ffmpeg` or `.ffprobe` does nothing, as in pydub. Set `converter`.

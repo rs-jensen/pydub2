@@ -53,7 +53,7 @@ def selftest():
 
 
 def report():
-    conv = os.fspath(AudioSegment.converter)
+    conv = _ffmpeg.name_of(AudioSegment.converter)
     exe = _ffmpeg.find(conv)
     probe = utils.which(utils.get_prober_name())
     if conv != "ffmpeg":
@@ -373,7 +373,7 @@ def failed(r, f, head, e):
     fmt = r["format"]
     reason = "playlist_refused" if fmt == "playlist" else getattr(e, "reason", None) or "cant_decode"
     hint = getattr(e, "hint", None)
-    conv = os.fspath(AudioSegment.converter)
+    conv = _ffmpeg.name_of(AudioSegment.converter)
     if reason == "playlist_refused":
         note = "file is a playlist (hls, dash or concat): refused"
     elif reason == "too_long":

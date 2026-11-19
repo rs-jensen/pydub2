@@ -21,20 +21,26 @@ from .utils import run as run_command
 _seen = ContextVar("seen", default=None)
 
 
+def name_of(converter):
+    # None is what which("ffmpeg") gives when there is none, it means the usual lookup
+    return "ffmpeg" if converter is None else os.fspath(converter)
+
+
 def find(converter):
+    converter = name_of(converter)
     for name in (converter, "avconv"):
         path = which(name)
         if path:
             return path
-    if os.fspath(converter) == "ffmpeg":
+    if converter == "ffmpeg":
         return extra_ffmpeg()
 
 
 def run(converter, args, data, what):
     exe = find(converter)
     if exe is None:
-        name = os.fspath(converter)
-        raise tagged(FileNotFoundError(("ffmpeg not found" if name == "ffmpeg" else "no ffmpeg at " + name) +
+        name = name_of(converter)
+        raise tagged(FileNotFoundError(("ffmpeg not found" if name == "ffmpeg" else "no ffmpeg at " + (name or "''")) +
                                        ", pydub2 needs it for " + what + (". strict mode needs ffmpeg" if pydub2.strict else "") +
                                        ('. install ffmpeg or pip install "pydub2[ffmpeg]"' if name == "ffmpeg" else "")),
                      None if what == "this file" else what, "needs_ffmpeg",

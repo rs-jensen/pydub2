@@ -407,7 +407,8 @@ def _using(converter):
 
 def _current():
     from .audio_segment import AudioSegment
-    return os.fspath(_converter.get() or AudioSegment.converter)
+    from ._ffmpeg import name_of
+    return name_of(_converter.get() or AudioSegment.converter)
 
 
 def _first(names):
