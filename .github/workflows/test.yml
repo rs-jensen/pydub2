@@ -34,10 +34,12 @@ jobs:
           sudo cp --update=none ~/apt-debs/*.deb /var/cache/apt/archives/ 2>/dev/null || true
           apt="sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30"
           for i in 1 2 3; do
-            timeout 300 $apt update && timeout 600 $apt install -y --no-install-recommends ffmpeg && break
+            timeout 120 $apt update && timeout 360 $apt install -y --no-install-recommends --download-only ffmpeg && break
             [ "$i" = 3 ] && exit 1
             sleep 10
           done
+          # Only the download has a time limit, stopping dpkg halfway leaves it broken
+          $apt install -y --no-install-recommends ffmpeg
           cp --update=none /var/cache/apt/archives/*.deb ~/apt-debs/ || true
       - run: pip install . ./mp3 pytest pydub audioop-lts numpy scipy
       - run: pytest tests
