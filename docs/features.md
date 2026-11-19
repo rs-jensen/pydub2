@@ -15,6 +15,8 @@ The API is pydub's. This page is about the rest: which formats need ffmpeg, the 
 
 The ffmpeg rows need ffmpeg 3.3 or newer installed. Everything marked built in works without it. That includes
 writing tags to flac, ogg and opus files and reading tags with `mediainfo`.
+It also includes naming the codec ffmpeg would use anyway: `codec="libvorbis"` for ogg, `"libopus"` for opus,
+`"libmp3lame"` for mp3 and `"flac"` for flac. Another codec or a `cover` image needs ffmpeg.
 
 To write mp3 without ffmpeg, install the small `pydub2-mp3` package, which carries the LAME encoder:
 

@@ -97,6 +97,10 @@ def _wav_high_rate(data, rate, channels, width):
     return buf.getvalue()
 
 
+# the encoders ffmpeg picks for these formats when no codec is given, which the built in ones stand in for
+_OWN_CODECS = {"flac": "flac", "ogg": "libvorbis", "opus": "libopus", "mp3": "libmp3lame"}
+
+
 def _bits_per_second(bitrate, format, channels, converter):
     # None leaves the bitrate to ffmpeg, which reads more than the built in encoders do and has the last word on a bad one
     try:
@@ -1287,8 +1291,9 @@ class AudioSegment(object):
         fw = self.channels * self.sample_width
         pcm = self._data[:len(self._data) // fw * fw]
 
+        own = codec is None or codec == _OWN_CODECS.get(format)
         # wav ignores tags and bitrate in pydub too
-        native = codec is None and parameters is None and (
+        native = own and parameters is None and (
                 format == "wav" or (format in ("flac", "ogg", "opus") and cover is None and not pydub2.strict)) and \
                 not (format == "opus" and self.frame_rate < 100)
         rate = 0
@@ -1333,7 +1338,7 @@ class AudioSegment(object):
             if out is not None:
                 return _write_out(out_f, out)
 
-        if format == "mp3" and codec is None and cover is None and not pydub2.strict:
+        if format == "mp3" and own and cover is None and not pydub2.strict:
             if bitrate is not None:
                 _bits_per_second(bitrate, format, self.channels, self.converter)
             if _mp3.available():
@@ -1345,9 +1350,19 @@ class AudioSegment(object):
                 raise tagged(FileNotFoundError("ffmpeg not found, pip install pydub2-mp3 to write mp3 without it"),
                              "mp3", "needs_ffmpeg", 'pip install "pydub2[mp3]"')
 
+        why = None
+        if format in ("wav", "flac", "ogg", "opus", "mp3") and not pydub2.strict:
+            if cover is not None:
+                why = "the cover"
+            elif not own:
+                why = "the %s codec" % codec
+            elif parameters is not None:
+                why = format + " with these parameters"
+            elif format == "opus" and self.frame_rate < 100:
+                why = "opus below 100 Hz"
         wav = _encode(pcm, self.frame_rate, self.channels, self.sample_width, "wav")
         return _write_out(out_f, _ffmpeg.from_wav(self.converter, wav, format, codec, bitrate, parameters, tags,
-                                                  id3v2_version, cover))
+                                                  id3v2_version, cover, why))
 
     @classmethod
     def from_numpy(cls, array, frame_rate):

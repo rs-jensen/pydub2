@@ -36,12 +36,12 @@ def find(converter):
         return extra_ffmpeg()
 
 
-def run(converter, args, data, what):
+def run(converter, args, data, what, why=None):
     exe = find(converter)
     if exe is None:
         name = name_of(converter)
         raise tagged(FileNotFoundError(("ffmpeg not found" if name == "ffmpeg" else "no ffmpeg at " + (name or "''")) +
-                                       ", pydub2 needs it for " + what + (". strict mode needs ffmpeg" if pydub2.strict else "") +
+                                       ", pydub2 needs it for " + (why or what) + (". strict mode needs ffmpeg" if pydub2.strict else "") +
                                        ('. install ffmpeg or pip install "pydub2[ffmpeg]"' if name == "ffmpeg" else "")),
                      None if what == "this file" else what, "needs_ffmpeg",
                      'pip install "pydub2[ffmpeg]"' if name == "ffmpeg" else None)
@@ -145,7 +145,7 @@ def _to_wav(converter, path, data, format, codec, parameters, start_second, dura
 
 
 def from_wav(converter, wav, format, codec=None, bitrate=None, parameters=None, tags=None,
-             id3v2_version="4", cover=None):
+             id3v2_version="4", cover=None, why=None):
     codec = codec or {"ogg": "libvorbis"}.get(format)
     muxer = format if pydub2.strict else {"m4a": "ipod", "aac": "adts", "wma": "asf"}.get(format, format)
     args = ["-f", "wav", "-i", "pipe:0"]
@@ -172,7 +172,7 @@ def from_wav(converter, wav, format, codec=None, bitrate=None, parameters=None, 
     try:
         name = os.path.join(d, "out")
         try:
-            p = run(converter, args + ["-f", muxer, name], wav, format)
+            p = run(converter, args + ["-f", muxer, name], wav, format, why)
         except TimeoutError as e:
             raise tagged(CouldntEncodeError("cant encode this file: " + str(e)), format, "timeout")
         except OSError as e:

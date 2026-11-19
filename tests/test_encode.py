@@ -455,3 +455,75 @@ def test_opus_resampled_inside_like_resampled_before():
     a, b = pcm(inside), pcm(before)
     assert abs(len(a) - len(b)) < 48000 * 2 // 20
     assert best_corr(b[::2], a[::2]) > 0.95
+
+
+def without_serial(out):
+    # libopusenc picks a random stream serial, which also changes the page checksums
+    out, i = bytearray(out), 0
+    while out[i:i + 4] == b"OggS":
+        n = out[i + 26]
+        out[i + 14:i + 18] = out[i + 22:i + 26] = bytes(4)
+        i += 27 + n + sum(out[i + 27:i + 27 + n])
+    assert i == len(out)
+    return bytes(out)
+
+
+def needs_mp3(fmt):
+    if fmt == "mp3" and not pydub2._mp3.available():
+        pytest.skip("mp3 is only written without ffmpeg with pydub2-mp3")
+
+
+# the encoder ffmpeg picks for each format when no codec is given
+OWN_CODECS = [("ogg", "libvorbis"), ("opus", "libopus"), ("mp3", "libmp3lame"), ("flac", "flac")]
+
+
+@pytest.mark.parametrize("fmt, codec", OWN_CODECS)
+@pytest.mark.parametrize("width, channels", [(1, 1), (2, 2), (4, 1)])
+@pytest.mark.parametrize("extra", [{}, {"bitrate": "96k"}, {"tags": {"title": "x"}}])
+def test_own_codec_is_built_in(fmt, codec, width, channels, extra, monkeypatch, tmp_path):
+    needs_mp3(fmt)
+    monkeypatch.setattr(pydub2.AudioSegment, "converter", str(tmp_path / "no-ffmpeg"))
+    seg = pydub2.AudioSegment(sine(44100, channels, width, 0.5), frame_rate=44100, channels=channels, sample_width=width)
+    plain = seg.export(format=fmt, **extra).read()
+    named = seg.export(format=fmt, codec=codec, **extra).read()
+    if fmt == "opus":
+        plain, named = without_serial(plain), without_serial(named)
+    assert named == plain
+
+
+@needs_ff
+@pytest.mark.parametrize("fmt, codec", OWN_CODECS)
+def test_own_codec_like_pydub(fmt, codec):
+    needs_mp3(fmt)
+    pydub = pytest.importorskip("pydub")
+    data = music(44100, 2)
+    mine = pydub2.AudioSegment(data, frame_rate=44100, channels=2, sample_width=2).export(format=fmt, codec=codec).read()
+    theirs = pydub.AudioSegment(data, frame_rate=44100, channels=2, sample_width=2).export(format=fmt, codec=codec).read()
+    a, b = ffdecode(mine, 44100, 2), ffdecode(theirs, 44100, 2)
+    if fmt == "flac":
+        assert a == b
+    else:
+        assert abs(len(a) - len(b)) < 44100 * 2 // 20
+        assert best_corr(b[::2], a[::2]) > 0.95
+    assert abs(len(mine) / len(theirs) - 1) < 0.1
+
+
+@pytest.mark.parametrize("fmt, kwargs, cause", [
+    ("ogg", {"codec": "vorbis"}, "the vorbis codec"),
+    ("opus", {"codec": "opus"}, "the opus codec"),
+    ("mp3", {"codec": "libshine"}, "the libshine codec"),
+    ("flac", {"codec": "pcm_s16le"}, "the pcm_s16le codec"),
+    ("wav", {"codec": "pcm_mulaw"}, "the pcm_mulaw codec"),
+    ("mp3", {"cover": "cover.png"}, "the cover"),
+    ("mp3", {"codec": "libmp3lame", "cover": "cover.png"}, "the cover"),
+    ("ogg", {"parameters": ["-ar", "8000"]}, "ogg with these parameters"),
+])
+def test_ffmpeg_missing_names_the_cause(fmt, kwargs, cause, monkeypatch, tmp_path):
+    monkeypatch.setattr(pydub2.AudioSegment, "converter", "ffmpeg")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setitem(sys.modules, "imageio_ffmpeg", None)
+    if "cover" in kwargs:
+        kwargs = dict(kwargs, cover=str(tmp_path / kwargs["cover"]))
+    with pytest.raises(FileNotFoundError, match="^ffmpeg not found, pydub2 needs it for %s. install ffmpeg" % cause) as e:
+        pydub2.AudioSegment.silent(100).export(io.BytesIO(), format=fmt, **kwargs)
+    assert e.value.format == fmt

@@ -101,6 +101,7 @@ Speed and memory numbers in this section are from Linux x86-64 (Intel Xeon, 4 co
 - A wav export at a `frame_rate` of 2**31 or more writes the same file as pydub when the header can hold it (8 bit mono up to 2**32 - 1), and raises `CouldntEncodeError` when it cannot, where pydub gives `struct.error` and pydub2 a `TypeError`. A flac, ogg or opus export at such a rate, or a wav with a `codec` or `parameters`, raises `CouldntEncodeError` too.
 - An mp3 export at a `frame_rate` more than 256 times 48000 goes through ffmpeg and gives pydub's file, where it raised `RuntimeError: rates too far apart`.
 - `AudioSegment.converter = None`, which `which("ffmpeg")` gives when no ffmpeg is on `PATH`, means the usual lookup, so the ffmpeg extra is used and a missing ffmpeg raises `FileNotFoundError` with the usual text. Every ffmpeg call raised `TypeError` before.
+- `export` with `codec="libvorbis"` for ogg, `"libopus"` for opus, `"libmp3lame"` for mp3 or `"flac"` for flac uses the built in encoder and works without ffmpeg, as it does without `codec`. Without ffmpeg, another codec or a `cover` gives a `FileNotFoundError` that names the codec or the cover.
 
 ### Security
 
