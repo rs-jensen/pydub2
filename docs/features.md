@@ -6,7 +6,7 @@ The API is pydub's. This page is about the rest: which formats need ffmpeg, the 
 
 | Format | Read | Write |
 |---|---|---|
-| wav | built in | built in |
+| wav | built in for pcm and float, ffmpeg for a-law, mu-law, adpcm and other codecs | built in |
 | flac | built in | built in |
 | ogg vorbis | built in | built in |
 | opus | built in | built in |
