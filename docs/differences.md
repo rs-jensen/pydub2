@@ -97,7 +97,7 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - The `encoder` tag says `pydub2` where ffmpeg's says Lavf or Lavc. A flac comment block over 16 MiB raises `CouldntEncodeError`, where ffmpeg fails earlier on the command line length. `cover` and mp3 are unchanged.
 - `export` of wav with `tags` and a `codec` or `parameters` goes through ffmpeg, so the tags are written, like pydub.
 - Exporting more than 4 GiB as wav raises `CouldntEncodeError`. pydub raises `struct.error`.
-- A wav export with a float `frame_rate` rounds it like the `wave` module. A float `frame_rate` (`silent(frame_rate=3.5)`, `44100.0`) works everywhere, also for mp3. `set_frame_rate` raises `TypeError` for a float rate, the new one or the current one, with the text pydub gives. `detect_silence` and what is built on it do the millisecond math with the float, like pydub.
+- A wav export with a float `frame_rate` rounds it like the `wave` module. A float `frame_rate` (`silent(frame_rate=3.5)`, `44100.0`) works everywhere, also for mp3. `set_frame_rate` raises `TypeError` for a float rate, the new one or the current one, with the text pydub gives. `detect_silence` and what is built on it do the millisecond math with the float, like pydub. `loudness`, `normalize` with `target_lufs`, `detect_speech` and `split_on_speech` take a whole float rate like `44100.0`.
 
 ## Errors
 

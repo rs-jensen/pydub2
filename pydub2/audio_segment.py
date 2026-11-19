@@ -1544,8 +1544,8 @@ class AudioSegment(object):
 
     def loudness(self):
         """integrated loudness in LUFS (EBU R128)"""
-        check_rate(self.frame_rate, "measure loudness")
-        return _pydub2.loudness(self._data, self.frame_rate, self.channels, self.sample_width)
+        rate = check_rate(self.frame_rate, "measure loudness")
+        return _pydub2.loudness(self._data, rate, self.channels, self.sample_width)
 
     @property
     def duration_seconds(self):

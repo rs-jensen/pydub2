@@ -786,6 +786,20 @@ def test_loudness_and_speech_at_a_very_high_rate_fail_clearly(rate):
             call()
 
 
+def test_loudness_and_speech_take_a_whole_float_rate():
+    data, _, _, _ = noise(1500, rate=16000)
+    whole = pydub2.AudioSegment(data=data, sample_width=2, frame_rate=16000, channels=1)
+    for rate in (16000.0, np.float64(16000)):
+        seg = pydub2.AudioSegment(data=data, sample_width=2, frame_rate=rate, channels=1)
+        assert seg.loudness() == whole.loudness()
+        assert pydub2.effects.normalize(seg, target_lufs=-23) == pydub2.effects.normalize(whole, target_lufs=-23)
+        assert pydub2.silence.detect_speech(seg) == pydub2.silence.detect_speech(whole)
+        assert pydub2.silence.split_on_speech(seg) == pydub2.silence.split_on_speech(whole)
+    odd = pydub2.AudioSegment(data=data, sample_width=2, frame_rate=16000.5, channels=1)
+    with pytest.raises(TypeError):
+        odd.loudness()
+
+
 @needs_ff
 @pytest.mark.parametrize("rate", [12288001, 20000000, 2 ** 31 - 1, 2 ** 31])
 def test_mp3_at_a_rate_far_above_48000_goes_like_pydub(rate):
