@@ -36,15 +36,20 @@ def find(converter):
         return extra_ffmpeg()
 
 
-def run(converter, args, data, what, why=None):
+def missing(converter, what):
+    # the text and the hint for an ffmpeg that is not there
+    name = name_of(converter)
+    return (("ffmpeg not found" if name == "ffmpeg" else "no ffmpeg at " + (name or "''")) +
+            ", pydub2 needs it for " + what + (". strict mode needs ffmpeg" if pydub2.strict else "") +
+            ('. install ffmpeg or pip install "pydub2[ffmpeg]"' if name == "ffmpeg" else ""),
+            'pip install "pydub2[ffmpeg]"' if name == "ffmpeg" else None)
+
+
+def run(converter, args, data, what):
     exe = find(converter)
     if exe is None:
-        name = name_of(converter)
-        raise tagged(FileNotFoundError(("ffmpeg not found" if name == "ffmpeg" else "no ffmpeg at " + (name or "''")) +
-                                       ", pydub2 needs it for " + (why or what) + (". strict mode needs ffmpeg" if pydub2.strict else "") +
-                                       ('. install ffmpeg or pip install "pydub2[ffmpeg]"' if name == "ffmpeg" else "")),
-                     None if what == "this file" else what, "needs_ffmpeg",
-                     'pip install "pydub2[ffmpeg]"' if name == "ffmpeg" else None)
+        text, hint = missing(converter, what)
+        raise tagged(FileNotFoundError(text), None if what == "this file" else what, "needs_ffmpeg", hint)
     cmd = [exe, "-y", "-nostdin"] + args
     log_conversion(cmd)
     seen = _seen.get()
@@ -167,12 +172,15 @@ def from_wav(converter, wav, format, codec=None, bitrate=None, parameters=None, 
         args += ["-id3v2_version", id3v2_version]
     if codec == "mp3" and sys.platform == "darwin":
         args += ["-write_xing", "0"]
+    if why and find(converter) is None:
+        text, hint = missing(converter, why)
+        raise tagged(FileNotFoundError(text), format, "needs_ffmpeg", hint)
     # a virus scanner can still hold the file when it is removed, that must not fail the export
     d = tempfile.mkdtemp()
     try:
         name = os.path.join(d, "out")
         try:
-            p = run(converter, args + ["-f", muxer, name], wav, format, why)
+            p = run(converter, args + ["-f", muxer, name], wav, format)
         except TimeoutError as e:
             raise tagged(CouldntEncodeError("cant encode this file: " + str(e)), format, "timeout")
         except OSError as e:
