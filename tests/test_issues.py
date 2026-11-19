@@ -579,7 +579,12 @@ def test_temporary_files_give_16_bit_like_pydub(tmp_path, fmt, rate, channels, k
 def test_temporary_files_give_16_bit_without_ffmpeg(tmp_path, monkeypatch, fmt, rate):
     path = str(tmp_path / ("a." + fmt))
     pydub2.AudioSegment(**tone32(rate, 2)).export(path, format=fmt)
-    old = pydub.AudioSegment.from_file_using_temporary_files(path, start_second=0.1)
+    ref = path
+    if fmt == "ogg":
+        # ffmpeg's -ss drifts on vorbis and the cut without it is exact (docs/differences.md), so cut pydub's whole load
+        ref = str(tmp_path / "a.aiff")
+        pydub.AudioSegment.from_file_using_temporary_files(path).export(ref, format="aiff")
+    old = pydub.AudioSegment.from_file_using_temporary_files(ref, start_second=0.1)
     monkeypatch.setattr(pydub2.AudioSegment, "converter", str(tmp_path / "no-ffmpeg"))
     new = pydub2.AudioSegment.from_file_using_temporary_files(path, start_second=0.1)
     assert (new.sample_width, len(new.raw_data)) == (2, len(old.raw_data))

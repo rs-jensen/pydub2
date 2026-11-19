@@ -40,6 +40,7 @@ FetchContent_Declare(ogg EXCLUDE_FROM_ALL OVERRIDE_FIND_PACKAGE
     URL ${xiph}/ogg/libogg-1.3.6.tar.gz
     URL_HASH SHA256=83e6704730683d004d20e21b8f7f55dcb3383cdf84c0daedf30bde175f774638)
 FetchContent_Declare(vorbis EXCLUDE_FROM_ALL
+    PATCH_COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_LIST_DIR}/cmake/vorbis_patch.cmake
     URL ${xiph}/vorbis/libvorbis-1.3.7.tar.gz
     URL_HASH SHA256=0e982409a9c3fc82ee06e08205b1355e5c6aa4c36bca58146ef399621b0ce5ab)
 FetchContent_Declare(flac EXCLUDE_FROM_ALL
