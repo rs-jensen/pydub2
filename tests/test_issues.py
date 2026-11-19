@@ -745,6 +745,20 @@ def test_wav_that_does_not_fit_the_header_fails_clearly(rate, width, channels):
         new.export(io.BytesIO(), format="wav")
 
 
+@needs_ff
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning")
+@pytest.mark.parametrize("width", [1, 2])
+@pytest.mark.parametrize("rate", [2 ** 31, 2 ** 32 - 1])
+@pytest.mark.parametrize("kw", [dict(format="flac"), dict(format="ogg"), dict(format="opus"), dict(format="wav", codec="pcm_u8"),
+                                dict(format="wav", parameters=["-ac", "1"])], ids=["flac", "ogg", "opus", "wav_codec", "wav_parameters"])
+def test_other_exports_at_a_very_high_rate_fail_clearly(kw, rate, width):
+    new, old = high_rate_segments(rate, width)
+    with pytest.raises(Exception):
+        old.export(io.BytesIO(), **kw)
+    with pytest.raises(pydub2.exceptions.CouldntEncodeError, match="^cant write audio at a frame rate of %d" % rate):
+        new.export(io.BytesIO(), **kw)
+
+
 @pytest.mark.parametrize("rate", [2 ** 31, 2 ** 32, 10 ** 30, float(2 ** 33)])
 def test_loudness_and_speech_at_a_very_high_rate_fail_clearly(rate):
     seg = pydub2.AudioSegment(data=bytes(range(256)) * 4, sample_width=2, frame_rate=rate, channels=1)

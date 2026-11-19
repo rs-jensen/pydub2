@@ -67,9 +67,13 @@ _SPAWN_HOOKS = ("__new__", "__init__", "__setattr__", "__getattr__", "_spawn")
 
 
 def _encode(data, rate, *args, **kwargs):
+    # the wave module in pydub rounds the rate
+    rate = round(rate)
+    if rate >= 2 ** 31:
+        raise tagged(CouldntEncodeError("cant write audio at a frame rate of %d, the most is %d" % (rate, 2 ** 31 - 1)),
+                     args[2], "cant_encode")
     try:
-        # the wave module in pydub rounds the rate
-        return _pydub2.encode(data, round(rate), *args, **kwargs)
+        return _pydub2.encode(data, rate, *args, **kwargs)
     except RuntimeError as e:
         raise tagged(CouldntEncodeError(str(e)), args[2], "cant_encode")
 
