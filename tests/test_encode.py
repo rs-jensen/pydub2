@@ -326,7 +326,7 @@ def test_lossy_length_like_ffmpeg(fmt, rate, channels, frames):
     mine = _pydub2.decode(_pydub2.encode(data, rate, channels, 2, fmt))
     theirs = _pydub2.decode(pydub_export(data, rate, channels, 2, fmt))
     assert mine[1:] == theirs[1:]
-    assert fmt == "ogg" or len(mine[0]) == len(theirs[0])
+    assert len(mine[0]) == len(theirs[0])
 
 
 def test_opus_header_and_tags():
@@ -340,6 +340,60 @@ def test_opus_header_and_tags():
 def test_vorbis_last_granule_is_the_input_length(frames):
     out = _pydub2.encode(sine(44100, 1, 2, 1)[:frames * 2], 44100, 1, 2, "ogg")
     assert int.from_bytes(out[out.rfind(b"OggS") + 6:][:8], "little") == frames
+
+
+# what pydub gives back for these, ffmpeg keeps the end padding of a vorbis file for some page layouts
+VORBIS_LENGTHS = [(8000, 1, 8000, 8000), (8000, 1, 8001, 8001), (8000, 2, 8000, 8000), (8000, 6, 2049, 2304),
+                  (11025, 1, 11025, 11025), (11025, 6, 4097, 4352), (16000, 1, 160, 256), (16000, 2, 12345, 12544),
+                  (22050, 2, 1, 256), (22050, 6, 12345, 12544), (32000, 2, 12345, 12416), (32000, 6, 4097, 4224),
+                  (44100, 1, 441, 512), (44100, 2, 44100, 44100), (44100, 6, 12345, 12416), (48000, 2, 1001, 1024),
+                  (48000, 6, 12345, 12416), (96000, 1, 96001, 96001), (96000, 2, 960, 1024), (96000, 6, 12345, 12416)]
+
+
+def noise(rate, channels, frames):
+    return np.random.default_rng(rate + channels + frames).normal(0, 3000, frames * channels).astype("<i2").tobytes()
+
+
+@pytest.mark.parametrize("rate, channels, frames, want", VORBIS_LENGTHS)
+def test_vorbis_round_trip_length(rate, channels, frames, want):
+    seg = pydub2.AudioSegment(noise(rate, channels, frames), frame_rate=rate, channels=channels, sample_width=2)
+    assert pydub2.AudioSegment.from_file(seg.export(format="ogg"), format="ogg").frame_count() == want
+
+
+# libvorbis extrapolates back from the start with the audio it has by then, which can change the packets at the end
+@pytest.mark.parametrize("rate, channels, frames, bitrate, kind, want", [
+    (16000, 1, 3579, "64k", "sine", 3968), (16000, 2, 4685, "128k", "dc", 4429),
+    (22050, 1, 1268, None, "sine", 1664), (22050, 2, 9001, "128k", "dc", 9344)])
+def test_vorbis_round_trip_length_fed_like_ffmpeg(rate, channels, frames, bitrate, kind, want):
+    x = np.full(frames, 9830) if kind == "dc" else (9830 * np.sin(2 * np.pi * 1000 * np.arange(frames) / rate)).astype(int)
+    seg = pydub2.AudioSegment(np.repeat(x, channels).astype("<i2").tobytes(), frame_rate=rate, channels=channels,
+                              sample_width=2)
+    out = seg.export(format="ogg", bitrate=bitrate)
+    assert pydub2.AudioSegment.from_file(out, format="ogg").frame_count() == want
+    if ff:
+        pydub = pytest.importorskip("pydub")
+        theirs = pydub.AudioSegment(seg.raw_data, frame_rate=rate, channels=channels, sample_width=2)
+        theirs = theirs.export(format="ogg", bitrate=bitrate, codec="libvorbis")
+        assert pydub.AudioSegment.from_file(theirs, format="ogg").frame_count() == want
+
+
+@needs_ff
+@pytest.mark.parametrize("rate, channels, frames, want", VORBIS_LENGTHS)
+def test_vorbis_round_trip_length_like_pydub(rate, channels, frames, want):
+    pydub = pytest.importorskip("pydub")
+    data = noise(rate, channels, frames)
+    seg = pydub.AudioSegment(data, frame_rate=rate, channels=channels, sample_width=2)
+    theirs = pydub.AudioSegment.from_file(seg.export(format="ogg", codec="libvorbis"), format="ogg")
+    mine = pydub2.AudioSegment(data, frame_rate=rate, channels=channels, sample_width=2).export(format="ogg")
+    assert pydub2.AudioSegment.from_file(mine, format="ogg").frame_count() == theirs.frame_count() == want
+
+
+# libvorbis 1.3.7 shifts negative ints and reads past a noise curve from 44.1 kHz up, this fails under -fsanitize=undefined without cmake/vorbis_patch.cmake
+@pytest.mark.parametrize("rate", [8000, 22050, 44100, 48000, 96000, 192000])
+def test_vorbis_sets_up_at_every_rate(rate):
+    out = _pydub2.encode(sine(rate, 2, 2, 0.1), rate, 2, 2, "ogg")
+    assert _pydub2.decode(out)[1:3] == (rate, 2)
+    assert int.from_bytes(out[out.rfind(b"OggS") + 6:][:8], "little") == rate // 10
 
 
 def test_opus_refuses_tiny_rates():

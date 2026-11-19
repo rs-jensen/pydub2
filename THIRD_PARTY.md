@@ -38,6 +38,8 @@ Two vendored files have a small change so that opening files from several thread
 
 opusfile 0.12 is patched at build time by `cmake/opusfile_patch.cmake`: the fix for CVE-2022-47021 (xiph/opusfile 0a4cd796) and the fix from xiph/opusfile master for the tags a failed open leaked.
 
+libvorbis 1.3.7 is patched at build time by `cmake/vorbis_patch.cmake` with two fixes from xiph/vorbis master that no release has yet: 2d79800b (a negative int shifted left in `psy.c` and `floor1.c`) and 315da9cc (one float read past a noise curve in `_vp_psy_init`, with a weight of 0). The encoded files are the same.
+
 `src/third_party/dr_flac.h` has one small change, marked with a `pydub2:` comment: the byte guess in the seek binary search is checked before it is cast to a 64 bit integer, because a damaged file can make it infinite or nan (undefined behaviour in C).
 
 On arm64 (not MSVC) libopusenc 0.3 is built with `USE_NEON`, so `resample.c` includes `cmake/resample_neon.h`. It is `resample_sse.h` of the same release (BSD-3-Clause, licenses/speex-resampler.txt) with neon intrinsics for `inner_product_single` and `interpolate_product_single`, which upstream only has for SSE. Without it the resampler runs as a scalar loop on arm64.

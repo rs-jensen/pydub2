@@ -1,6 +1,3 @@
-shift-base:_vp_psy_init
-bounds:_vp_psy_init
-shift-base:floor1_encode
 pointer-overflow:ogg_sync_pageseek
 pointer-overflow:src_process
 shift-base:vorbis_search_for_page_pushdata
