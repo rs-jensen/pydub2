@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -365,3 +366,25 @@ def test_set_frame_rate_takes_numpy_ints():
     for kind in (np.int16, np.int32, np.int64, np.uint16):
         for quality in (None, "high"):
             assert seg.set_frame_rate(kind(22050), quality) == seg.set_frame_rate(22050, quality)
+
+
+@pytest.mark.parametrize("bitrate, bits", [(64, 64), ("192", 192), (192, 192), ("32k", 32000)])
+def test_ogg_bitrate_libvorbis_cannot_use_says_so(bitrate, bits):
+    seg = pydub2.AudioSegment.silent(500, frame_rate=44100).set_channels(2)
+    text = "bad bitrate %r, libvorbis cant encode 44100 Hz with 2 channel(s) at %d bit/s" % (bitrate, bits)
+    if bits < 1000:
+        text += ", did you mean '%dk'" % bits
+    with pytest.raises(CouldntEncodeError, match="^%s$" % re.escape(text)) as e:
+        seg.export(io.BytesIO(), format="ogg", bitrate=bitrate)
+    assert (e.value.format, e.value.reason) == ("ogg", "cant_encode")
+
+
+@needs_ff
+@pytest.mark.parametrize("bitrate", ["192", "32k"])
+def test_ogg_bitrate_libvorbis_cannot_use_like_pydub(bitrate):
+    # ffmpeg reads "192" as 192 bit/s, which libvorbis refuses, so pydub fails too
+    pydub = pytest.importorskip("pydub")
+    with pytest.raises(pydub.exceptions.CouldntEncodeError):
+        pydub.AudioSegment.silent(500, frame_rate=44100).set_channels(2).export(io.BytesIO(), format="ogg", bitrate=bitrate)
+    with pytest.raises(CouldntEncodeError):
+        pydub2.AudioSegment.silent(500, frame_rate=44100).set_channels(2).export(io.BytesIO(), format="ogg", bitrate=bitrate)

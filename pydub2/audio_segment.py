@@ -116,6 +116,15 @@ def _bits_per_second(bitrate, format, channels, converter):
     return rate
 
 
+def _vorbis_takes(rate, channels, width):
+    # whether libvorbis can encode this audio without a bitrate, so a failure with one is the bitrate's
+    try:
+        _encode(b"", rate, channels, width, "ogg", 0)
+    except CouldntEncodeError:
+        return False
+    return True
+
+
 def _vorbis_tags(tags, format):
     # what ffmpeg makes of -metadata, the muxer renames four keys
     if not isinstance(tags, dict):
@@ -1325,8 +1334,15 @@ class AudioSegment(object):
                 return _write_out(out_f, head, data)
             # a file opened here takes flac a block at a time, so the file is not held whole next to the blocks
             parts = format == "flac" and (out_f is None or isinstance(out_f, (basestring, os.PathLike)))
-            out = _encode(data, self.frame_rate, self.channels, width, format, rate,
-                          [] if tags is None or format == "wav" else _vorbis_tags(tags, format), parts=parts)
+            try:
+                out = _encode(data, self.frame_rate, self.channels, width, format, rate,
+                              [] if tags is None or format == "wav" else _vorbis_tags(tags, format), parts=parts)
+            except CouldntEncodeError:
+                if format == "ogg" and rate and _vorbis_takes(self.frame_rate, self.channels, width):
+                    raise tagged(CouldntEncodeError("bad bitrate %r, libvorbis cant encode %d Hz with %d channel(s) at %d bit/s%s" % (
+                        bitrate, round(self.frame_rate), self.channels, rate, ", did you mean '%dk'" % rate if rate < 1000 else "")),
+                        format, "cant_encode")
+                raise
             if parts:
                 return _write_out(out_f, *out)
             if format == "wav" and out[40] & 1 and not WAVE_PADS:
