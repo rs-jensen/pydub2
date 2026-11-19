@@ -709,6 +709,23 @@ def test_raw_reader_that_gives_none_fails_like_pydub(limit, monkeypatch):
     assert pydub2.AudioSegment.from_file(NoData(data), **kw).raw_data == pydub.AudioSegment.from_file(NoData(data), **kw).raw_data
 
 
+@pytest.mark.parametrize("limit", [None, 1 << 30])
+@pytest.mark.parametrize("how", ["init", "from_file"])
+def test_reader_that_gives_data_and_then_none_loads(limit, how, monkeypatch):
+    monkeypatch.setattr(pydub2, "max_file_size", limit)
+    wav = io.BytesIO()
+    pydub2.AudioSegment.silent(100, 8000).export(wav, "wav")
+    wav = wav.getvalue()
+    if how == "init":
+        seg = pydub2.AudioSegment(data=NoData(wav))
+    else:
+        seg = pydub2.AudioSegment.from_file(NoData(wav), format="raw", sample_width=2, frame_rate=8000, channels=1)
+    assert len(seg) > 0
+    monkeypatch.setattr(pydub2, "max_file_size", 100)
+    with pytest.raises(pydub2.exceptions.CouldntDecodeError, match="larger than max_file_size"):
+        pydub2.AudioSegment(data=NoData(wav))
+
+
 @needs_ff
 @pytest.mark.parametrize("limit", [None, 5])
 @pytest.mark.parametrize("fmt", ["flac", "mp3"])

@@ -274,7 +274,7 @@ def read_upto(f, lim, n=-1, none_error=False, keep_none=False):
         if part is None and keep_none and not parts:
             # pydub keeps a None from its single read, and fails only when it is used
             return None
-        if part is None and none_error:
+        if part is None and none_error and not parts:
             # what len() says of it in pydub
             raise TypeError("object of type 'NoneType' has no len()")
         if not part:

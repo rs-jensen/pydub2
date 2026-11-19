@@ -7,6 +7,7 @@ What changed in each release.
 ### Fixed
 
 - `set_frame_rate` with a numpy integer of 2**31 or more raises `OverflowError` like pydub, not `TypeError`.
+- `AudioSegment(data=file)` loads a reader whose `read()` gives data and then `None` when `max_file_size` is set, like it does without the limit.
 
 ## [0.1.0] - 2026-11-19
 
