@@ -1385,7 +1385,8 @@ class AudioSegment(object):
         if format in ("wav", "flac", "ogg", "opus", "mp3") and not pydub2.strict:
             if cover is not None:
                 why = "the cover"
-            elif not own:
+            elif not own and not (format == "wav" and codec in ("pcm_s16le", "pcm_s24le", "pcm_s32le")):
+                # the built in wav writer has these, so they are not why ffmpeg is needed
                 why = "the %s codec" % codec
             elif parameters is not None:
                 why = format + " with these parameters"

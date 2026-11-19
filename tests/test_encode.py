@@ -517,6 +517,9 @@ def test_own_codec_like_pydub(fmt, codec):
     ("mp3", {"cover": "cover.png"}, "the cover"),
     ("mp3", {"codec": "libmp3lame", "cover": "cover.png"}, "the cover"),
     ("ogg", {"parameters": ["-ar", "8000"]}, "ogg with these parameters"),
+    # these codecs are built in for wav, so the parameters are the cause
+    ("wav", {"codec": "pcm_s16le", "parameters": ["-ar", "8000"]}, "wav with these parameters"),
+    ("wav", {"codec": "pcm_s24le", "parameters": ["-ac", "2"]}, "wav with these parameters"),
 ])
 def test_ffmpeg_missing_names_the_cause(fmt, kwargs, cause, monkeypatch, tmp_path):
     monkeypatch.setattr(pydub2.AudioSegment, "converter", "ffmpeg")
