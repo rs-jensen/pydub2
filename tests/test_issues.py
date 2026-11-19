@@ -156,7 +156,7 @@ def test_chained_opus_falls_back_to_ffmpeg(tmp_path):
     assert pydub2.AudioSegment.from_file(path).raw_data == pydub.AudioSegment.from_file(path).raw_data
 
 
-def test_chained_opus_with_other_channels_needs_ffmpeg(tmp_path, monkeypatch):
+def test_chained_opus_with_other_channels_needs_ffmpeg(tmp_path, monkeypatch, no_imageio_ffmpeg):
     path = chained_opus(tmp_path)
     monkeypatch.setenv("PATH", "")
     monkeypatch.setattr(pydub2.AudioSegment, "converter", "ffmpeg")
@@ -185,7 +185,7 @@ def test_chained_opus_goes_to_ffmpeg_when_there(tmp_path, monkeypatch):
 
 
 @pytest.mark.filterwarnings("ignore::RuntimeWarning")
-def test_corrupt_mp3_without_ffmpeg(monkeypatch):
+def test_corrupt_mp3_without_ffmpeg(monkeypatch, no_imageio_ffmpeg):
     monkeypatch.setenv("PATH", "")
     monkeypatch.setattr(pydub2.AudioSegment, "converter", "ffmpeg")
     with pytest.raises(pydub2.exceptions.CouldntDecodeError):
@@ -460,7 +460,7 @@ def test_failed_export_keeps_the_old_file(fmt, kw, tmp_path):
 
 @needs_ff
 @pytest.mark.parametrize("data", [b"", b"RIFF" + b"\0" * 40, b"fLaC" + b"\1" * 40], ids=["empty", "wav", "flac"])
-def test_mediainfo_of_a_damaged_file_without_ffmpeg_matches_pydub(data, tmp_path, monkeypatch):
+def test_mediainfo_of_a_damaged_file_without_ffmpeg_matches_pydub(data, tmp_path, monkeypatch, no_imageio_ffmpeg):
     path = tmp_path / "bad.wav"
     path.write_bytes(data)
     old = pydub.utils.mediainfo_json(str(path)), pydub.utils.mediainfo(str(path))
@@ -681,3 +681,104 @@ def test_plain_numbers_cut_without_ffmpeg(tmp_path, monkeypatch, fmt, kind, make
     v = make() * 1000
     want = whole[v:] if kind == "start_second" else whole[:v]
     assert len(seg) == len(want)
+
+
+class NoData:
+    # a non-blocking file, read gives None when nothing is there
+    def __init__(self, data=None):
+        self.data = data
+
+    def read(self, n=-1):
+        data, self.data = self.data, None
+        return data
+
+
+@pytest.mark.parametrize("limit", [None, 10])
+def test_raw_reader_that_gives_none_fails_like_pydub(limit, monkeypatch):
+    monkeypatch.setattr(pydub2, "max_duration", limit)
+    kw = dict(format="raw", sample_width=2, frame_rate=8000, channels=1)
+    old = pydub.AudioSegment.from_file(NoData(), **kw)
+    new = pydub2.AudioSegment.from_file(NoData(), **kw)
+    assert old._data is None and new._data is None
+    with pytest.raises(TypeError) as e_old:
+        len(old)
+    with pytest.raises(TypeError) as e_new:
+        len(new)
+    assert str(e_new.value) == str(e_old.value)
+    data = b"\1\0" * 800
+    assert pydub2.AudioSegment.from_file(NoData(data), **kw).raw_data == pydub.AudioSegment.from_file(NoData(data), **kw).raw_data
+
+
+@needs_ff
+@pytest.mark.parametrize("limit", [None, 5])
+@pytest.mark.parametrize("fmt", ["flac", "mp3"])
+def test_infinite_duration_with_a_limit_fails_like_pydub(fmt, limit, tmp_path, monkeypatch):
+    monkeypatch.setattr(pydub2, "max_duration", limit)
+    path = str(tmp_path / ("a." + fmt))
+    pydub2.AudioSegment.silent(1000, 8000).export(path, fmt)
+    with pytest.raises(pydub.exceptions.CouldntDecodeError):
+        pydub.AudioSegment.from_file(path, duration=float("inf"))
+    with pytest.raises(pydub2.exceptions.CouldntDecodeError):
+        pydub2.AudioSegment.from_file(path, duration=float("inf"))
+
+
+def high_rate_segments(rate, width=1, channels=1, ms=5):
+    n = rate // 1000 * ms if rate < 100000 else 40
+    data = bytes((i * 7) % 256 for i in range(n * width * channels))
+    kw = dict(sample_width=width, frame_rate=rate, channels=channels)
+    return pydub2.AudioSegment(data=data, **kw), pydub.AudioSegment(data=data, **kw)
+
+
+@pytest.mark.parametrize("rate", [2 ** 31, 2 ** 31 + 12345, 2 ** 32 - 1])
+def test_wav_of_8_bit_mono_at_a_very_high_rate_is_pydubs(rate):
+    new, old = high_rate_segments(rate)
+    assert new.export(io.BytesIO(), format="wav").getvalue() == old.export(io.BytesIO(), format="wav").getvalue()
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning")
+@pytest.mark.parametrize("rate,width,channels", [(2 ** 31, 2, 1), (2 ** 31, 1, 2), (2 ** 32 - 1, 4, 1), (2 ** 32, 1, 1), (2 ** 40, 3, 2)])
+def test_wav_that_does_not_fit_the_header_fails_clearly(rate, width, channels):
+    new, old = high_rate_segments(rate, width, channels)
+    with pytest.raises(Exception):
+        old.export(io.BytesIO(), format="wav")
+    with pytest.raises(pydub2.exceptions.CouldntEncodeError, match="^cant write a wav at a frame rate of %d" % rate):
+        new.export(io.BytesIO(), format="wav")
+
+
+@needs_ff
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning")
+@pytest.mark.parametrize("width", [1, 2])
+@pytest.mark.parametrize("rate", [2 ** 31, 2 ** 32 - 1])
+@pytest.mark.parametrize("kw", [dict(format="flac"), dict(format="ogg"), dict(format="opus"), dict(format="wav", codec="pcm_u8"),
+                                dict(format="wav", parameters=["-ac", "1"])], ids=["flac", "ogg", "opus", "wav_codec", "wav_parameters"])
+def test_other_exports_at_a_very_high_rate_fail_clearly(kw, rate, width):
+    new, old = high_rate_segments(rate, width)
+    with pytest.raises(Exception):
+        old.export(io.BytesIO(), **kw)
+    with pytest.raises(pydub2.exceptions.CouldntEncodeError, match="^cant write audio at a frame rate of %d" % rate):
+        new.export(io.BytesIO(), **kw)
+
+
+@pytest.mark.parametrize("rate", [2 ** 31, 2 ** 32, 10 ** 30, float(2 ** 33)])
+def test_loudness_and_speech_at_a_very_high_rate_fail_clearly(rate):
+    seg = pydub2.AudioSegment(data=bytes(range(256)) * 4, sample_width=2, frame_rate=rate, channels=1)
+    for call, what in ((seg.loudness, "measure loudness"), (lambda: pydub2.effects.normalize(seg, target_lufs=-23), "measure loudness"),
+                       (lambda: pydub2.silence.detect_speech(seg), "detect speech"),
+                       (lambda: pydub2.silence.split_on_speech(seg), "detect speech")):
+        with pytest.raises(RuntimeError, match="^cant %s: the frame rate" % what):
+            call()
+
+
+@needs_ff
+@pytest.mark.parametrize("rate", [12288001, 20000000, 2 ** 31 - 1, 2 ** 31])
+def test_mp3_at_a_rate_far_above_48000_goes_like_pydub(rate):
+    data = bytes(range(256)) * 4
+    new = pydub2.AudioSegment(data=data, sample_width=1, frame_rate=rate, channels=1)
+    old = pydub.AudioSegment(data=data, sample_width=1, frame_rate=rate, channels=1)
+    try:
+        want = old.export(io.BytesIO(), format="mp3").getvalue()
+    except pydub.exceptions.CouldntEncodeError:
+        with pytest.raises(pydub2.exceptions.CouldntEncodeError):
+            new.export(io.BytesIO(), format="mp3")
+    else:
+        assert new.export(io.BytesIO(), format="mp3").getvalue() == want

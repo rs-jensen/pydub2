@@ -2,6 +2,7 @@ import functools
 import re
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -10,6 +11,12 @@ from pydub2.exceptions import CouldntDecodeError
 
 OPTIONAL = {"libmp3lame", "libvorbis", "libopus", "libfdk_aac", "libshine", "aac"}
 HAVE_FFMPEG = shutil.which("ffmpeg") is not None
+
+
+@pytest.fixture
+def no_imageio_ffmpeg(monkeypatch):
+    # tests that act as if ffmpeg is missing must also hide the imageio-ffmpeg fallback
+    monkeypatch.setitem(sys.modules, "imageio_ffmpeg", None)
 
 
 @functools.lru_cache(None)
