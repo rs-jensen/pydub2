@@ -156,7 +156,7 @@ def test_chained_opus_falls_back_to_ffmpeg(tmp_path):
     assert pydub2.AudioSegment.from_file(path).raw_data == pydub.AudioSegment.from_file(path).raw_data
 
 
-def test_chained_opus_with_other_channels_needs_ffmpeg(tmp_path, monkeypatch):
+def test_chained_opus_with_other_channels_needs_ffmpeg(tmp_path, monkeypatch, no_imageio_ffmpeg):
     path = chained_opus(tmp_path)
     monkeypatch.setenv("PATH", "")
     monkeypatch.setattr(pydub2.AudioSegment, "converter", "ffmpeg")
@@ -185,7 +185,7 @@ def test_chained_opus_goes_to_ffmpeg_when_there(tmp_path, monkeypatch):
 
 
 @pytest.mark.filterwarnings("ignore::RuntimeWarning")
-def test_corrupt_mp3_without_ffmpeg(monkeypatch):
+def test_corrupt_mp3_without_ffmpeg(monkeypatch, no_imageio_ffmpeg):
     monkeypatch.setenv("PATH", "")
     monkeypatch.setattr(pydub2.AudioSegment, "converter", "ffmpeg")
     with pytest.raises(pydub2.exceptions.CouldntDecodeError):
@@ -460,7 +460,7 @@ def test_failed_export_keeps_the_old_file(fmt, kw, tmp_path):
 
 @needs_ff
 @pytest.mark.parametrize("data", [b"", b"RIFF" + b"\0" * 40, b"fLaC" + b"\1" * 40], ids=["empty", "wav", "flac"])
-def test_mediainfo_of_a_damaged_file_without_ffmpeg_matches_pydub(data, tmp_path, monkeypatch):
+def test_mediainfo_of_a_damaged_file_without_ffmpeg_matches_pydub(data, tmp_path, monkeypatch, no_imageio_ffmpeg):
     path = tmp_path / "bad.wav"
     path.write_bytes(data)
     old = pydub.utils.mediainfo_json(str(path)), pydub.utils.mediainfo(str(path))
