@@ -4,6 +4,7 @@ import sys
 
 import pytest
 
+from pydub2 import _ffmpeg, _mp3
 from test_untrusted import peak_mb
 
 # 24 MB of 16 bit stereo, about 2 minutes 16 s at 44.1 kHz
@@ -55,7 +56,16 @@ def export(format):
 # measured with 10 minutes on Linux, before and after: ogg 3.2 and 1.2, opus 3.1 and 1.2, mp3 3.4 and 1.2, 1.5 at this size
 @pytest.mark.parametrize("format", ["ogg", "opus", "mp3"])
 def test_export_holds_the_audio_once(format):
+    if format == "mp3" and not _mp3.available():
+        pytest.skip("pydub2-mp3 not installed")
     assert peak_x(export(format)) < 2.0
+
+
+# ffmpeg gets the audio as one wav, so it is held twice: 2.03 to 2.06 on Linux, 2.07 to 2.10 on macOS and Windows
+@pytest.mark.skipif(_ffmpeg.find("ffmpeg") is None, reason="no ffmpeg")
+def test_export_mp3_through_ffmpeg_holds_the_audio_twice():
+    setup = STEREO % SAW + "from pydub2 import _mp3\n_mp3.available = lambda: False\n"
+    assert peak_x(export("mp3"), setup) < 2.5
 
 
 # 3.0 before and 2.0 after with noise, which flac cannot shrink: the audio and the file, written a block at a time.
