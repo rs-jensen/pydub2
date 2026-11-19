@@ -2,6 +2,12 @@
 
 What changed in each release.
 
+## [Unreleased]
+
+### Fixed
+
+- `set_frame_rate` with a numpy integer of 2**31 or more raises `OverflowError` like pydub, not `TypeError`.
+
 ## [0.1.0] - 2026-11-19
 
 ### Added
