@@ -258,16 +258,19 @@ def test_stop_and_wait_from_many_threads(fake_ffplay):
 
 def test_many_handles_leak_nothing(fake_ffplay):
     fds = "/dev/fd" if os.path.isdir("/dev/fd") else None
+    # threads are compared by identity, a thread on its way out would throw a count off,
+    # and the watcher of the first handle can outlive stop() for a moment
+    threads = set(threading.enumerate())
     playback.play_async(seg).stop()
-    before = threading.active_count(), fds and len(os.listdir(fds))
+    before = fds and len(os.listdir(fds))
     for i in range(200):
         h = playback.play_async(seg)
         if i % 2:
             h.stop()
         del h  # every other one is only dropped and plays on
     playback._stop_all()
-    assert wait_for(lambda: threading.active_count() == before[0])
-    assert before == (threading.active_count(), fds and len(os.listdir(fds)))
+    assert wait_for(lambda: set(threading.enumerate()) <= threads)
+    assert before == (fds and len(os.listdir(fds)))
     assert fake_ffplay.temp_files() == [] and all(p.returncode is not None for p in fake_ffplay.started)
 
 
@@ -444,7 +447,7 @@ def test_pyaudio_is_released_when_the_stream_does_not_open(monkeypatch):
 
 @pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
 def test_stop_returns_when_a_backend_fails_in_its_thread(monkeypatch):
-    threads = threading.active_count()
+    threads = set(threading.enumerate())
     stub_pyaudio(monkeypatch, 0.05, broken=["stop_stream"])
     h = playback.play_async(seg)
     assert in_thread(h.stop) and not h.is_playing()
@@ -457,4 +460,4 @@ def test_stop_returns_when_a_backend_fails_in_its_thread(monkeypatch):
                         lambda seg: setattr(made_play(seg), "wait_done", wait_done) or made[0][1])
     h = playback.play_async(seg)
     assert in_thread(h.stop) and not h.is_playing()
-    assert wait_for(lambda: threading.active_count() == threads)  # their tracebacks belong to this test
+    assert wait_for(lambda: set(threading.enumerate()) <= threads)  # their tracebacks belong to this test
