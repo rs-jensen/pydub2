@@ -336,7 +336,7 @@ def CouldntEncodeError_():
 
 
 @posix
-def test_current_directory_is_not_searched(tmp_path, monkeypatch):
+def test_current_directory_is_not_searched(tmp_path, monkeypatch, no_imageio_ffmpeg):
     for name in ("ffmpeg", "ffprobe", "avconv", "avprobe", "ffplay"):
         (tmp_path / name).write_text("#!/bin/sh\n")
         (tmp_path / name).chmod(0o755)
@@ -353,7 +353,7 @@ def test_current_directory_is_not_searched(tmp_path, monkeypatch):
     assert found is None or os.path.isabs(found)
 
 
-def test_nothing_is_started_from_a_name_that_was_not_found(tmp_path, monkeypatch):
+def test_nothing_is_started_from_a_name_that_was_not_found(tmp_path, monkeypatch, no_imageio_ffmpeg):
     for name in ("ffmpeg", "ffprobe", "ffplay", "avconv", "avprobe", "avplay"):
         for ext in ("", ".exe"):
             (tmp_path / (name + ext)).write_bytes(b"MZ")
