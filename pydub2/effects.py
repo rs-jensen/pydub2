@@ -50,8 +50,8 @@ def normalize(seg, headroom=0.1, target_lufs=None):
 
     needed_boost = ratio_to_db(target_peak / peak_sample_val)
     if target_lufs is not None:
-        check_rate(seg.frame_rate, "measure loudness")
-        current = _pydub2.loudness(seg.raw_data, seg.frame_rate, seg.channels, seg.sample_width)
+        rate = check_rate(seg.frame_rate, "measure loudness")
+        current = _pydub2.loudness(seg.raw_data, rate, seg.channels, seg.sample_width)
         # like loudness tools, never lift the peak past full scale minus headroom
         needed_boost = min(target_lufs - current, needed_boost)
     return seg.apply_gain(needed_boost)

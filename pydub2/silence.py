@@ -138,8 +138,8 @@ def detect_speech(audio_segment, threshold=0.5, min_speech_len=250, min_silence_
     """
     Returns a list of [start, end] in milliseconds where somebody is talking
     """
-    check_rate(audio_segment.frame_rate, "detect speech")
-    return _pydub2.detect_speech(audio_segment.raw_data, audio_segment.frame_rate,
+    rate = check_rate(audio_segment.frame_rate, "detect speech")
+    return _pydub2.detect_speech(audio_segment.raw_data, rate,
                                  audio_segment.channels, audio_segment.sample_width,
                                  threshold, min_speech_len, min_silence_len)
 

@@ -202,8 +202,13 @@ def extra_ffmpeg():
 
 def check_rate(rate, what):
     # the core takes a 32 bit signed frame rate
-    if isinstance(rate, numbers.Real) and rate >= 2 ** 31:
-        raise RuntimeError("cant %s: the frame rate %s is too high" % (what, rate))
+    if isinstance(rate, numbers.Real):
+        if rate >= 2 ** 31:
+            raise RuntimeError("cant %s: the frame rate %s is too high" % (what, rate))
+        # a rate like 44100.0 is fine for the core
+        if float(rate).is_integer():
+            return int(rate)
+    return rate
 
 
 def limits():
@@ -274,7 +279,7 @@ def read_upto(f, lim, n=-1, none_error=False, keep_none=False):
         if part is None and keep_none and not parts:
             # pydub keeps a None from its single read, and fails only when it is used
             return None
-        if part is None and none_error:
+        if part is None and none_error and not parts:
             # what len() says of it in pydub
             raise TypeError("object of type 'NoneType' has no len()")
         if not part:

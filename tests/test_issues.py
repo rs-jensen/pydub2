@@ -709,6 +709,23 @@ def test_raw_reader_that_gives_none_fails_like_pydub(limit, monkeypatch):
     assert pydub2.AudioSegment.from_file(NoData(data), **kw).raw_data == pydub.AudioSegment.from_file(NoData(data), **kw).raw_data
 
 
+@pytest.mark.parametrize("limit", [None, 1 << 30])
+@pytest.mark.parametrize("how", ["init", "from_file"])
+def test_reader_that_gives_data_and_then_none_loads(limit, how, monkeypatch):
+    monkeypatch.setattr(pydub2, "max_file_size", limit)
+    wav = io.BytesIO()
+    pydub2.AudioSegment.silent(100, 8000).export(wav, "wav")
+    wav = wav.getvalue()
+    if how == "init":
+        seg = pydub2.AudioSegment(data=NoData(wav))
+    else:
+        seg = pydub2.AudioSegment.from_file(NoData(wav), format="raw", sample_width=2, frame_rate=8000, channels=1)
+    assert len(seg) > 0
+    monkeypatch.setattr(pydub2, "max_file_size", 100)
+    with pytest.raises(pydub2.exceptions.CouldntDecodeError, match="larger than max_file_size"):
+        pydub2.AudioSegment(data=NoData(wav))
+
+
 @needs_ff
 @pytest.mark.parametrize("limit", [None, 5])
 @pytest.mark.parametrize("fmt", ["flac", "mp3"])
@@ -767,6 +784,20 @@ def test_loudness_and_speech_at_a_very_high_rate_fail_clearly(rate):
                        (lambda: pydub2.silence.split_on_speech(seg), "detect speech")):
         with pytest.raises(RuntimeError, match="^cant %s: the frame rate" % what):
             call()
+
+
+def test_loudness_and_speech_take_a_whole_float_rate():
+    data, _, _, _ = noise(1500, rate=16000)
+    whole = pydub2.AudioSegment(data=data, sample_width=2, frame_rate=16000, channels=1)
+    for rate in (16000.0, np.float64(16000)):
+        seg = pydub2.AudioSegment(data=data, sample_width=2, frame_rate=rate, channels=1)
+        assert seg.loudness() == whole.loudness()
+        assert pydub2.effects.normalize(seg, target_lufs=-23) == pydub2.effects.normalize(whole, target_lufs=-23)
+        assert pydub2.silence.detect_speech(seg) == pydub2.silence.detect_speech(whole)
+        assert pydub2.silence.split_on_speech(seg) == pydub2.silence.split_on_speech(whole)
+    odd = pydub2.AudioSegment(data=data, sample_width=2, frame_rate=16000.5, channels=1)
+    with pytest.raises(TypeError):
+        odd.loudness()
 
 
 @needs_ff

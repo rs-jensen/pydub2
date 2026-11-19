@@ -1454,8 +1454,6 @@ class AudioSegment(object):
         if frame_rate == self.frame_rate:
             return self
 
-        if self._data:
-            _c_int(frame_rate)
         try:
             if self._data and resample_quality == "high":
                 converted = _pydub2.resample(self._data, self.frame_rate, self.channels,
@@ -1469,7 +1467,7 @@ class AudioSegment(object):
         except TypeError:
             # audioop's text for a rate that is no int, like 22050.0, the core would show its signature
             operator.index(self.frame_rate)
-            operator.index(frame_rate)
+            _c_int(operator.index(frame_rate))
             raise
 
         return self._spawn(data=converted,
@@ -1546,8 +1544,8 @@ class AudioSegment(object):
 
     def loudness(self):
         """integrated loudness in LUFS (EBU R128)"""
-        check_rate(self.frame_rate, "measure loudness")
-        return _pydub2.loudness(self._data, self.frame_rate, self.channels, self.sample_width)
+        rate = check_rate(self.frame_rate, "measure loudness")
+        return _pydub2.loudness(self._data, rate, self.channels, self.sample_width)
 
     @property
     def duration_seconds(self):

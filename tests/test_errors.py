@@ -380,6 +380,15 @@ def test_set_frame_rate_takes_numpy_ints():
             assert seg.set_frame_rate(kind(22050), quality) == seg.set_frame_rate(22050, quality)
 
 
+@pytest.mark.parametrize("quality", [None, "high"])
+def test_set_frame_rate_too_big_is_overflow_error(quality):
+    np = pytest.importorskip("numpy")
+    seg = pydub2.AudioSegment.silent(100, frame_rate=44100)
+    for rate in (2 ** 31, 2 ** 40, np.int64(2 ** 31)):
+        with pytest.raises(OverflowError, match="^Python int too large to convert to C int$"):
+            seg.set_frame_rate(rate, quality)
+
+
 @pytest.mark.parametrize("bitrate, bits", [(64, 64), ("192", 192), (192, 192), ("32k", 32000)])
 def test_ogg_bitrate_libvorbis_cannot_use_says_so(bitrate, bits):
     seg = pydub2.AudioSegment.silent(500, frame_rate=44100).set_channels(2)
