@@ -23,6 +23,10 @@ def why(e):
     cmd = getattr(e.value, "cmd", None)
     if not HAVE_FFMPEG and e.errisinstance(FileNotFoundError) and ("ffmpeg" in msg or "ffprobe" in msg):
         return "no ffmpeg"
+    # pydub's suite removes its output in a finally, and that error hides the missing ffmpeg
+    ctx = e.value.__context__
+    if not HAVE_FFMPEG and isinstance(ctx, FileNotFoundError) and "ffmpeg" in str(ctx):
+        return "no ffmpeg"
     # pydub2 raises this when it cant decode natively and has no ffmpeg to fall back on
     if e.errisinstance(CouldntDecodeError) and "cant read this file" in msg and not HAVE_FFMPEG:
         return "no ffmpeg"
