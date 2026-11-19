@@ -39,7 +39,8 @@ jobs:
           for i in 1 2 3; do command -v ffmpeg && break; choco install ffmpeg -y --no-progress; done
           ffmpeg -version | head -n 1
       - if: runner.os == 'macOS'
-        run: brew install ffmpeg
+        run: |
+          for i in 1 2 3; do brew install ffmpeg && break; [ "$i" = 3 ] && exit 1; sleep 10; done
       - if: runner.os != 'Linux'
         shell: bash
         run: ffmpeg -version | head -n 1
