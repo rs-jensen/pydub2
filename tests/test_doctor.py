@@ -1,4 +1,5 @@
 import ast
+import io
 import json
 import os
 import shutil
@@ -495,3 +496,62 @@ def test_unknown_wav_length_is_not_truncation(tmp_path):
     path = tmp_path / "short.wav"
     path.write_bytes(wav_head(1, 16000) + b"\x80" * 8000)
     assert check_file(str(path))["reason"] == "truncated"
+
+
+def needs_ffmpeg_files(tmp_path):
+    # valid files that only ffmpeg reads, made without ffmpeg
+    one = tone(tmp_path / "one.ogg", "ogg").read_bytes()
+    stereo = AudioSegment.silent(500).set_channels(2).export(format="opus").read()
+    mono = AudioSegment.silent(500).export(format="opus").read()
+    adpcm = struct.pack("<4sI4s4sIHHIIHHHH4sI", b"RIFF", 40 + 4000, b"WAVE", b"fmt ", 20, 0x11, 1, 8000, 4055, 256, 4, 2,
+                        505, b"data", 4000) + b"\x11" * 4000
+    ogg_flac = b"OggS\0\2" + bytes(20) + b"\1\x33\x7fFLAC\1\0\0\1fLaC" + bytes(38)
+    return {"mulaw.wav": wav_head(7, 8000) + b"\x55" * 8000, "alaw.wav": wav_head(6, 8000) + b"\x55" * 8000,
+            "adpcm.wav": adpcm, "m4a.mp3": b"\0\0\0\x18ftypM4A \0\0\0\0M4A isom" + b"\0" * 100,
+            "chained.ogg": one * 2, "chained.opus": stereo + mono, "flac.ogg": ogg_flac}
+
+
+def broken_files(tmp_path):
+    good = tone(tmp_path / "good.ogg", "ogg").read_bytes()
+    return {"cut.ogg": good[:200], "cut.wav": wav_head(1, 16000)[:30], "noise.wav": wav_head(1, 100)[:12] + b"\xf1" * 500}
+
+
+def loads(kind, path, format=None):
+    if kind == "path":
+        return AudioSegment.from_file(str(path), format)
+    with open(path, "rb") as f:
+        return AudioSegment.from_file(f if kind == "file" else io.BytesIO(f.read()), format)
+
+
+@pytest.mark.parametrize("kind", ["path", "file", "bytes"])
+def test_load_without_ffmpeg_says_the_file_needs_it(noffmpeg, tmp_path, kind):
+    for name, data in needs_ffmpeg_files(tmp_path).items():
+        if name == "m4a.mp3" and kind != "path":
+            # without the name it is just an m4a, see test_needs_ffmpeg
+            continue
+        path = tmp_path / name
+        path.write_bytes(data)
+        assert check_file(str(path))["reason"] == "needs_ffmpeg", name
+        # CouldntDecodeError for the formats pydub2 reads, FileNotFoundError like pydub for a missing ffmpeg
+        with pytest.raises(CouldntDecodeError, match='^cant read this file: ffmpeg not found, pydub2 needs it for this file. '
+                                                     r'install ffmpeg or pip install "pydub2\[ffmpeg\]"$') as e:
+            loads(kind, path)
+        assert isinstance(e.value, FileNotFoundError), name
+        assert (e.value.reason, e.value.hint) == ("needs_ffmpeg", FFMPEG_FIX), name
+
+
+@pytest.mark.parametrize("kind", ["path", "file", "bytes"])
+def test_load_without_ffmpeg_of_a_broken_file(noffmpeg, tmp_path, kind):
+    files = broken_files(tmp_path)
+    if kind == "path":
+        files.update({"empty.wav": b"", "junk.mp3": b"\x01\x02" * 500, "junk.ogg": b"\x01" * 500})
+    for name, data in files.items():
+        path = tmp_path / name
+        path.write_bytes(data)
+        with pytest.raises(CouldntDecodeError, match="^cant read this file$") as e:
+            loads(kind, path)
+        assert not isinstance(e.value, FileNotFoundError), name
+        assert (e.value.reason, e.value.hint) == ("cant_decode", None), name
+    # with no name only the format says what it is
+    with pytest.raises(CouldntDecodeError, match="^cant read this file$"):
+        AudioSegment.from_file(io.BytesIO(b"\x01" * 500), "wav")

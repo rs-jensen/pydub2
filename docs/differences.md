@@ -74,6 +74,7 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - `format="pcm"` is the same as `"raw"`, and `"m4a"` and `"aac"` work. `bitrate` can be an int and `cover` can be a `pathlib.Path`, which on a format other than mp3 gets the text about mp3, where pydub says the path has no `lower`. An int that ffmpeg would refuse as text, like `-64`, raises `CouldntEncodeError`, where pydub raises `TypeError` for any int.
 - `export` of wav and flac is done without ffmpeg when `codec` is pcm_s16le, pcm_s24le or pcm_s32le (flac: none or flac), and `parameters` is only `-sample_fmt s16` or `s32`, `-ar` and `-ac` with the current rate and channels. The samples are the same as ffmpeg's.
 - Anything else, such as a new rate or a new channel count, still goes to ffmpeg.
+- `codec="libvorbis"` for ogg, `"libopus"` for opus, `"libmp3lame"` for mp3 and `"flac"` for flac are the encoders ffmpeg uses for these formats when no codec is given. The export then stays built in and gives the same file as without `codec`. pydub hands it to ffmpeg. Any other codec and a `cover` go to ffmpeg, and without ffmpeg the `FileNotFoundError` says that the codec or the cover needs it.
 - The built in encoders read `bitrate` as ffmpeg reads a number: signs, `k`, `M`, `Ki` and the other suffixes, `0x` and exponents. ffmpeg also takes expressions like `2*32k`. They go to ffmpeg when it is installed, and raise `CouldntEncodeError` when it is not.
 - A wav export leaves out a partial last frame (data from `_spawn` that is not a whole number of frames). pydub writes the stray bytes into the data chunk, so its size is not a multiple of the block align and ffmpeg reports an invalid PCM packet. pydub2 writes a file that every reader accepts.
 - 24 bit wav gets a plain PCM header, where ffmpeg writes WAVE_FORMAT_EXTENSIBLE and a LIST chunk.
@@ -96,7 +97,7 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - The `encoder` tag says `pydub2` where ffmpeg's says Lavf or Lavc. A flac comment block over 16 MiB raises `CouldntEncodeError`, where ffmpeg fails earlier on the command line length. `cover` and mp3 are unchanged.
 - `export` of wav with `tags` and a `codec` or `parameters` goes through ffmpeg, so the tags are written, like pydub.
 - Exporting more than 4 GiB as wav raises `CouldntEncodeError`. pydub raises `struct.error`.
-- A wav export with a float `frame_rate` rounds it like the `wave` module. A float `frame_rate` (`silent(frame_rate=3.5)`, `44100.0`) works everywhere. `detect_silence` and what is built on it do the millisecond math with the float, like pydub.
+- A wav export with a float `frame_rate` rounds it like the `wave` module. A float `frame_rate` (`silent(frame_rate=3.5)`, `44100.0`) works everywhere, also for mp3. `set_frame_rate` raises `TypeError` for a float rate, the new one or the current one, with the text pydub gives. `detect_silence` and what is built on it do the millisecond math with the float, like pydub.
 
 ## Errors
 
@@ -106,7 +107,7 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - On a new `AudioSegment` a width, channel count or rate of 0 or below raises the same class as pydub (`ZeroDivisionError`, or `ValueError` from `len`).
 - `mul` (`apply_gain`, fades) with a nan factor, or an infinite factor on a zero sample, raises `ValueError`. The result is undefined in audioop.
 - `scipy_effects.eq` with a nan `gain_dB` raises `ValueError`. pydub returns `None`, or fails with `AttributeError` in the mid-side modes.
-- When ffmpeg is missing, `FileNotFoundError` is only raised for formats pydub2 cannot read itself. For wav, flac, mp3, ogg and opus a file it cannot decode raises `CouldntDecodeError`.
+- When ffmpeg is missing, a file in a format pydub2 cannot read itself raises `FileNotFoundError`. A wav, flac, mp3, ogg or opus file it cannot decode raises `CouldntDecodeError`, known by its name, its `format` or its first bytes. When ffmpeg would read it, like a-law, mu-law and ADPCM wav, chained ogg and ogg flac, the error is also a `FileNotFoundError` as in pydub, and says that the file needs ffmpeg and how to get it. A damaged file only says that it cannot be read.
 - `pydub2.max_duration`, `pydub2.max_bytes`, `pydub2.max_file_size` and `pydub2.ffmpeg_timeout` are new, all off by default. A file longer than `max_duration`, that decodes to more than `max_bytes`, or that is larger than `max_file_size`, raises `CouldntDecodeError`. `max_file_size` also applies to a file object given to `mediainfo`, `mediainfo_json` and `AudioSegment(data=file)`.
 
 ## ffmpeg
@@ -118,7 +119,7 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - ffmpeg is started without a console window on Windows. Output of ffprobe and ffmpeg that is not utf-8 is decoded with errors ignored.
 - ffmpeg, ffprobe and ffplay are looked up on `PATH`, never in the current directory. An ffmpeg next to avconv wins over avconv.
 - ffprobe and ffplay are also looked for in the folder of `AudioSegment.converter` when it has one and `PATH` has none.
-- `from_file` and `export` use the `converter` of the class they are called on, so a subclass of `AudioSegment` can have its own. `converter` can be a `pathlib.Path`.
+- `from_file` and `export` use the `converter` of the class they are called on, so a subclass of `AudioSegment` can have its own. `converter` can be a `pathlib.Path`. It can also be `None`, which `utils.which("ffmpeg")` gives when it finds nothing, and then ffmpeg is looked up as if `converter` was not set. In pydub every ffmpeg call then fails with `TypeError` or `FileNotFoundError`.
 - A private ffmpeg set as `converter` (absolute, relative or with spaces in the path) is enough for reading, `mediainfo` and export. In pydub the ffprobe call fails with `FileNotFoundError`.
 - A monkeypatched `get_prober_name` is used for `mediainfo` and `mediainfo_json`. `get_encoder_name`, `get_prober_name` and `get_player_name` return the full path they found, and `get_prober_name` gives no warning when it finds nothing.
 - Setting `AudioSegment.ffmpeg` or `.ffprobe` does nothing, as in pydub. Set `converter`.

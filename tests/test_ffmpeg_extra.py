@@ -1,6 +1,7 @@
 import io
 import math
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -127,3 +128,57 @@ def test_m4a(exe, tmp_path):
         assert AudioSegment.from_file(fh, "m4a").raw_data == want
     assert AudioSegment.from_file(io.BytesIO(m4a), "m4a").raw_data == want
     assert mediainfo(str(f))["codec_name"] == "aac"
+
+
+def set_none(monkeypatch, attr):
+    # converter = which("ffmpeg") is a common pydub line, it gives None when nothing is found
+    if attr == "converter":
+        monkeypatch.setattr(AudioSegment, "converter", None)
+    else:
+        # on an instance the old ffmpeg name sets the converter of the class
+        AudioSegment.silent(10).ffmpeg = None
+    assert AudioSegment.converter is None
+
+
+@pytest.mark.parametrize("attr", ["converter", "ffmpeg"])
+def test_converter_none_without_ffmpeg(nopath, monkeypatch, attr):
+    from pydub2.__main__ import FFMPEG_FIX, report
+    monkeypatch.setitem(sys.modules, "imageio_ffmpeg", None)
+    set_none(monkeypatch, attr)
+    found = r'ffmpeg not found, pydub2 needs it for .+\. install ffmpeg or pip install "pydub2\[ffmpeg\]"$'
+    with pytest.raises(FileNotFoundError, match=found):
+        AudioSegment.from_file(io.BytesIO(b"\0" * 100), "m4a")
+    with pytest.raises(FileNotFoundError, match=found):
+        AudioSegment.silent(100).export(io.BytesIO(), format="m4a")
+    with pytest.raises(FileNotFoundError, match=found):
+        mediainfo(io.BytesIO(b"\0" * 100))
+    with pytest.raises(FileNotFoundError, match=found):
+        utils.mediainfo_json(io.BytesIO(b"\0" * 100))
+    seg = AudioSegment.from_wav(io.BytesIO(sine()))
+    assert AudioSegment.from_file(seg.export(format="flac"), "flac") == seg
+    assert {"for": "m4a, aac, wma and video files", "run": FFMPEG_FIX} in report()["fixes"]
+
+
+@pytest.mark.parametrize("attr", ["converter", "ffmpeg"])
+def test_converter_none_uses_the_extra(exe, monkeypatch, attr):
+    set_none(monkeypatch, attr)
+    assert _ffmpeg.find(None) == exe
+    seg = AudioSegment.from_wav(io.BytesIO(sine()))
+    assert abs(len(AudioSegment.from_file(seg.export(format="m4a"), "m4a")) - len(seg)) < 50
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="no ffmpeg on PATH")
+def test_converter_none_uses_path(monkeypatch):
+    set_none(monkeypatch, "converter")
+    # Windows spells the same file ffmpeg.exe or ffmpeg.EXE depending on PATHEXT
+    assert os.path.normcase(_ffmpeg.find(None)) == os.path.normcase(shutil.which("ffmpeg"))
+    seg = AudioSegment.from_wav(io.BytesIO(sine()))
+    assert abs(len(AudioSegment.from_file(seg.export(format="m4a"), "m4a")) - len(seg)) < 50
+    assert mediainfo(seg.export(format="m4a"))["codec_name"] == "aac"
+
+
+def test_converter_empty(nopath, monkeypatch):
+    # pydub fails here too, with PermissionError from running ""
+    monkeypatch.setattr(AudioSegment, "converter", "")
+    with pytest.raises(FileNotFoundError, match="^no ffmpeg at '', pydub2 needs it for m4a$"):
+        AudioSegment.silent(100).export(io.BytesIO(), format="m4a")

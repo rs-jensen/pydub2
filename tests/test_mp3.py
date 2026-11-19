@@ -248,3 +248,16 @@ def test_a_width_the_wave_module_refuses_is_not_written():
             old.export(io.BytesIO(), format="mp3")
     with pytest.raises(ValueError):
         seg.export(io.BytesIO(), format="mp3")
+
+
+@pytest.mark.parametrize("change", [{"frame_rate": np.int32(22050)}, {"channels": np.int64(2)}, {"sample_width": np.int64(2)},
+                                    {"frame_rate": 22050.0}, {"frame_rate": 22050.4}])
+def test_numpy_ints_and_float_rate(change):
+    if not (_mp3.available() or shutil.which("ffmpeg")):
+        pytest.skip("mp3 export needs pydub2-mp3 or ffmpeg")
+    seg = chirp(22050, 2, secs=0.5)
+    kw = dict(frame_rate=22050, channels=2, sample_width=2)
+    plain = AudioSegment(seg.raw_data, **kw).export(format="mp3").read()
+    kw.update(change)
+    # pydub writes the wav for ffmpeg with the wave module, which rounds the rate
+    assert AudioSegment(seg.raw_data, **kw).export(format="mp3").read() == plain

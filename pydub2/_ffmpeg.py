@@ -21,24 +21,35 @@ from .utils import run as run_command
 _seen = ContextVar("seen", default=None)
 
 
+def name_of(converter):
+    # None is what which("ffmpeg") gives when there is none, it means the usual lookup
+    return "ffmpeg" if converter is None else os.fspath(converter)
+
+
 def find(converter):
+    converter = name_of(converter)
     for name in (converter, "avconv"):
         path = which(name)
         if path:
             return path
-    if os.fspath(converter) == "ffmpeg":
+    if converter == "ffmpeg":
         return extra_ffmpeg()
+
+
+def missing(converter, what):
+    # the text and the hint for an ffmpeg that is not there
+    name = name_of(converter)
+    return (("ffmpeg not found" if name == "ffmpeg" else "no ffmpeg at " + (name or "''")) +
+            ", pydub2 needs it for " + what + (". strict mode needs ffmpeg" if pydub2.strict else "") +
+            ('. install ffmpeg or pip install "pydub2[ffmpeg]"' if name == "ffmpeg" else ""),
+            'pip install "pydub2[ffmpeg]"' if name == "ffmpeg" else None)
 
 
 def run(converter, args, data, what):
     exe = find(converter)
     if exe is None:
-        name = os.fspath(converter)
-        raise tagged(FileNotFoundError(("ffmpeg not found" if name == "ffmpeg" else "no ffmpeg at " + name) +
-                                       ", pydub2 needs it for " + what + (". strict mode needs ffmpeg" if pydub2.strict else "") +
-                                       ('. install ffmpeg or pip install "pydub2[ffmpeg]"' if name == "ffmpeg" else "")),
-                     None if what == "this file" else what, "needs_ffmpeg",
-                     'pip install "pydub2[ffmpeg]"' if name == "ffmpeg" else None)
+        text, hint = missing(converter, what)
+        raise tagged(FileNotFoundError(text), None if what == "this file" else what, "needs_ffmpeg", hint)
     cmd = [exe, "-y", "-nostdin"] + args
     log_conversion(cmd)
     seen = _seen.get()
@@ -139,7 +150,7 @@ def _to_wav(converter, path, data, format, codec, parameters, start_second, dura
 
 
 def from_wav(converter, wav, format, codec=None, bitrate=None, parameters=None, tags=None,
-             id3v2_version="4", cover=None):
+             id3v2_version="4", cover=None, why=None):
     codec = codec or {"ogg": "libvorbis"}.get(format)
     muxer = format if pydub2.strict else {"m4a": "ipod", "aac": "adts", "wma": "asf"}.get(format, format)
     args = ["-f", "wav", "-i", "pipe:0"]
@@ -161,6 +172,9 @@ def from_wav(converter, wav, format, codec=None, bitrate=None, parameters=None, 
         args += ["-id3v2_version", id3v2_version]
     if codec == "mp3" and sys.platform == "darwin":
         args += ["-write_xing", "0"]
+    if why and find(converter) is None:
+        text, hint = missing(converter, why)
+        raise tagged(FileNotFoundError(text), format, "needs_ffmpeg", hint)
     # a virus scanner can still hold the file when it is removed, that must not fail the export
     d = tempfile.mkdtemp()
     try:
