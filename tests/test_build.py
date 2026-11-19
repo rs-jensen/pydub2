@@ -1,6 +1,7 @@
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 
@@ -71,3 +72,24 @@ def test_license_files_named_in_the_docs_exist():
     third_party = (ROOT / "THIRD_PARTY.md").read_text(encoding="utf-8")
     for path in sorted((ROOT / "licenses").iterdir()):
         assert "licenses/" + path.name in third_party, path.name
+
+
+@pytest.mark.parametrize("name, files", [("vorbis", ["lib/psy.c", "lib/floor1.c"]), ("opusfile", ["src/opusfile.c"])])
+def test_patch_scripts_run_again_and_refuse_other_sources(tmp_path, name, files):
+    # cmake runs a patch step again on the patched sources when the command line changes, a new cmake path is enough
+    cmake = shutil.which("cmake")
+    found = sorted(ROOT.glob("build/*/_deps/%s-src" % name))
+    if not cmake or not found:
+        pytest.skip("needs cmake and a build tree")
+    for f in files:
+        (tmp_path / f).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(found[0] / f, tmp_path / f)
+    script = str(ROOT / "cmake" / (name + "_patch.cmake"))
+    subprocess.run([cmake, "-P", script], cwd=tmp_path, check=True, capture_output=True)
+    once = [(tmp_path / f).read_bytes() for f in files]
+    subprocess.run([cmake, "-P", script], cwd=tmp_path, check=True, capture_output=True)
+    assert [(tmp_path / f).read_bytes() for f in files] == once
+    (tmp_path / files[0]).write_bytes(once[0] + b"\n")
+    r = subprocess.run([cmake, "-P", script], cwd=tmp_path, capture_output=True, text=True)
+    assert r.returncode and "not what the patch expects" in r.stderr
+    assert (tmp_path / files[0]).read_bytes() == once[0] + b"\n"
