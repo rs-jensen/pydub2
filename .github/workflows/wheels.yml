@@ -26,6 +26,7 @@ jobs:
   wheels:
     name: pydub2 ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.os == 'windows-11-arm' && 250 || startsWith(matrix.os, 'windows') && 150 || 140 }}
     strategy:
       fail-fast: false
       matrix:
@@ -58,6 +59,7 @@ jobs:
 
   sdist:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: pipx run build --sdist
@@ -69,6 +71,7 @@ jobs:
   mp3:
     name: mp3 ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
     strategy:
       fail-fast: false
       matrix:
@@ -88,6 +91,7 @@ jobs:
 
   compat:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: pipx run build --wheel compat
@@ -100,6 +104,7 @@ jobs:
     name: check ${{ matrix.os }}
     needs: [wheels, mp3, compat]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -158,6 +163,7 @@ jobs:
   twine:
     needs: [wheels, sdist, mp3, compat]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -168,6 +174,7 @@ jobs:
 
   version:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     env:
       TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
     steps:
@@ -207,6 +214,7 @@ jobs:
     if: github.ref_type == 'tag'
     needs: [wheels, sdist, mp3, compat, check, twine, version]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: pypi-mp3
     permissions:
       id-token: write
@@ -224,6 +232,7 @@ jobs:
     if: github.ref_type == 'tag'
     needs: [wheels, sdist, mp3, compat, check, twine, version, publish-mp3]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: pypi
     permissions:
       id-token: write
@@ -241,6 +250,7 @@ jobs:
     if: github.ref_type == 'tag'
     needs: [wheels, sdist, mp3, compat, check, twine, version, publish-pydub2]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: pypi-compat
     permissions:
       id-token: write
@@ -257,6 +267,7 @@ jobs:
     if: github.ref_type == 'tag'
     needs: [publish-pydub2, publish-mp3, publish-compat]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
