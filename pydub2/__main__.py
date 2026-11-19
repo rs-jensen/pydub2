@@ -501,8 +501,9 @@ def call(node, name, add):
                 add(node, "ffmpeg", "codec " + goes)
 
 
-# 17 attributes in a row, also over line breaks
-LONG_CHAIN = re.compile(rb"(?:\.\s*\w+\s*(?:\\\s*)?){17}")
+# 17 attributes in a row, also over line breaks, comments without a dot, and names that are not ascii
+GAP = rb"(?:\s|\\|#[^\r\n.]*[\r\n])*"
+LONG_CHAIN = re.compile(rb"(?:\." + GAP + rb"[\w\x80-\xff]+" + GAP + rb"){17}")
 
 
 def parse(source):
@@ -515,7 +516,7 @@ def parse(source):
     try:
         return ast.parse(source)
     except RecursionError:
-        # a chain the search did not see, with comments between its lines
+        # a chain the search did not see
         short = short_chains(source)
         if short is None:
             raise

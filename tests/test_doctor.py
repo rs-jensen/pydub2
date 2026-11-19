@@ -213,6 +213,8 @@ def test_scan_chain_deeper_than_ast_parse_goes(tmp_path):
     (tmp_path / "assign.py").write_text("import pydub\n%s.AudioSegment.ffmpeg = 1\n" % chain)
     (tmp_path / "split.py").write_text("import pydub\nx = (a  # one\n%s.c)\nAudioSegment.ffmpeg = 1\n" % ("\n.b" * 50000))
     (tmp_path / "handler.py").write_text("import pydub\ntry:\n    pass\nexcept %s.error:\n    pass\n" % chain)
+    (tmp_path / "comments.py").write_text("import pydub\nx = (a\n%s)\nAudioSegment.ffmpeg = 1\n" % (".b  # note\n" * 100000))
+    (tmp_path / "accents.py").write_text("import pydub\na%s.AudioSegment.ffmpeg = 1\n" % (".é" * 100000), encoding="utf-8")
     got = []
     size = threading.stack_size(1 << 20)
     try:
@@ -222,10 +224,11 @@ def test_scan_chain_deeper_than_ast_parse_goes(tmp_path):
         threading.stack_size(size)
     t.join()
     r = got[0]
-    assert (r["files"], r["files_using_pydub"], r["unreadable"]) == (3, 3, [])
+    assert (r["files"], r["files_using_pydub"], r["unreadable"]) == (5, 5, [])
     got = {(os.path.basename(f["file"]), f["line"], f["kind"]) for f in r["findings"]}
     assert got == {("assign.py", 1, "import"), ("assign.py", 2, "change"), ("split.py", 1, "import"),
-                   ("split.py", 50004, "change"), ("handler.py", 1, "import")}
+                   ("split.py", 50004, "change"), ("handler.py", 1, "import"), ("comments.py", 1, "import"),
+                   ("comments.py", 100004, "change"), ("accents.py", 1, "import"), ("accents.py", 2, "change")}
 
 
 def test_scan_no_pydub(capsys, tmp_path):
