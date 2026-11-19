@@ -116,13 +116,22 @@ def _bits_per_second(bitrate, format, channels, converter):
     return rate
 
 
-def _vorbis_takes(rate, channels, width):
-    # whether libvorbis can encode this audio without a bitrate, so a failure with one is the bitrate's
+def _vorbis_takes(rate, channels, width, bits):
+    # whether libvorbis can encode this audio at this bitrate
     try:
-        _encode(b"", rate, channels, width, "ogg", 0)
+        _encode(b"", rate, channels, width, "ogg", bits)
     except CouldntEncodeError:
         return False
     return True
+
+
+def _vorbis_bitrate_text(bitrate, bits, rate, channels, width):
+    # the bitrate is only to blame when libvorbis has another one for this audio, 8k to 4M in steps of a quarter
+    if not any(_vorbis_takes(rate, channels, width, round(8000 * 2 ** (i / 4))) for i in range(37)):
+        return None
+    hint = ", did you mean '%dk'" % bits if bits < 1000 and _vorbis_takes(rate, channels, width, bits * 1000) else ""
+    return "bad bitrate %r, libvorbis cant encode %d Hz with %d channel(s) at %d bit/s%s" % (
+        bitrate, round(rate), channels, bits, hint)
 
 
 def _vorbis_tags(tags, format):
@@ -1338,10 +1347,9 @@ class AudioSegment(object):
                 out = _encode(data, self.frame_rate, self.channels, width, format, rate,
                               [] if tags is None or format == "wav" else _vorbis_tags(tags, format), parts=parts)
             except CouldntEncodeError:
-                if format == "ogg" and rate and _vorbis_takes(self.frame_rate, self.channels, width):
-                    raise tagged(CouldntEncodeError("bad bitrate %r, libvorbis cant encode %d Hz with %d channel(s) at %d bit/s%s" % (
-                        bitrate, round(self.frame_rate), self.channels, rate, ", did you mean '%dk'" % rate if rate < 1000 else "")),
-                        format, "cant_encode")
+                text = format == "ogg" and rate and _vorbis_bitrate_text(bitrate, rate, self.frame_rate, self.channels, width)
+                if text:
+                    raise tagged(CouldntEncodeError(text), format, "cant_encode")
                 raise
             if parts:
                 return _write_out(out_f, *out)

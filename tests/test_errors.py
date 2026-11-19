@@ -379,6 +379,19 @@ def test_ogg_bitrate_libvorbis_cannot_use_says_so(bitrate, bits):
     assert (e.value.format, e.value.reason) == ("ogg", "cant_encode")
 
 
+def test_ogg_bitrate_blamed_only_when_another_one_works():
+    # libvorbis has no bitrate at all for 192 kHz, there the rate is the problem
+    seg = pydub2.AudioSegment.silent(500, frame_rate=192000).set_channels(2)
+    with pytest.raises(CouldntEncodeError) as e:
+        seg.export(io.BytesIO(), format="ogg", bitrate="192k")
+    assert "bitrate" not in str(e.value)
+    # 16k is too low for mono at 44.1 kHz too, so it is not suggested
+    seg = pydub2.AudioSegment.silent(500, frame_rate=44100)
+    with pytest.raises(CouldntEncodeError, match="^bad bitrate 16, libvorbis cant encode 44100 Hz with 1 channel"
+                                                 r"\(s\) at 16 bit/s$"):
+        seg.export(io.BytesIO(), format="ogg", bitrate=16)
+
+
 @needs_ff
 @pytest.mark.parametrize("bitrate", ["192", "32k"])
 def test_ogg_bitrate_libvorbis_cannot_use_like_pydub(bitrate):
