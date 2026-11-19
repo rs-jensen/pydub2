@@ -501,13 +501,21 @@ def call(node, name, add):
                 add(node, "ffmpeg", "codec " + goes)
 
 
+# 17 attributes in a row, also over line breaks
+LONG_CHAIN = re.compile(rb"(?:\.\s*\w+\s*(?:\\\s*)?){17}")
+
+
 def parse(source):
+    # deep nesting runs into a limit that depends on the platform: 1000 levels on Windows on arm with
+    # Python 3.13, the size of the C stack on 3.14, and Python 3.9 and 3.10 crash on Windows where the
+    # stack runs out. A long chain like a.b.c... is the usual cause, so those are cut short first
+    short = short_chains(source) if LONG_CHAIN.search(source) else None
+    if short is not None:
+        return ast.parse(short)
     try:
         return ast.parse(source)
     except RecursionError:
-        # deep nesting runs into a limit that depends on the platform: 1000 levels on Windows on arm with
-        # Python 3.13, the size of the C stack on 3.14. A long chain like a.b.c... is the usual cause, so
-        # parse again with the chains cut short
+        # a chain the search did not see, with comments between its lines
         short = short_chains(source)
         if short is None:
             raise
