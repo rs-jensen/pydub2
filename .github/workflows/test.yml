@@ -22,11 +22,12 @@ jobs:
         with:
           python-version: "3.13"
       - run: echo "IMAGE=${ImageVersion:-none}" >> "$GITHUB_ENV"
-      # Keep the downloaded ffmpeg packages so a slow mirror only hurts the first run per runner image
-      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      # Keep the downloaded ffmpeg packages, even from a failed run, so a slow mirror only hurts until one download gets through
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ~/apt-debs
-          key: ffmpeg-debs-${{ env.IMAGE }}
+          key: ffmpeg-debs-${{ env.IMAGE }}-${{ github.run_id }}
+          restore-keys: ffmpeg-debs-${{ env.IMAGE }}-
       - timeout-minutes: 20
         run: |
           echo "man-db man-db/auto-update boolean false" | sudo debconf-set-selections
@@ -40,7 +41,13 @@ jobs:
           done
           # Only the download has a time limit, stopping dpkg halfway leaves it broken
           $apt install -y --no-install-recommends ffmpeg
-          cp --update=none /var/cache/apt/archives/*.deb ~/apt-debs/ || true
+      - if: always()
+        run: cp --update=none /var/cache/apt/archives/*.deb ~/apt-debs/ || true
+      - if: always()
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/apt-debs
+          key: ffmpeg-debs-${{ env.IMAGE }}-${{ github.run_id }}
       - run: pip install . ./mp3 pytest pydub audioop-lts numpy scipy
       - run: pytest tests
 
