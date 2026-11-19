@@ -27,6 +27,7 @@ except:
     izip = zip
 
 from .utils import (
+    check_rate,
     _fd_or_path_or_tempfile,
     db_to_float,
     ratio_to_db,
@@ -71,6 +72,25 @@ def _encode(data, rate, *args, **kwargs):
         return _pydub2.encode(data, round(rate), *args, **kwargs)
     except RuntimeError as e:
         raise tagged(CouldntEncodeError(str(e)), args[2], "cant_encode")
+
+
+def _wav_high_rate(data, rate, channels, width):
+    # the core takes a 32 bit signed rate and the wave module of pydub up to 32 bit unsigned, which only 8 bit mono can use
+    rate = round(rate)
+    if rate >= 2 ** 32 or rate * channels * width >= 2 ** 32:
+        raise tagged(CouldntEncodeError("cant write a wav at a frame rate of %d with %d channel(s) of %d byte(s), "
+                                        "the header holds 32 bit numbers" % (rate, channels, width)), "wav", "cant_encode")
+    if width == 1:
+        data = _pydub2.bias(data, 1, 128)
+    buf = BytesIO()
+    w = wave.open(buf, "wb")
+    w.setnchannels(channels)
+    w.setsampwidth(width)
+    w.setframerate(rate)
+    w.setnframes(len(data) // (channels * width))
+    w.writeframesraw(data)
+    w.close()
+    return buf.getvalue()
 
 
 def _bits_per_second(bitrate, format, channels, converter):
@@ -1278,6 +1298,8 @@ class AudioSegment(object):
             if format == "flac" and width == 4:
                 # ffmpeg writes 32 bit audio as 24 bit flac
                 data, width = _pydub2.lin2lin(data, 4, 3), 3
+            if format == "wav" and self.frame_rate >= 2 ** 31:
+                return _write_out(out_f, _wav_high_rate(data, self.frame_rate, self.channels, width))
             if format == "wav" and width in (2, 4):
                 # 8 bit is unsigned in a wav, 16 and 32 bit go out as they are
                 try:
@@ -1467,6 +1489,7 @@ class AudioSegment(object):
 
     def loudness(self):
         """integrated loudness in LUFS (EBU R128)"""
+        check_rate(self.frame_rate, "measure loudness")
         return _pydub2.loudness(self._data, self.frame_rate, self.channels, self.sample_width)
 
     @property

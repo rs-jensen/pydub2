@@ -200,6 +200,12 @@ def extra_ffmpeg():
     return which(exe) if exe and os.path.isabs(exe) else None
 
 
+def check_rate(rate, what):
+    # the core takes a 32 bit signed frame rate
+    if isinstance(rate, numbers.Real) and rate >= 2 ** 31:
+        raise RuntimeError("cant %s: the frame rate %s is too high" % (what, rate))
+
+
 def limits():
     # read once per load, so another thread that changes them cant cut a load short
     out = []

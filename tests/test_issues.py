@@ -715,3 +715,36 @@ def test_infinite_duration_with_a_limit_fails_like_pydub(fmt, limit, tmp_path, m
         pydub.AudioSegment.from_file(path, duration=float("inf"))
     with pytest.raises(pydub2.exceptions.CouldntDecodeError):
         pydub2.AudioSegment.from_file(path, duration=float("inf"))
+
+
+def high_rate_segments(rate, width=1, channels=1, ms=5):
+    n = rate // 1000 * ms if rate < 100000 else 40
+    data = bytes((i * 7) % 256 for i in range(n * width * channels))
+    kw = dict(sample_width=width, frame_rate=rate, channels=channels)
+    return pydub2.AudioSegment(data=data, **kw), pydub.AudioSegment(data=data, **kw)
+
+
+@pytest.mark.parametrize("rate", [2 ** 31, 2 ** 31 + 12345, 2 ** 32 - 1])
+def test_wav_of_8_bit_mono_at_a_very_high_rate_is_pydubs(rate):
+    new, old = high_rate_segments(rate)
+    assert new.export(io.BytesIO(), format="wav").getvalue() == old.export(io.BytesIO(), format="wav").getvalue()
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning")
+@pytest.mark.parametrize("rate,width,channels", [(2 ** 31, 2, 1), (2 ** 31, 1, 2), (2 ** 32 - 1, 4, 1), (2 ** 32, 1, 1), (2 ** 40, 3, 2)])
+def test_wav_that_does_not_fit_the_header_fails_clearly(rate, width, channels):
+    new, old = high_rate_segments(rate, width, channels)
+    with pytest.raises(Exception):
+        old.export(io.BytesIO(), format="wav")
+    with pytest.raises(pydub2.exceptions.CouldntEncodeError, match="^cant write a wav at a frame rate of %d" % rate):
+        new.export(io.BytesIO(), format="wav")
+
+
+@pytest.mark.parametrize("rate", [2 ** 31, 2 ** 32, 10 ** 30, float(2 ** 33)])
+def test_loudness_and_speech_at_a_very_high_rate_fail_clearly(rate):
+    seg = pydub2.AudioSegment(data=bytes(range(256)) * 4, sample_width=2, frame_rate=rate, channels=1)
+    for call, what in ((seg.loudness, "measure loudness"), (lambda: pydub2.effects.normalize(seg, target_lufs=-23), "measure loudness"),
+                       (lambda: pydub2.silence.detect_speech(seg), "detect speech"),
+                       (lambda: pydub2.silence.split_on_speech(seg), "detect speech")):
+        with pytest.raises(RuntimeError, match="^cant %s: the frame rate" % what):
+            call()

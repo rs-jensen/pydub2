@@ -96,6 +96,8 @@ Speed and memory numbers in this section are from Linux x86-64 (Intel Xeon, 4 co
 - Garbage in damaged mp3 frames decodes like ffmpeg: a granule whose bit reservoir is missing is silent, values that overflow ffmpeg's fixed point unscale are 0, the last values of a granule are not read past 572, and on x86 a sample far past full scale comes out as -32768. Such frames were off by up to the full scale.
 - Loading raw audio from a file object whose `read` gives `None`, with `max_duration` or `max_bytes` set, keeps the `None` like pydub does, where it gave an empty segment.
 - `duration=float("inf")` fails for files loaded through ffmpeg when `max_duration` is set, like it does without a limit and in pydub. It loaded the file before.
+- A `frame_rate` of 2**31 or more in `loudness`, `normalize(target_lufs=...)`, `detect_speech` and `split_on_speech` raises `RuntimeError` with the rate in the message, where it raised a `TypeError` about the arguments of the core.
+- A wav export at a `frame_rate` of 2**31 or more writes the same file as pydub when the header can hold it (8 bit mono up to 2**32 - 1), and raises `CouldntEncodeError` when it cannot, where pydub gives `struct.error` and pydub2 a `TypeError`.
 
 ### Security
 
