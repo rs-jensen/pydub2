@@ -99,6 +99,7 @@ Speed and memory numbers in this section are from Linux x86-64 (Intel Xeon, 4 co
 - `duration=float("inf")` fails for files loaded through ffmpeg when `max_duration` is set, like it does without a limit and in pydub. It loaded the file before.
 - A `frame_rate` of 2**31 or more in `loudness`, `normalize(target_lufs=...)`, `detect_speech` and `split_on_speech` raises `RuntimeError` with the rate in the message, where it raised a `TypeError` about the arguments of the core.
 - A wav export at a `frame_rate` of 2**31 or more writes the same file as pydub when the header can hold it (8 bit mono up to 2**32 - 1), and raises `CouldntEncodeError` when it cannot, where pydub gives `struct.error` and pydub2 a `TypeError`. A flac, ogg or opus export at such a rate, or a wav with a `codec` or `parameters`, raises `CouldntEncodeError` too.
+- An mp3 export at a `frame_rate` more than 256 times 48000 goes through ffmpeg and gives pydub's file, where it raised `RuntimeError: rates too far apart`.
 
 ### Security
 

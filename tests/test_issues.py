@@ -767,3 +767,18 @@ def test_loudness_and_speech_at_a_very_high_rate_fail_clearly(rate):
                        (lambda: pydub2.silence.split_on_speech(seg), "detect speech")):
         with pytest.raises(RuntimeError, match="^cant %s: the frame rate" % what):
             call()
+
+
+@needs_ff
+@pytest.mark.parametrize("rate", [12288001, 20000000, 2 ** 31 - 1, 2 ** 31])
+def test_mp3_at_a_rate_far_above_48000_goes_like_pydub(rate):
+    data = bytes(range(256)) * 4
+    new = pydub2.AudioSegment(data=data, sample_width=1, frame_rate=rate, channels=1)
+    old = pydub.AudioSegment(data=data, sample_width=1, frame_rate=rate, channels=1)
+    try:
+        want = old.export(io.BytesIO(), format="mp3").getvalue()
+    except pydub.exceptions.CouldntEncodeError:
+        with pytest.raises(pydub2.exceptions.CouldntEncodeError):
+            new.export(io.BytesIO(), format="mp3")
+    else:
+        assert new.export(io.BytesIO(), format="mp3").getvalue() == want
