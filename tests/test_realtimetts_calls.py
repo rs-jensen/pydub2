@@ -92,12 +92,10 @@ def test_convert_lossy_to_pcm(fn, fmt):
 # the example servers catch Exception around undecodable input
 @pytest.mark.parametrize("data", [b"garbage" * 10, b""])
 def test_undecodable_input_is_an_exception(data):
-    out = []
-    for S in (pydub.AudioSegment, pydub2.AudioSegment):
-        try:
-            S.from_mp3(io.BytesIO(data))
-        except Exception as e:
-            out.append(type(e).__name__)
-        else:
-            out.append(None)
-    assert out[0] == out[1] and out[0] is not None
+    with pytest.raises(Exception) as mine:
+        pydub2.AudioSegment.from_mp3(io.BytesIO(data))
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("no ffmpeg, so pydub has nothing to compare with")
+    with pytest.raises(Exception) as theirs:
+        pydub.AudioSegment.from_mp3(io.BytesIO(data))
+    assert type(mine.value).__name__ == type(theirs.value).__name__
