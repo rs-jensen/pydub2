@@ -702,3 +702,16 @@ def test_raw_reader_that_gives_none_fails_like_pydub(limit, monkeypatch):
     assert str(e_new.value) == str(e_old.value)
     data = b"\1\0" * 800
     assert pydub2.AudioSegment.from_file(NoData(data), **kw).raw_data == pydub.AudioSegment.from_file(NoData(data), **kw).raw_data
+
+
+@needs_ff
+@pytest.mark.parametrize("limit", [None, 5])
+@pytest.mark.parametrize("fmt", ["flac", "mp3"])
+def test_infinite_duration_with_a_limit_fails_like_pydub(fmt, limit, tmp_path, monkeypatch):
+    monkeypatch.setattr(pydub2, "max_duration", limit)
+    path = str(tmp_path / ("a." + fmt))
+    pydub2.AudioSegment.silent(1000, 8000).export(path, fmt)
+    with pytest.raises(pydub.exceptions.CouldntDecodeError):
+        pydub.AudioSegment.from_file(path, duration=float("inf"))
+    with pytest.raises(pydub2.exceptions.CouldntDecodeError):
+        pydub2.AudioSegment.from_file(path, duration=float("inf"))

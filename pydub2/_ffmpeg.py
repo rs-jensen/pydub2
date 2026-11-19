@@ -98,7 +98,11 @@ def _to_wav(converter, path, data, format, codec, parameters, start_second, dura
     limit, max_bytes = lim[:2]
     if limit is not None:
         # one second over, so a file past the limit is seen and not just cut
-        duration = limit + 1 if duration is None else min(duration, limit + 1)
+        # inf and nan stay as they are, ffmpeg refuses them with and without a limit like in pydub
+        if duration is None:
+            duration = limit + 1
+        elif -float("inf") < duration < float("inf"):
+            duration = min(duration, limit + 1)
     if duration is not None:
         out += ["-t", seconds(duration)]
     # room for the wav header, output that reaches it was cut and is over max_bytes
