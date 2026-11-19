@@ -170,7 +170,8 @@ def test_converter_none_uses_the_extra(exe, monkeypatch, attr):
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="no ffmpeg on PATH")
 def test_converter_none_uses_path(monkeypatch):
     set_none(monkeypatch, "converter")
-    assert _ffmpeg.find(None) == shutil.which("ffmpeg")
+    # Windows spells the same file ffmpeg.exe or ffmpeg.EXE depending on PATHEXT
+    assert os.path.normcase(_ffmpeg.find(None)) == os.path.normcase(shutil.which("ffmpeg"))
     seg = AudioSegment.from_wav(io.BytesIO(sine()))
     assert abs(len(AudioSegment.from_file(seg.export(format="m4a"), "m4a")) - len(seg)) < 50
     assert mediainfo(seg.export(format="m4a"))["codec_name"] == "aac"
