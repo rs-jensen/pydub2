@@ -69,6 +69,35 @@ jobs:
           name: main-sdist
           path: dist/*.tar.gz
 
+  sdist-install:
+    needs: [sdist]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: main-sdist
+          path: dist
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - run: pip install dist/*.tar.gz
+      - run: |
+          cd "$(mktemp -d)"
+          python - <<'PY'
+          import io, pydub2
+          from pydub2.generators import Sine
+          seg = Sine(440).to_audio_segment(duration=1000)
+          lengths = {}
+          for fmt in ("wav", "flac"):
+              b = io.BytesIO()
+              seg.export(b, format=fmt)
+              b.seek(0)
+              lengths[fmt] = len(pydub2.AudioSegment.from_file(b, format=fmt))
+          print(lengths)
+          assert lengths["wav"] == lengths["flac"] == len(seg), lengths
+          PY
+
   mp3:
     name: mp3 ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -213,7 +242,7 @@ jobs:
 
   publish-mp3:
     if: github.ref_type == 'tag'
-    needs: [wheels, sdist, mp3, compat, check, twine, version]
+    needs: [wheels, sdist, sdist-install, mp3, compat, check, twine, version]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: pypi-mp3
@@ -231,7 +260,7 @@ jobs:
 
   publish-pydub2:
     if: github.ref_type == 'tag'
-    needs: [wheels, sdist, mp3, compat, check, twine, version, publish-mp3]
+    needs: [wheels, sdist, sdist-install, mp3, compat, check, twine, version, publish-mp3]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: pypi
@@ -249,7 +278,7 @@ jobs:
 
   publish-compat:
     if: github.ref_type == 'tag'
-    needs: [wheels, sdist, mp3, compat, check, twine, version, publish-pydub2]
+    needs: [wheels, sdist, sdist-install, mp3, compat, check, twine, version, publish-pydub2]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: pypi-compat
