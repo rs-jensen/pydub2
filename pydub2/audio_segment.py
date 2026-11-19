@@ -2,13 +2,14 @@ from __future__ import division
 
 import array
 import numbers
+import operator
 import os
 from tempfile import TemporaryFile, NamedTemporaryFile
 import subprocess
 import sys
 import struct
 import wave
-from .utils import dict_set, fsdecode, get_encoder_name, mediainfo_json, sniff
+from .utils import dict_set, fsdecode, get_encoder_name, mediainfo_json, needs_ffmpeg, sniff
 from .logging_utils import log_conversion, log_subprocess_output
 import base64
 from decimal import Decimal
@@ -48,6 +49,7 @@ from .exceptions import (
     InvalidTag,
     CouldntDecodeError,
     CouldntEncodeError,
+    FFmpegNeeded,
     MissingAudioParameter,
     tagged,
 )
@@ -97,6 +99,10 @@ def _wav_high_rate(data, rate, channels, width):
     return buf.getvalue()
 
 
+# the encoders ffmpeg picks for these formats when no codec is given, which the built in ones stand in for
+_OWN_CODECS = {"flac": "flac", "ogg": "libvorbis", "opus": "libopus", "mp3": "libmp3lame"}
+
+
 def _bits_per_second(bitrate, format, channels, converter):
     # None leaves the bitrate to ffmpeg, which reads more than the built in encoders do and has the last word on a bad one
     try:
@@ -108,6 +114,24 @@ def _bits_per_second(bitrate, format, channels, converter):
             raise tagged(CouldntEncodeError("bad bitrate %r" % (bitrate,)), format, "cant_encode")
         return None
     return rate
+
+
+def _vorbis_takes(rate, channels, width, bits):
+    # whether libvorbis can encode this audio at this bitrate
+    try:
+        _encode(b"", rate, channels, width, "ogg", bits)
+    except CouldntEncodeError:
+        return False
+    return True
+
+
+def _vorbis_bitrate_text(bitrate, bits, rate, channels, width):
+    # the bitrate is only to blame when libvorbis has another one for this audio, 8k to 4M in steps of a quarter
+    if not any(_vorbis_takes(rate, channels, width, round(8000 * 2 ** (i / 4))) for i in range(37)):
+        return None
+    hint = ", did you mean '%dk'" % bits if bits < 1000 and _vorbis_takes(rate, channels, width, bits * 1000) else ""
+    return "bad bitrate %r, libvorbis cant encode %d Hz with %d channel(s) at %d bit/s%s" % (
+        bitrate, round(rate), channels, bits, hint)
 
 
 def _vorbis_tags(tags, format):
@@ -1053,8 +1077,13 @@ class AudioSegment(object):
                         except Exception:
                             pass
 
-        if tried and _ffmpeg.find(cls.converter) is None and any(is_format(f) for f in ("wav", "flac", "mp3", "ogg", "opus")):
-            raise tagged(CouldntDecodeError("cant read this file"), sniff(head), "cant_decode")
+        own_formats = ("wav", "flac", "mp3", "ogg", "opus")
+        if tried and _ffmpeg.find(cls.converter) is None and (sniff(head) in own_formats or any(is_format(f) for f in own_formats)):
+            with open(filename, "rb") if data is None else BytesIO(data) as f:
+                if not needs_ffmpeg(f, head):
+                    raise tagged(CouldntDecodeError("cant read this file"), sniff(head), "cant_decode")
+            text, hint = _ffmpeg.missing(cls.converter, "this file")
+            raise tagged(FFmpegNeeded("cant read this file: " + text), sniff(head), "needs_ffmpeg", hint)
         try:
             wav = _ffmpeg.to_wav(cls.converter, None if piped else filename, data, format, codec, parameters, start_second, duration, lim,
                                  not tmp)
@@ -1287,8 +1316,9 @@ class AudioSegment(object):
         fw = self.channels * self.sample_width
         pcm = self._data[:len(self._data) // fw * fw]
 
+        own = codec is None or codec == _OWN_CODECS.get(format)
         # wav ignores tags and bitrate in pydub too
-        native = codec is None and parameters is None and (
+        native = own and parameters is None and (
                 format == "wav" or (format in ("flac", "ogg", "opus") and cover is None and not pydub2.strict)) and \
                 not (format == "opus" and self.frame_rate < 100)
         rate = 0
@@ -1313,8 +1343,14 @@ class AudioSegment(object):
                 return _write_out(out_f, head, data)
             # a file opened here takes flac a block at a time, so the file is not held whole next to the blocks
             parts = format == "flac" and (out_f is None or isinstance(out_f, (basestring, os.PathLike)))
-            out = _encode(data, self.frame_rate, self.channels, width, format, rate,
-                          [] if tags is None or format == "wav" else _vorbis_tags(tags, format), parts=parts)
+            try:
+                out = _encode(data, self.frame_rate, self.channels, width, format, rate,
+                              [] if tags is None or format == "wav" else _vorbis_tags(tags, format), parts=parts)
+            except CouldntEncodeError:
+                text = format == "ogg" and rate and _vorbis_bitrate_text(bitrate, rate, self.frame_rate, self.channels, width)
+                if text:
+                    raise tagged(CouldntEncodeError(text), format, "cant_encode")
+                raise
             if parts:
                 return _write_out(out_f, *out)
             if format == "wav" and out[40] & 1 and not WAVE_PADS:
@@ -1333,7 +1369,7 @@ class AudioSegment(object):
             if out is not None:
                 return _write_out(out_f, out)
 
-        if format == "mp3" and codec is None and cover is None and not pydub2.strict:
+        if format == "mp3" and own and cover is None and not pydub2.strict:
             if bitrate is not None:
                 _bits_per_second(bitrate, format, self.channels, self.converter)
             if _mp3.available():
@@ -1345,9 +1381,20 @@ class AudioSegment(object):
                 raise tagged(FileNotFoundError("ffmpeg not found, pip install pydub2-mp3 to write mp3 without it"),
                              "mp3", "needs_ffmpeg", 'pip install "pydub2[mp3]"')
 
+        why = None
+        if format in ("wav", "flac", "ogg", "opus", "mp3") and not pydub2.strict:
+            if cover is not None:
+                why = "the cover"
+            elif not own and not (format == "wav" and codec in ("pcm_s16le", "pcm_s24le", "pcm_s32le")):
+                # the built in wav writer has these, so they are not why ffmpeg is needed
+                why = "the %s codec" % codec
+            elif parameters is not None:
+                why = format + " with these parameters"
+            elif format == "opus" and self.frame_rate < 100:
+                why = "opus below 100 Hz"
         wav = _encode(pcm, self.frame_rate, self.channels, self.sample_width, "wav")
         return _write_out(out_f, _ffmpeg.from_wav(self.converter, wav, format, codec, bitrate, parameters, tags,
-                                                  id3v2_version, cover))
+                                                  id3v2_version, cover, why))
 
     @classmethod
     def from_numpy(cls, array, frame_rate):
@@ -1409,15 +1456,21 @@ class AudioSegment(object):
 
         if self._data:
             _c_int(frame_rate)
-        if self._data and resample_quality == "high":
-            converted = _pydub2.resample(self._data, self.frame_rate, self.channels,
-                                         self.sample_width, frame_rate)
-        elif self._data:
-            converted = _pydub2.ratecv(self._data, self.sample_width,
-                                       self.channels, self.frame_rate,
-                                       frame_rate)
-        else:
-            converted = self._data
+        try:
+            if self._data and resample_quality == "high":
+                converted = _pydub2.resample(self._data, self.frame_rate, self.channels,
+                                             self.sample_width, frame_rate)
+            elif self._data:
+                converted = _pydub2.ratecv(self._data, self.sample_width,
+                                           self.channels, self.frame_rate,
+                                           frame_rate)
+            else:
+                converted = self._data
+        except TypeError:
+            # audioop's text for a rate that is no int, like 22050.0, the core would show its signature
+            operator.index(self.frame_rate)
+            operator.index(frame_rate)
+            raise
 
         return self._spawn(data=converted,
                            overrides={'frame_rate': frame_rate})

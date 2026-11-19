@@ -1,4 +1,5 @@
 import functools
+import operator
 import os
 import re
 import struct
@@ -85,6 +86,8 @@ def info_frame(rate, channels, frames, music, delay, padding):
 
 def encode(data, rate, channels, width, bitrate=None, tags=None, id3v2_version="4", parameters=None,
            converter="ffmpeg"):
+    # lame takes plain ints, the rate is rounded like the wave module of pydub does
+    rate, channels, width = int(round(rate)), operator.index(channels), operator.index(width)
     out_rate, out_channels, quality = rate, channels, None
     params = list(parameters or [])
     if len(params) % 2 or channels > 2 or width not in (1, 2, 3, 4):

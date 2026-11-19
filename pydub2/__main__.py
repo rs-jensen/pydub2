@@ -16,6 +16,7 @@ import tokenize
 import _pydub2
 import pydub2
 from . import _ffmpeg, _mp3, utils
+from .utils import behind_id3, chunks, damaged, native_format, what
 from .audio_segment import AudioSegment
 
 MIN_FFMPEG = (3, 3)
@@ -24,10 +25,6 @@ SKIP_DIRS = {"venv", "node_modules", "build", "dist", "site-packages", "__pycach
 # formats pydub2 cant read or write by itself
 NEEDS_FFMPEG = {"m4a", "mp4", "aac", "wma", "aiff", "aif", "flv", "3gp", "webm", "mkv", "mov", "avi", "amr", "ac3", "wmv"}
 SAMPLES_DIFFER = {"mp3", "ogg", "opus"}
-# starts that utils.sniff does not know, only ffmpeg reads these
-MAGIC = [(b"\x0b\x77", "ac3"), (b".snd", "au"), (b"caff", "caf"), (b"riff\x2e\x91\xcf\x11", "w64"), (b"wvpk", "wv"),
-         (b"#!AMR", "amr"), (b"MAC ", "ape"), (b"TTA1", "tta"), (b"MPCK", "mpc"), (b"\x7f\xfe\x80\x01", "dts"),
-         (b"FLV", "flv"), (b"Creative Voice File", "voc"), (b"MThd", "midi")]
 KINDS = [(stat.S_ISDIR, "a directory"), (stat.S_ISFIFO, "a fifo"), (stat.S_ISSOCK, "a socket"),
          (stat.S_ISCHR, "a device"), (stat.S_ISBLK, "a device"), (stat.S_ISLNK, "a symlink")]
 
@@ -54,7 +51,7 @@ def selftest():
 
 
 def report():
-    conv = os.fspath(AudioSegment.converter)
+    conv = _ffmpeg.name_of(AudioSegment.converter)
     exe = _ffmpeg.find(conv)
     probe = utils.which(utils.get_prober_name())
     if conv != "ffmpeg":
@@ -169,96 +166,12 @@ def open_regular(path, follow=True):
     raise NotAFile(next((name for test, name in KINDS if test(mode)), "an unknown kind of file"))
 
 
-def behind_id3(f, head):
-    # an id3 tag can sit in front of any format
-    at = 0
-    while head[:3] == b"ID3" and len(head) >= 10:
-        at += 10 + (head[6] << 21 | head[7] << 14 | head[8] << 7 | head[9]) + (10 if head[5] & 0x10 else 0)
-        f.seek(at)
-        head = f.read(4096)
-    return at, head
-
-
-def what(f, head):
-    # the format by its first bytes, None when not known
-    h = behind_id3(f, head)[1]
-    if h[:4] == b"RIFF" and h[8:12] == b"AVI ":
-        return "avi"
-    fmt = utils.sniff(h) or next((name for magic, name in MAGIC if h.startswith(magic)), None)
-    if fmt == "mp3" and h[:1] == b"\xff":
-        return {2: "mp3", 4: "mp2", 6: "mp1"}[h[1] & 6]
-    if fmt == "webm" and b"webm" not in h[:64]:
-        return "matroska"
-    return fmt
-
-
-def native_format(head):
-    # the choice detect() in src/decode.cpp makes, all else goes to the mp3 decoder
-    if head[:4] in (b"RIFF", b"RF64") and head[8:12] == b"WAVE":
-        return "wav"
-    if head[:4] == b"fLaC":
-        return "flac"
-    if head[:4] == b"OggS" and len(head) > 27:
-        packet = head[27 + head[26]:]
-        if packet.startswith(b"OpusHead"):
-            return "opus"
-        if packet.startswith(b"\x01vorbis"):
-            return "ogg"
-    return "mp3"
-
-
 def is_text(head):
     try:
         codecs.getincrementaldecoder("utf-8")().decode(head[:4096])
     except UnicodeDecodeError:
         return False
     return b"\0" not in head[:4096]
-
-
-def chunks(f):
-    # the chunks of a riff file with the start of each, a thousand at most like the decoder
-    at = 12
-    for _ in range(1000):
-        f.seek(at)
-        h = f.read(34)
-        if len(h) < 8:
-            return
-        n = struct.unpack("<I", h[4:8])[0]
-        yield at, h[:4], n, h[8:]
-        at += 8 + n + (n & 1)
-
-
-def damaged(f, head, fmt):
-    # the built in decoder takes this file by its start and still failed, ffmpeg is no fix for that
-    if fmt is None or native_format(head) != fmt:
-        return False
-    if fmt in ("ogg", "opus"):
-        return not ogg_chained(f)
-    if fmt != "wav":
-        return True
-    for _, cid, n, data in chunks(f):
-        if cid == b"fmt ":
-            # an extensible wav keeps its real tag further in
-            tag = data[24:26] if data[:2] == b"\xfe\xff" else data[:2]
-            # pcm and float are what pydub2 reads itself
-            return len(tag) < 2 or struct.unpack("<H", tag)[0] in (1, 3)
-    return True
-
-
-def ogg_chained(f):
-    # a second start page means chained streams, which the built in decoder leaves to ffmpeg
-    at, first = 0, True
-    size = os.fstat(f.fileno()).st_size
-    while at + 27 <= size:
-        f.seek(at)
-        h = f.read(27)
-        if h[:4] != b"OggS":
-            return False
-        if h[5] & 2 and not first:
-            return True
-        first = False
-        at += 27 + h[26] + sum(f.read(h[26]))
-    return False
 
 
 def mp3_missing(f, size, got, rate):
@@ -374,7 +287,7 @@ def failed(r, f, head, e):
     fmt = r["format"]
     reason = "playlist_refused" if fmt == "playlist" else getattr(e, "reason", None) or "cant_decode"
     hint = getattr(e, "hint", None)
-    conv = os.fspath(AudioSegment.converter)
+    conv = _ffmpeg.name_of(AudioSegment.converter)
     if reason == "playlist_refused":
         note = "file is a playlist (hls, dash or concat): refused"
     elif reason == "too_long":
