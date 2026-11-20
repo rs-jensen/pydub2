@@ -355,10 +355,17 @@ def ffprobe_version():
     return (int(m.group(1)), int(m.group(2))) if m else (99, 0)
 
 
-def same_as_ffprobe(path, monkeypatch):
+def same_as_ffprobe(path, monkeypatch, ordered=True):
     want = probe(path)
     no_ffprobe(monkeypatch)
-    assert where(utils2.mediainfo_json(path)) == want
+    got = where(utils2.mediainfo_json(path))
+    if not ordered:
+        # the order of the tags of wav id3 chunks changes between ffmpeg versions, keys and values are what counts
+        got, want = ([sorted(part) for part in x] for x in (got, want))
+        want = list(want)
+        assert list(got) == want
+    else:
+        assert got == want
     assert utils2.mediainfo(path).get("TAG", {}) == dict(want[1] + want[0])
 
 
@@ -618,7 +625,7 @@ def base_chunk_cases():
 def test_id3_chunks_of_wav_and_aiff_like_ffprobe(tmp_path, monkeypatch, fmt, name):
     p = tmp_path / ("a." + fmt)
     p.write_bytes(with_chunks(fmt, tag_chunk_cases()[fmt][name]))
-    same_as_ffprobe(str(p), monkeypatch)
+    same_as_ffprobe(str(p), monkeypatch, ordered=False)
 
 
 def chunk_of(fmt, tag):
@@ -765,3 +772,19 @@ def test_a_priv_frame_that_fits_is_escaped_like_before(tmp_path, monkeypatch):
     p = tmp_path / "a.wav"
     p.write_bytes(with_chunks("wav", riff(b"id3 ", priv_frame(n))))
     assert utils2.mediainfo(str(p))["TAG"] == {"id3v2_priv.owner": "\\x80" * n}
+
+
+def test_id3_chunk_tag_order(tmp_path, monkeypatch):
+    # the order ffmpeg 6.1.1 gives, ffmpeg 9 puts the renamed keys first in some of these
+    no_ffprobe(monkeypatch)
+    tag = id3_tag([text(b"TIT2", b"Title"), text(b"TXXX", b"my key\0v")])
+    info = riff(b"LIST", b"INFO" + riff(b"INAM", b"Info title\0") + riff(b"IART", b"Info artist\0"))
+    two = id3_tag([text(b"TIT2", b"T2"), text(b"TALB", b"Al")])
+    priv = id3_tag([id3_frame(b"PRIV", b"owner\0ab"), text(b"TIT2", b"T")])
+    for chunks, want in (
+            (riff(b"id3 ", tag) + info, ["my key", "title", "artist"]),
+            (riff(b"id3 ", tag) + riff(b"id3 ", two), ["my key", "title", "album"]),
+            (riff(b"id3 ", priv) * 2, ["id3v2_priv.owner", "title"])):
+        p = tmp_path / "a.wav"
+        p.write_bytes(with_chunks("wav", chunks))
+        assert list(utils2.mediainfo_json(str(p))["format"]["tags"]) == want
