@@ -160,6 +160,9 @@ def time_stretch(seg, rate):
     return seg._spawn(_pydub2.stretch(seg._data, round(seg.frame_rate), seg.channels, seg.sample_width, float(rate)))
 
 
+_MAX_FRAMES = 2 ** 31 - 1
+
+
 @register_pydub_effect
 def pitch_shift(seg, semitones):
     """
@@ -170,6 +173,9 @@ def pitch_shift(seg, semitones):
     if semitones == 0 or not seg._data:
         return seg
     ratio = 2 ** (semitones / 12.0)
+    # the resampler below takes frame counts as int rates
+    if max(1, ratio) * len(seg._data) // seg.frame_width + 2 > _MAX_FRAMES:
+        raise ValueError("the audio is too long for pitch_shift")
     data = _pydub2.stretch(seg._data, round(seg.frame_rate), seg.channels, seg.sample_width, 1 / ratio)
     n, m = len(seg._data) // seg.frame_width, len(data) // seg.frame_width
     if not m:

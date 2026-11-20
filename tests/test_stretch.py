@@ -277,3 +277,16 @@ def test_speedup_is_still_pydubs():
     seg = tone(440, ms=1000)
     assert seg.speedup(1.5).raw_data == seg.speedup(playback_speed=1.5, chunk_size=150, crossfade=25).raw_data
     assert len(seg.speedup(2.0)) < len(seg) * 0.6
+
+
+def test_too_long_for_pitch_shift(monkeypatch):
+    from pydub2 import effects
+    seg = tone(ms=1000)
+    monkeypatch.setattr(effects, "_MAX_FRAMES", 44100 + 1)
+    with pytest.raises(ValueError, match="too long"):
+        seg.pitch_shift(-3)
+    with pytest.raises(ValueError, match="too long"):
+        seg.pitch_shift(3)
+    monkeypatch.setattr(effects, "_MAX_FRAMES", 44100 * 2 ** (3 / 12) + 3)
+    assert frames(seg.pitch_shift(3)) == frames(seg)
+    assert frames(seg.pitch_shift(-3)) == frames(seg)
