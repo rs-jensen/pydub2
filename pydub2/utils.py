@@ -791,9 +791,20 @@ def _wav_chunks(at):
         i += 8 + size + size % 2
 
 
+def _id3_chunk(at, i, end, out, idx, room):
+    # the id3 tag in a wav or aiff chunk, set one after the other like the text chunks
+    body = at(i, min(end - i, room))
+    for k, v in _id3_items(BytesIO(body), 0)[0] if len(out) < MAX_TAGS else ():
+        dict_set(out, idx, k, v)
+    return len(body)
+
+
 def _wav_tags(at, spans):
     out, idx, n, room = [], {}, 0, LIMIT
-    for i, end in spans:
+    for i, end, id3 in spans:
+        if id3:
+            room -= _id3_chunk(at, i, end, out, idx, room)
+            continue
         body = at(i, min(end - i, room))
         room -= len(body)
         j = 0
@@ -1038,6 +1049,11 @@ def _xing_encoder(f, start):
 
 
 def _mp3_tags(f, size):
+    items, end = _id3_items(f, size)
+    return {k.decode(errors="replace"): v.decode(errors="replace") for k, v in items}, _xing_encoder(f, end[0])
+
+
+def _id3_items(f, size):
     items, idx, priv, end = [], {}, [], [0]
     for tag, d in islice(_id3v2_frames(f, end), MAX_FRAMES):
         if d:
@@ -1061,7 +1077,7 @@ def _mp3_tags(f, size):
             _put(items, idx, k, v)
     for k, v in priv:
         _put(items, idx, k, v)
-    return {k.decode(errors="replace"): v.decode(errors="replace") for k, v in items}, _xing_encoder(f, end[0])
+    return items, end
 
 
 AIFF_TAGS = {b"NAME": "title", b"AUTH": "author", b"(c) ": "copyright", b"ANNO": "comment"}
@@ -1070,10 +1086,13 @@ AIFF_TAGS = {b"NAME": "title", b"AUTH": "author", b"(c) ": "copyright", b"ANNO":
 def _aiff_info(at):
     # codec, sample format, bits, raw bits, codec tag, frames in COMM and text chunks of a file the built in reader took
     comm = aiff_comm(at)
-    tags = {}
+    out, idx, room = [], {}, LIMIT
     for cid, i, size in aiff_chunks(at):
         if cid in AIFF_TAGS:
-            tags[AIFF_TAGS[cid]] = at(i, min(size, 65536)).split(b"\0")[0].decode(errors="replace")
+            dict_set(out, idx, AIFF_TAGS[cid].encode(), at(i, min(size, 65536)).split(b"\0")[0], keep=True)
+        elif cid == b"ID3 ":
+            room -= _id3_chunk(at, i, i + size, out, idx, room)
+    tags = {k.decode(): v.decode(errors="replace") for k, v in out}
     _, frames, bits, sub = comm
     tag = sub.decode("latin-1") if sub in AIFF_NATIVE else None
     if sub == b"sowt":
@@ -1123,7 +1142,9 @@ def _native_info(f, source):
             if cid == b"fmt " and chunk is None:
                 chunk = at(i, 40).ljust(40, b"\0")
             elif cid == b"LIST" and at(i, 4) == b"INFO":
-                lists.append((i + 4, i + n))
+                lists.append((i + 4, i + n, False))
+            elif cid in (b"id3 ", b"ID3 "):
+                lists.append((i, i + n, True))
         if chunk is None:
             return None
         tag, _, _, _, _, bits = struct.unpack_from("<HHIIHH", chunk)

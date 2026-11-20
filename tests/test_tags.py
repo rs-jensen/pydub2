@@ -538,3 +538,62 @@ def test_inflating_that_fails_is_paid_for():
     id3_of(id3_tag([frame] * 4000)[:12 << 20])
     assert time.perf_counter() - t < 20 * base + 0.5
     assert id3_of(short) == {}
+
+
+def riff(id, body):
+    return id + struct.pack("<I", len(body)) + body + b"\0" * (len(body) & 1)
+
+
+def with_chunks(fmt, chunks):
+    # chunks go in front of the audio, after the fmt chunk of a wav and the form header of an aiff
+    data = ours().export(format=fmt).read()
+    at = 36 if fmt == "wav" else 12
+    out = data[:at] + chunks + data[at:]
+    size = struct.pack("<I" if fmt == "wav" else ">I", len(out) - 8)
+    return out[:4] + size + out[8:]
+
+
+def form_chunk(id, body):
+    return id + struct.pack(">I", len(body)) + body + b"\0" * (len(body) & 1)
+
+
+def tag_chunk_cases():
+    tag = id3_tag([text(b"TIT2", b"Title"), text(b"TPE1", "Art \xe5".encode("latin-1")), text(b"TXXX", b"my key\0v")])
+    tag4 = id3_tag([id3_frame(b"TIT2", b"\3T\xc3\xa5", 4), id3_frame(b"TALB", b"\0Al", 4)], ver=4)
+    info = riff(b"LIST", b"INFO" + riff(b"INAM", b"Info title\0") + riff(b"IART", b"Info artist\0"))
+    return {
+        "wav": {"id3 chunk": riff(b"id3 ", tag), "ID3 chunk": riff(b"ID3 ", tag), "v2.4": riff(b"id3 ", tag4),
+                "info then id3": info + riff(b"id3 ", tag), "id3 then info": riff(b"id3 ", tag) + info,
+                "two": riff(b"id3 ", tag) + riff(b"ID3 ", tag4), "empty": riff(b"id3 ", b""),
+                "short": riff(b"id3 ", tag[:15]), "stacked": riff(b"id3 ", tag + tag4)},
+        "aiff": {"ID3 chunk": form_chunk(b"ID3 ", tag), "v2.4": form_chunk(b"ID3 ", tag4),
+                 "name then id3": form_chunk(b"NAME", b"Name") + form_chunk(b"ID3 ", tag),
+                 "id3 then name": form_chunk(b"ID3 ", tag) + form_chunk(b"NAME", b"Name") + form_chunk(b"ANNO", b"n"),
+                 "lower case": form_chunk(b"id3 ", tag), "empty": form_chunk(b"ID3 ", b""),
+                 "all text": form_chunk(b"NAME", b"N") + form_chunk(b"AUTH", b"A") + form_chunk(b"(c) ", b"C") +
+                 form_chunk(b"ANNO", b"x\0y"), "twice": form_chunk(b"ANNO", b"a") + form_chunk(b"ANNO", b"b")},
+    }
+
+
+@need_ffmpeg
+@pytest.mark.parametrize("fmt,name", [(f, n) for f, c in tag_chunk_cases().items() for n in c])
+def test_id3_chunks_of_wav_and_aiff_like_ffprobe(tmp_path, monkeypatch, fmt, name):
+    p = tmp_path / ("a." + fmt)
+    p.write_bytes(with_chunks(fmt, tag_chunk_cases()[fmt][name]))
+    same_as_ffprobe(str(p), monkeypatch)
+
+
+@pytest.mark.parametrize("fmt", ["wav", "aiff"])
+def test_hostile_id3_chunks_stay_small_and_quick(tmp_path, monkeypatch, fmt):
+    no_ffprobe(monkeypatch)
+    tag = id3_tag([text(b"TIT2", b"t")])
+    big = b"id3 " + struct.pack("<I", 2 ** 32 - 1) + tag if fmt == "wav" else b"ID3 " + struct.pack(">I", 2 ** 32 - 1) + tag
+    many = (riff(b"id3 ", tag) if fmt == "wav" else form_chunk(b"ID3 ", tag)) * 5000
+    for name, chunks in (("claim", big), ("many", many)):
+        p = tmp_path / (name + "." + fmt)
+        p.write_bytes(with_chunks(fmt, chunks))
+        t = time.perf_counter()
+        info = utils2.mediainfo(str(p))
+        assert time.perf_counter() - t < 5
+        # a claim that swallows the audio leaves a file the built in reader refuses
+        assert name == "claim" or info["TAG"]["title"] == "t"

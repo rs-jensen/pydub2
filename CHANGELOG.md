@@ -12,6 +12,7 @@ What changed in each release.
 
 ### Fixed
 
+- `mediainfo` without ffprobe reads the id3 tag in an `id3 ` chunk of a wav file and an `ID3 ` chunk of an aiff file, like ffprobe does.
 - An empty opus export no longer aborts the process with libopusenc 0.2.1.
 - `set_frame_rate` with a numpy integer of 2**31 or more raises `OverflowError` like pydub, not `TypeError`.
 - `AudioSegment(data=file)` loads a reader whose `read()` gives data and then `None` when `max_file_size` is set, like it does without the limit.

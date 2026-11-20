@@ -63,7 +63,7 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 - For those files the two sample size keys come from the sample format ffmpeg prints. A compressed file gets 32 where ffprobe says 0 and N/A.
 - With ffprobe installed you get all of its keys.
 - The tag reader leaves out `METADATA_BLOCK_PICTURE`, because ffprobe shows it as a video stream. It keeps up to 16 MiB of tag text and 65536 tags, and skips a single value that does not fit.
-- Without ffprobe, `mediainfo` returns the tags of wav (LIST INFO), flac, ogg, opus and mp3 files, like ffprobe does. flac, wav and mp3 tags are at format level, ogg and opus tags at stream level. Doubled keys are joined with `;`.
+- Without ffprobe, `mediainfo` returns the tags of wav (LIST INFO and `id3 ` chunks), flac, ogg, opus, mp3 and aiff (NAME, AUTH, (c), ANNO and `ID3 ` chunks) files, like ffprobe does. flac, wav and mp3 tags are at format level, ogg and opus tags at stream level. Doubled keys are joined with `;`.
 - For mp3 that means ID3v2.2, 2.3 and 2.4 at the start (stacked tags, compressed and unsynchronised frames; encrypted frames are skipped). ID3v1 is read only when the v2 tags gave nothing. The encoder name from the Xing or Info frame is a stream tag.
 - A TXXX key that only differs in case from another key is dropped, like ffmpeg 7 does. ffmpeg 8 keeps both.
 - A UTF-16 comment with an empty description and no byte order mark is kept, like ffmpeg 8.1 does. ffmpeg 7 and 8.0 drop it.
