@@ -87,7 +87,7 @@ Where pydub raises `audioop.error` or `wave.Error`, pydub2 raises `ValueError`. 
 
 Not there yet:
 
-- m4a, aac, wma and video files need ffmpeg, and so do aiff files with ulaw, alaw or another compressed codec.
+- m4a, aac, wma and video files need ffmpeg, and so do aiff-c files of any type but `NONE`, `twos`, `sowt`, `fl32` and `fl64`.
 - No type hints yet. There is no `py.typed`.
 
 pydub2 is young code. The first release was in November 2026 and one person maintains it, me. So far I have checked it like this:

@@ -26,7 +26,7 @@ A few notes on cells that need one.
 
 The pydub2 wheel is 3.0 MB on macOS arm64 and 3.2 MB on Windows. The mp3 writer is a separate wheel of 130 to 230 KB because LAME is LGPL.
 
-pydub2 reads uncompressed aiff itself. ulaw, alaw and other compressed aiff-c files still go through ffmpeg.
+pydub2 reads uncompressed aiff itself. Of the aiff-c types `NONE`, `twos`, `sowt`, `fl32` and `fl64` load built in, every other type (ulaw, alaw, `raw `, `in24` and so on) goes through ffmpeg.
 
 For free threaded builds I could only run pydub2 itself. I built it for a free threaded 3.15 and ran eight threads that each decoded an mp3 and faded a flac. The GIL stayed off and every thread got the same answer. The cells for other libraries only say what their wheels and READMEs offer.
 
@@ -163,7 +163,7 @@ Use pydub 0.25.1, or one of its forks, if your code works today, you only touch 
 
 I develop it on macOS arm64. The tests run on Linux, Windows and macOS for every push. I have not tried it on a real Windows machine.
 
-m4a and aac, wma and video files still go through ffmpeg, and so does aiff with a compressed codec. `pip install "pydub2[ffmpeg]"` pulls an ffmpeg binary from PyPI if you have none. pydub2 can export m4a and aac when ffmpeg is there. That fails in pydub 0.25.1.
+m4a and aac, wma and video files still go through ffmpeg, and so does an aiff-c file of any type but `NONE`, `twos`, `sowt`, `fl32` and `fl64`. `pip install "pydub2[ffmpeg]"` pulls an ffmpeg binary from PyPI if you have none. pydub2 can export m4a and aac when ffmpeg is there. That fails in pydub 0.25.1.
 
 Writing mp3 needs the `pydub2-mp3` package, or ffmpeg.
 

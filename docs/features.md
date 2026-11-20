@@ -11,7 +11,7 @@ The API is pydub's. This page is about the rest: which formats need ffmpeg, the 
 | ogg vorbis | built in | built in |
 | opus | built in | built in |
 | mp3 | built in | `pydub2-mp3` package, or ffmpeg |
-| aiff | built in for pcm and float (aiff and aiff-c), ffmpeg for ulaw, alaw and other codecs | built in for 16 bit, ffmpeg for the rest |
+| aiff | built in for pcm, and for the aiff-c types `NONE`, `twos`, `sowt`, `fl32` and `fl64`. Every other aiff-c type (ulaw, alaw, `raw `, `in24` and so on) goes to ffmpeg | built in for 16 bit mono or stereo without tags, cover, codec, bitrate or parameters, ffmpeg for the rest |
 | m4a/aac, wma, video files | ffmpeg | ffmpeg |
 
 The ffmpeg rows need ffmpeg 3.3 or newer installed. Everything marked built in works without it. That includes
