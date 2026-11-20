@@ -171,6 +171,18 @@ def test_empty(fmt):
     assert len(_pydub2.encode(b"", 44100, 2, 2, fmt)) > 0
 
 
+# libopusenc 0.2.1 hit an assert here, in a child so an abort fails one test and not the run
+def test_empty_opus_does_not_abort():
+    code = (
+        "import _pydub2\n"
+        "for rate in (8000, 44100, 48000):\n"
+        "    for channels in (1, 2, 6):\n"
+        "        assert _pydub2.encode(b'', rate, channels, 2, 'opus')[:4] == b'OggS'\n"
+    )
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(sys.path))
+    subprocess.run([sys.executable, "-c", code], env=env, check=True)
+
+
 def test_unknown_format():
     with pytest.raises(ValueError):
         _pydub2.encode(sine(), 44100, 1, 2, "mp3")
