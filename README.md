@@ -109,6 +109,29 @@ There are wheels for CPython 3.9 to 3.14 and for the free threaded 3.14t, on:
 
 `pydub2-mp3` has a wheel for the same platforms that works with every Python version, and `pydub2-compat` is pure Python. There are no 32 bit wheels. Anywhere else pip builds from source, which needs CMake 3.28 or newer, a C++17 compiler and network access to download the codec libraries.
 
+### Building from source with the system libraries
+
+By default the build downloads the codec libraries and builds them itself. If you can't download anything while you build (a distro package, conda-forge, a sandbox), set `PYDUB2_SYSTEM_LIBS=ON` and it links the libraries that are installed instead. Nothing is fetched then, and the module uses them as shared libraries.
+
+You need pkg-config and the development files for ogg, flac, vorbis, opus, opusfile, libopusenc and libsamplerate. On Debian and Ubuntu:
+
+    apt install pkg-config libogg-dev libflac-dev libvorbis-dev libopus-dev libopusfile-dev libopusenc-dev libsamplerate0-dev
+
+Pass the option through scikit-build-core, either as a config setting or in `CMAKE_ARGS`. With `--no-build-isolation` pip can't download the build tools, so install `scikit-build-core` and `nanobind` first:
+
+    pip install --no-build-isolation -C cmake.define.PYDUB2_SYSTEM_LIBS=ON pydub2-0.1.0.tar.gz
+    CMAKE_ARGS=-DPYDUB2_SYSTEM_LIBS=ON pip install --no-build-isolation .
+
+CMake stops with the name of the library when one is missing or older than ogg 1.3.5, flac 1.4.3, vorbis 1.3.7, opus 1.4, opusfile 0.12, libopusenc 0.2.1 or libsamplerate 0.2.2. Those are the versions in Ubuntu 24.04, where the tests were run.
+
+The bundled build is the tested one. The wheels use the versions in [THIRD_PARTY.md](https://github.com/rs-jensen/pydub2/blob/main/THIRD_PARTY.md), with patches for libvorbis and opusfile. The full test suite also passes with the system libraries of Ubuntu 24.04 (the versions above), but other versions can still differ:
+
+- The encoded flac, ogg and opus bytes depend on the library versions, so they can differ from the wheels' and from ffmpeg's if yours are newer or older.
+- The libvorbis patches fix undefined behavior found by the sanitizers. A system libvorbis doesn't have them unless the distro added them.
+- The opusfile patches fix a crash when memory runs out while reading a file (CVE-2022-47021) and a leak when an opus file with several links fails to open. Debian and Ubuntu have the first fix from opusfile 0.12-4. Check your distro for the second.
+
+`pydub2-mp3` still downloads lame when it builds.
+
 ## More
 
 - [Moving a project from pydub](https://github.com/rs-jensen/pydub2/blob/main/docs/migrating.md)
