@@ -377,6 +377,14 @@ def _pcm_wav(data):
 FLOAT_TAGS = (b"fl32", b"FL32", b"fl64", b"FL64")
 
 
+def _float_aiff(filename, data, head):
+    # the COMM chunk can sit past the start of the file, so the whole file is looked at
+    if sniff(head) != "aiff":
+        return False
+    with open(filename, "rb") if data is None else BytesIO(data) as f:
+        return aifc_tag(f) in FLOAT_TAGS
+
+
 def _float_wav(head):
     try:
         fmt = [x for x in extract_wav_headers(head) if x.id == b"fmt "][0]
@@ -1019,7 +1027,7 @@ class AudioSegment(object):
         head = file.read(65536) if data is None else data[:65536]
         own = wav and _pydub_wav(head)
         # the native decoders give 32 bit for what ffmpeg converts to 16 bit, rounded from float and cut from integers
-        narrow = None if not tmp or own else "round" if sniff(head) in ("ogg", "opus") or _float_wav(head) or aifc_tag(head) in FLOAT_TAGS else "cut"
+        narrow = None if not tmp or own else "round" if sniff(head) in ("ogg", "opus") or _float_wav(head) or _float_aiff(filename, data, head) else "cut"
         if close_file:
             file.close()
         # ffmpeg cuts vorbis by packet times that drift from the sample count, only ffmpeg lands on the same sample
@@ -1342,7 +1350,7 @@ class AudioSegment(object):
             rate = _bits_per_second(bitrate, format, self.channels, self.converter)
             native = rate is not None
         if format == "aiff" and own and parameters is None and tags is None and cover is None and not pydub2.strict and \
-                self.sample_width == 2 and 0 < self.frame_rate < 2 ** 31 and self.channels <= 2 and len(pcm) < 2 ** 31 - 64:
+                bitrate is None and self.sample_width == 2 and 0 < self.frame_rate < 2 ** 31 and self.channels <= 2 and len(pcm) < 2 ** 31 - 64:
             # 8, 24 and 32 bit audio is turned into 16 bit by ffmpeg, and it adds a channel layout chunk for more than two channels
             return _write_out(out_f, _aiff_head(pcm, round(self.frame_rate), self.channels), _aiff_big_endian(pcm))
         if native:

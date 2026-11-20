@@ -292,7 +292,7 @@ struct Aiff : Dec {
             size = (int32_t)size < 0 ? 0x7fffffff : size;
             left = (int32_t)((uint32_t)left - (size + 8));
             if (tag == 0x434f4d4d) { // COMM
-                uint64_t n = size; // no pad byte after this one either
+                uint64_t n = size; // no pad byte after COMM
                 if (n < 18) {
                     fail();
                 }
@@ -336,8 +336,8 @@ struct Aiff : Dec {
                     fail();
                 }
                 width = flt ? bytes : bytes == 3 ? 4 : bytes;
-                // ffmpeg takes 512 channels of 16 bit and 64 of anything else, it refuses more
-                if (channels > (width == 2 ? 512 : 64)) {
+                // ffmpeg takes 512 channels, and 64 of float, it refuses more
+                if (channels > (flt ? 64 : 512)) {
                     fail();
                 }
             } else if (tag == 0x46564552) { // FVER
@@ -347,7 +347,7 @@ struct Aiff : Dec {
                     fail();
                 }
                 skip((int64_t)size + (size & 1));
-            } else if (tag == 0x53534e44) { // SSND, no pad byte after this one
+            } else if (tag == 0x53534e44) { // SSND
                 if (size < 8) {
                     fail();
                 }
@@ -355,7 +355,7 @@ struct Aiff : Dec {
                 uint64_t off = get(4);
                 get(4);
                 data = pos + off;
-                skip((int64_t)size - 8);
+                skip((int64_t)size - 8 + (size & 1)); // ffmpeg skips the pad byte
             } else {
                 skip((int64_t)size + (size & 1));
             }

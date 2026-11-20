@@ -630,6 +630,69 @@ def test_temporary_files_variant_narrows_like_ffmpeg(tmp_path, name, data):
     assert got[4] == want[4] or max(abs(a - b) for a, b in zip(array.array("h", got[4]), array.array("h", want[4]))) <= 1
 
 
+# an odd sound chunk has a pad byte, ffmpeg skips it
+
+
+def test_odd_sound_chunk_pad_is_skipped_before_the_next_chunk(noffmpeg, tmp_path):
+    data = form(comm(1, 100, 8, 8000) + ssnd(NOISE[:301]) + chunk(b"NAME", b"Song") + chunk(b"ANNO", b"Note"))
+    info = utils.mediainfo(write(tmp_path, data))
+    assert info["TAG"] == {"title": "Song", "comment": "Note"}
+    pcm = NOISE[:400]
+    got = ours(tmp_path, form(ssnd(pcm[:401]) + comm(1, 100, 32, 8000)))
+    assert got[3] == 100 and got[4] == swap(pcm, 4)
+
+
+@need_ffmpeg
+def test_odd_sound_chunk_like_pydub(tmp_path):
+    same_as_pydub(tmp_path, form(ssnd(NOISE[:401]) + comm(1, 100, 32, 8000)))
+    same_as_pydub(tmp_path, form(comm(1, 100, 8, 8000) + ssnd(NOISE[:301]) + chunk(b"NAME", b"Song") + chunk(b"ANNO", b"Note")))
+
+
+@need_ffmpeg
+def test_temporary_files_variant_finds_a_comm_behind_a_long_sound_chunk(tmp_path):
+    values = struct.pack(">%df" % 40000, *[math.sin(i / 7) * 0.9 for i in range(40000)])
+    # the first COMM is plain 16 bit, the last one is float and wins like in ffmpeg
+    data = form(comm(1, 10, 16, 8000, b"NONE") + ssnd(values) + comm(1, 40000, 32, 8000, b"fl32"), b"AIFC")
+    path = write(tmp_path, data)
+    got = AudioSegment.from_file_using_temporary_files(path)
+    want = pydub.AudioSegment.from_file_using_temporary_files(path)
+    assert sig(got) == sig(want)
+
+
+@need_ffmpeg
+def test_mediainfo_duration_is_the_frame_count_in_comm(tmp_path, monkeypatch):
+    path = write(tmp_path, form(comm(1, 100, 8, 8000) + ssnd(NOISE[:101])))
+    want = utils.mediainfo(path)["duration"]
+    monkeypatch.setenv("PATH", str(tmp_path / "none"))
+    monkeypatch.setitem(sys.modules, "imageio_ffmpeg", None)
+    assert utils.mediainfo(path)["duration"] == want == "0.012500"
+
+
+@pytest.mark.parametrize("bits", [8, 24, 32])
+def test_many_channels_load_built_in_up_to_512(noffmpeg, tmp_path, bits):
+    assert ours(tmp_path, aiff(bytes(100 * bits // 8 * 2), 100, bits, 8000))[1:4] == (100, 4 if bits == 24 else bits // 8, 2)
+    assert ours(tmp_path, aiff(bytes(512 * bits // 8), 512, bits, 8000))[1] == 512
+    with pytest.raises(CouldntDecodeError):
+        ours(tmp_path, aiff(bytes(513 * bits // 8), 513, bits, 8000))
+    with pytest.raises(CouldntDecodeError):
+        ours(tmp_path, aifc(bytes(65 * 8), b"fl32", 65, 32))
+
+
+@need_ffmpeg
+@pytest.mark.parametrize("bits", [8, 16, 24, 32])
+@pytest.mark.parametrize("channels", [65, 512, 513])
+def test_many_channels_like_pydub(tmp_path, bits, channels):
+    same_as_pydub(tmp_path, aiff(bytes(channels * bits // 8 * 2), channels, bits, 8000))
+
+
+@need_ffmpeg
+def test_a_bitrate_sends_the_export_to_ffmpeg(tmp_path):
+    from pydub2.exceptions import CouldntEncodeError
+    seg = AudioSegment(NOISE[:200], sample_width=2, frame_rate=8000, channels=1)
+    with pytest.raises(CouldntEncodeError):
+        seg.export(format="aiff", bitrate="zzz")
+
+
 # the other formats are not slowed down
 
 

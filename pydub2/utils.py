@@ -444,7 +444,7 @@ def damaged(f, head, fmt):
     if fmt in ("ogg", "opus"):
         return not ogg_chained(f)
     if fmt == "aiff":
-        return not aifc_for_ffmpeg(head)
+        return not aifc_for_ffmpeg(f)
     if fmt != "wav":
         return True
     for _, cid, n, data in chunks(f):
@@ -456,26 +456,45 @@ def damaged(f, head, fmt):
     return True
 
 
-def aifc_tag(head):
-    # the codec tag in the COMM chunk of an aiff-c file, b"" when there is none
-    at = 12
+def aiff_chunks(at):
+    # (id, start of the body, size) the way the built in reader and ffmpeg walk them: a pad byte after
+    # every chunk but COMM. at(i, n) reads n bytes from i
+    i = 12
     for _ in range(MAX_STEPS):
-        h = head[at:at + 8]
+        h = at(i, 8)
         if len(h) < 8:
-            return b""
+            return
         size = struct.unpack(">I", h[4:])[0]
-        if h[:4] == b"COMM":
-            return head[at + 26:at + 30] if head[8:12] == b"AIFC" and size >= 22 else b""
-        at += 8 + size + (size & 1)
-    return b""
+        yield h[:4], i + 8, size
+        i += 8 + size + (size & 1 if h[:4] != b"COMM" else 0)
 
 
-def aifc_for_ffmpeg(head):
-    # True for a codec ffmpeg reads and the built in reader leaves to it, like ulaw
-    tag = aifc_tag(head)
+def aiff_comm(at):
+    # (channels, frames, bits, codec tag) of the last COMM chunk, the tag is b"" when there is none
+    comm = None
+    for cid, i, size in aiff_chunks(at):
+        if cid == b"COMM":
+            comm = at(i, 26).ljust(26, b"\0"), size
+    if comm is None:
+        return None
+    body, size = comm
+    channels, frames, bits = struct.unpack_from(">HIH", body)
+    return channels, frames, bits, body[18:22] if at(8, 4) == b"AIFC" and size >= 22 else b""
+
+
+def aifc_tag(f):
+    # the codec tag of an aiff file object, b"" when there is none
+    comm = aiff_comm(lambda i, n: (f.seek(i), f.read(n))[1])
+    return comm[3] if comm else b""
+
+
+def aifc_for_ffmpeg(f):
+    # True for a file with a codec ffmpeg reads and the built in reader leaves to it, like ulaw
+    tag = aifc_tag(f)
     return len(tag) == 4 and tag not in AIFF_NATIVE
 
 
+FLOAT_TAGS = (b"fl32", b"FL32", b"fl64", b"FL64")
 AIFF_NATIVE = (b"NONE", b"twos", b"sowt", b"fl32", b"FL32", b"fl64", b"FL64")
 
 
@@ -1048,35 +1067,27 @@ def _mp3_tags(f, size):
 AIFF_TAGS = {b"NAME": "title", b"AUTH": "author", b"(c) ": "copyright", b"ANNO": "comment"}
 
 
-def _aiff_info(at, aifc):
-    # codec, sample format, bits, raw bits, codec tag and text chunks of a file the built in reader took
-    # like the reader, no pad byte after COMM and SSND
-    comm, csize, tags, i = None, 0, {}, 12
-    for _ in range(MAX_STEPS):
-        h = at(i, 8)
-        if len(h) < 8:
-            break
-        cid, size = h[:4], struct.unpack_from(">I", h, 4)[0]
-        if cid == b"COMM" and comm is None:
-            comm, csize = at(i + 8, 22).ljust(22, b"\0"), size
-        elif cid in AIFF_TAGS:
-            tags[AIFF_TAGS[cid]] = at(i + 8, min(size, 65536)).split(b"\0")[0].decode(errors="replace")
-        i += 8 + size + (size & 1 if cid not in (b"COMM", b"SSND") else 0)
-    bits = struct.unpack_from(">H", comm, 6)[0]
-    sub = comm[18:22] if aifc and csize >= 22 else b""
+def _aiff_info(at):
+    # codec, sample format, bits, raw bits, codec tag, frames in COMM and text chunks of a file the built in reader took
+    comm = aiff_comm(at)
+    tags = {}
+    for cid, i, size in aiff_chunks(at):
+        if cid in AIFF_TAGS:
+            tags[AIFF_TAGS[cid]] = at(i, min(size, 65536)).split(b"\0")[0].decode(errors="replace")
+    _, frames, bits, sub = comm
     tag = sub.decode("latin-1") if sub in AIFF_NATIVE else None
     if sub == b"sowt":
-        return "pcm_s16le", "s16", "16", "N/A", tag, tags
+        return "pcm_s16le", "s16", "16", "N/A", tag, frames, tags
     if sub in (b"fl32", b"FL32"):
-        return "pcm_f32be", "flt", "32", "N/A", tag, tags
+        return "pcm_f32be", "flt", "32", "N/A", tag, frames, tags
     if sub in (b"fl64", b"FL64"):
-        return "pcm_f64be", "dbl", "64", "N/A", tag, tags
+        return "pcm_f64be", "dbl", "64", "N/A", tag, frames, tags
     if bits <= 8:
-        return "pcm_s8", "u8", "8", "N/A", tag, tags
+        return "pcm_s8", "u8", "8", "N/A", tag, frames, tags
     if bits <= 16:
-        return "pcm_s16be", "s16", "16", "N/A", tag, tags
+        return "pcm_s16be", "s16", "16", "N/A", tag, frames, tags
     n = 24 if bits <= 24 else 32
-    return "pcm_s%dbe" % n, "s32", str(n), str(n), tag, tags
+    return "pcm_s%dbe" % n, "s32", str(n), str(n), tag, frames, tags
 
 
 def _native_info(f, source):
@@ -1103,7 +1114,7 @@ def _native_info(f, source):
     tags, in_stream, enc = {}, False, None
     head = at(0, 22)
     if head[:4] == b"FORM":
-        name, fmt, bits, raw, tag_name, tags = _aiff_info(at, head[8:12] == b"AIFC")
+        name, fmt, bits, raw, tag_name, frames, tags = _aiff_info(at)
         tag = int.from_bytes((tag_name or "").encode(), "little")
         format_name = "aiff"
     elif head[:4] in (b"RIFF", b"RF64"):
