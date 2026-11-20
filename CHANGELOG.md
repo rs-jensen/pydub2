@@ -12,6 +12,8 @@ What changed in each release.
 
 ### Fixed
 
+- Reading id3 tags without ffprobe counts the decoded text against the 16 MiB limit, so a big `PRIV` or text frame no longer takes four times its size in memory. Many `id3 ` chunks in a wav or aiff file no longer take longer and longer to read.
+- `mediainfo` without ffprobe reads the id3 tags in the `id3 ` and `ID3 ` chunks of a wav file and in the `ID3 ` chunks of an aiff file, like ffprobe does.
 - An empty opus export no longer aborts the process with libopusenc 0.2.1.
 - `set_frame_rate` with a numpy integer of 2**31 or more raises `OverflowError` like pydub, not `TypeError`.
 - `AudioSegment(data=file)` loads a reader whose `read()` gives data and then `None` when `max_file_size` is set, like it does without the limit.

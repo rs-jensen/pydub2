@@ -9,6 +9,7 @@ import struct
 import subprocess
 import sys
 import time
+import tracemalloc
 import zlib
 
 import pytest
@@ -276,6 +277,11 @@ def utf16(s, bom=True):
 def id3_cases():
     t = text
     return {
+        "two comments": [id3_tag([id3_frame(b"COMM", b"\0eng\0first"), id3_frame(b"COMM", b"\0eng\0second")]), b""],
+        "same txxx twice": [id3_tag([t(b"TXXX", b"k\0one"), t(b"TXXX", b"k\0two")]), b""],
+        "txxx title before tit2": [id3_tag([t(b"TXXX", b"title\0tx"), t(b"TIT2", b"T")]), b""],
+        "txxx title after tit2": [id3_tag([t(b"TIT2", b"T"), t(b"TXXX", b"title\0tx")]), b""],
+        "comment and txxx comment": [id3_tag([id3_frame(b"COMM", b"\0eng\0c"), t(b"TXXX", b"comment\0tx")]), b""],
         "common": [id3_tag([t(b"TIT2", b"Hello"), t(b"TPE1", b"Art"), t(b"TALB", b"Alb"), t(b"TRCK", b"3/10"),
                             t(b"TCON", b"(13)"), t(b"TYER", b"2001"), t(b"TPE2", b"AA"), t(b"TPOS", b"1/2")]), b""],
         "genres": [id3_tag([t(b"TCON", b"13")]), b""],
@@ -349,10 +355,17 @@ def ffprobe_version():
     return (int(m.group(1)), int(m.group(2))) if m else (99, 0)
 
 
-def same_as_ffprobe(path, monkeypatch):
+def same_as_ffprobe(path, monkeypatch, ordered=True):
     want = probe(path)
     no_ffprobe(monkeypatch)
-    assert where(utils2.mediainfo_json(path)) == want
+    got = where(utils2.mediainfo_json(path))
+    if not ordered:
+        # the order of the tags of wav id3 chunks changes between ffmpeg versions, keys and values are what counts
+        got, want = ([sorted(part) for part in x] for x in (got, want))
+        want = list(want)
+        assert list(got) == want
+    else:
+        assert got == want
     assert utils2.mediainfo(path).get("TAG", {}) == dict(want[1] + want[0])
 
 
@@ -538,3 +551,240 @@ def test_inflating_that_fails_is_paid_for():
     id3_of(id3_tag([frame] * 4000)[:12 << 20])
     assert time.perf_counter() - t < 20 * base + 0.5
     assert id3_of(short) == {}
+
+
+def riff(id, body):
+    return id + struct.pack("<I", len(body)) + body + b"\0" * (len(body) & 1)
+
+
+def with_chunks(fmt, chunks):
+    # chunks go in front of the audio, after the fmt chunk of a wav and the form header of an aiff
+    data = ours().export(format=fmt).read()
+    at = 36 if fmt == "wav" else 12
+    out = data[:at] + chunks + data[at:]
+    size = struct.pack("<I" if fmt == "wav" else ">I", len(out) - 8)
+    return out[:4] + size + out[8:]
+
+
+def form_chunk(id, body):
+    return id + struct.pack(">I", len(body)) + body + b"\0" * (len(body) & 1)
+
+
+def comm(s, enc=0):
+    return id3_frame(b"COMM", bytes([enc]) + b"eng\0" + s)
+
+
+def more_chunk_cases():
+    one = id3_tag([comm(b"first"), text(b"TXXX", b"k\0one"), text(b"TIT2", b"T1")])
+    two = id3_tag([comm(b"second"), text(b"TXXX", b"k\0two"), text(b"TXXX", b"title\0txtitle")])
+    both = id3_tag([text(b"TXXX", b"title\0txtitle"), text(b"TIT2", b"T2")])
+    priv = id3_tag([id3_frame(b"PRIV", b"owner\0\x01\x02ab"), text(b"TIT2", b"T")])
+    tag = id3_tag([text(b"TIT2", b"Title"), text(b"TALB", b"Album"), text(b"TPE1", b"Artist")])
+    wav = {"two chunks": riff(b"id3 ", one) + riff(b"id3 ", two), "two chunks reversed": riff(b"id3 ", two) + riff(b"id3 ", one),
+           "title twice": riff(b"id3 ", one) + riff(b"id3 ", both), "priv": riff(b"id3 ", priv),
+           "priv twice": riff(b"id3 ", priv) + riff(b"id3 ", priv)}
+    aiff = {"two chunks": form_chunk(b"ID3 ", one) + form_chunk(b"ID3 ", two),
+            "two chunks reversed": form_chunk(b"ID3 ", two) + form_chunk(b"ID3 ", one),
+            "title twice": form_chunk(b"ID3 ", one) + form_chunk(b"ID3 ", both), "priv": form_chunk(b"ID3 ", priv)}
+    for name, text_id, frame in (("comment", b"ANNO", comm(b"idc")), ("title", b"NAME", text(b"TXXX", b"title\0tx")),
+                                 ("author", b"AUTH", text(b"TXXX", b"AUTHOR\0x")), ("renamed", b"NAME", text(b"TIT2", b"T"))):
+        a, b = form_chunk(text_id, b"chunk"), form_chunk(b"ID3 ", id3_tag([frame]))
+        aiff["text then id3 " + name], aiff["id3 then text " + name] = a + b, b + a
+    # ffmpeg reads on past the end of a wav chunk, into whatever follows it
+    for cut in (25, 28, 33, len(tag) - 3, len(tag) - 1):
+        wav["cut at %d" % cut] = b"id3 " + struct.pack("<I", cut) + tag[:cut] + b"\0" * (cut & 1) + riff(b"JUNK", tag[cut:])
+    aiff["cut after the tags"] = form_chunk(b"ID3 ", tag + b"\0" * 5)
+    return {"wav": wav, "aiff": aiff}
+
+
+def tag_chunk_cases():
+    cases, more = base_chunk_cases(), more_chunk_cases()
+    return {f: {**cases[f], **more[f]} for f in cases}
+
+
+def base_chunk_cases():
+    tag = id3_tag([text(b"TIT2", b"Title"), text(b"TPE1", "Art \xe5".encode("latin-1")), text(b"TXXX", b"my key\0v")])
+    tag4 = id3_tag([id3_frame(b"TIT2", b"\3T\xc3\xa5", 4), id3_frame(b"TALB", b"\0Al", 4)], ver=4)
+    info = riff(b"LIST", b"INFO" + riff(b"INAM", b"Info title\0") + riff(b"IART", b"Info artist\0"))
+    return {
+        "wav": {"id3 chunk": riff(b"id3 ", tag), "ID3 chunk": riff(b"ID3 ", tag), "v2.4": riff(b"id3 ", tag4),
+                "info then id3": info + riff(b"id3 ", tag), "id3 then info": riff(b"id3 ", tag) + info,
+                "two": riff(b"id3 ", tag) + riff(b"ID3 ", tag4), "empty": riff(b"id3 ", b""),
+                "short": riff(b"id3 ", tag[:15]), "stacked": riff(b"id3 ", tag + tag4)},
+        "aiff": {"ID3 chunk": form_chunk(b"ID3 ", tag), "v2.4": form_chunk(b"ID3 ", tag4),
+                 "name then id3": form_chunk(b"NAME", b"Name") + form_chunk(b"ID3 ", tag),
+                 "id3 then name": form_chunk(b"ID3 ", tag) + form_chunk(b"NAME", b"Name") + form_chunk(b"ANNO", b"n"),
+                 "lower case": form_chunk(b"id3 ", tag), "empty": form_chunk(b"ID3 ", b""),
+                 "all text": form_chunk(b"NAME", b"N") + form_chunk(b"AUTH", b"A") + form_chunk(b"(c) ", b"C") +
+                 form_chunk(b"ANNO", b"x\0y"), "twice": form_chunk(b"ANNO", b"a") + form_chunk(b"ANNO", b"b")},
+    }
+
+
+@need_ffmpeg
+@pytest.mark.parametrize("fmt,name", [(f, n) for f, c in tag_chunk_cases().items() for n in c])
+def test_id3_chunks_of_wav_and_aiff_like_ffprobe(tmp_path, monkeypatch, fmt, name):
+    p = tmp_path / ("a." + fmt)
+    p.write_bytes(with_chunks(fmt, tag_chunk_cases()[fmt][name]))
+    same_as_ffprobe(str(p), monkeypatch, ordered=False)
+
+
+def chunk_of(fmt, tag):
+    return riff(b"id3 ", tag) if fmt == "wav" else form_chunk(b"ID3 ", tag)
+
+
+def squeezed(n, key):
+    # a v2.4 tag with one compressed TXXX frame that inflates to n bytes
+    body = zlib.compress(b"\0" + key + b"\0" + b"v" * n)
+    return id3_tag([id3_frame(b"TXXX", struct.pack(">I", n + len(key) + 2) + body, 4, 9)], 4)
+
+
+@pytest.mark.parametrize("fmt", ["wav", "aiff"])
+def test_id3_chunks_share_one_budget_for_inflating(tmp_path, monkeypatch, fmt):
+    no_ffprobe(monkeypatch)
+    n = utils2.LIMIT // 2 - 65536
+    p = tmp_path / ("a." + fmt)
+    p.write_bytes(with_chunks(fmt, b"".join(chunk_of(fmt, squeezed(n, b"k%d" % i)) for i in range(30))))
+    assert p.stat().st_size < 1 << 20
+    tracemalloc.start()
+    try:
+        tags = utils2.mediainfo(str(p))["TAG"]
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    # the first tag fits the text budget of the file, the next ones find too little left
+    assert list(tags) == ["k0"] and len(tags["k0"]) == n
+    assert peak < 80 << 20
+
+
+@pytest.mark.parametrize("fmt", ["wav", "aiff"])
+def test_id3_chunks_stop_at_the_tag_cap(tmp_path, monkeypatch, fmt):
+    no_ffprobe(monkeypatch)
+    chunks = [chunk_of(fmt, id3_tag([text(b"TXXX", b"k%d\0v" % (4000 * j + i)) for i in range(4000)])) for j in range(100)]
+    p = tmp_path / ("a." + fmt)
+    p.write_bytes(with_chunks(fmt, b"".join(chunks)))
+    t = time.perf_counter()
+    tags = utils2.mediainfo(str(p))["TAG"]
+    assert len(tags) == utils2.MAX_FRAMES <= utils2.MAX_TAGS
+    assert list(tags) == ["k%d" % i for i in range(len(tags))]
+    assert time.perf_counter() - t < 5
+
+
+@pytest.mark.parametrize("fmt", ["wav", "aiff"])
+def test_id3_chunk_that_claims_too_much(tmp_path, monkeypatch, fmt):
+    no_ffprobe(monkeypatch)
+    tag = id3_tag([text(b"TIT2", b"t")])
+    claim = tag[:6] + syncsafe(2 ** 27) + tag[10:]
+    p = tmp_path / ("a." + fmt)
+    p.write_bytes(with_chunks(fmt, chunk_of(fmt, claim)))
+    t = time.perf_counter()
+    info = utils2.mediainfo(str(p))
+    assert time.perf_counter() - t < 5
+    # ffmpeg refuses an aiff like this, the audio loads here and the chunk gives no tags. wav reads on to the end of the file
+    assert info.get("TAG", {}) == ({"title": "t"} if fmt == "wav" else {})
+    assert len(AudioSegment.from_file(str(p)).raw_data) == len(raw())
+
+
+def test_id3_chunk_tags_without_ffprobe(tmp_path, monkeypatch):
+    # what the oracle tests above check against ffprobe, written out
+    no_ffprobe(monkeypatch)
+    one = id3_tag([comm(b"first"), text(b"TXXX", b"k\0one"), text(b"TIT2", b"T1")])
+    two = id3_tag([comm(b"second"), text(b"TXXX", b"k\0two"), text(b"TXXX", b"title\0tx"), text(b"TALB", b"Al")])
+    priv = id3_tag([id3_frame(b"PRIV", b"owner\0\x01\x02ab")])
+    want = {"comment": "first", "k": "one", "title": "T1", "album": "Al"}
+    for fmt, chunks, tags in (
+            ("wav", riff(b"id3 ", one) + riff(b"ID3 ", two), want),
+            ("aiff", form_chunk(b"ID3 ", one) + form_chunk(b"ID3 ", two), want),
+            ("aiff", form_chunk(b"NAME", b"Nm") + form_chunk(b"ID3 ", id3_tag([text(b"TXXX", b"title\0x")])), {"title": "Nm"}),
+            ("aiff", form_chunk(b"ID3 ", priv), {}),
+            ("wav", riff(b"id3 ", priv), {"id3v2_priv.owner": "\\x01\\x02ab"})):
+        p = tmp_path / ("a." + fmt)
+        p.write_bytes(with_chunks(fmt, chunks))
+        assert utils2.mediainfo(str(p)).get("TAG", {}) == tags
+
+
+def timed(path):
+    t = time.perf_counter()
+    info = utils2.mediainfo(str(path))
+    return info, time.perf_counter() - t
+
+
+@pytest.mark.parametrize("fmt", ["wav", "aiff"])
+def test_id3_chunks_that_chain_are_read_once(tmp_path, monkeypatch, fmt):
+    no_ffprobe(monkeypatch)
+    # each tag claims 8 bytes, which is the header of the next chunk, so a tag leads on through all the chunks after it
+    tag = b"ID3\x04\x00\x00" + syncsafe(8)
+    chunk = (b"id3 " + struct.pack("<I", 10) if fmt == "wav" else b"ID3 " + struct.pack(">I", 10)) + tag
+    p = tmp_path / ("a." + fmt)
+    p.write_bytes(with_chunks(fmt, chunk * 4000))
+    info, took = timed(p)
+    assert took < 4 and len(AudioSegment.from_file(str(p)).raw_data) == len(raw())
+
+
+@pytest.mark.parametrize("fmt", ["wav", "aiff"])
+def test_many_id3_chunks_cost_the_same_with_many_tags_before(tmp_path, monkeypatch, fmt):
+    no_ffprobe(monkeypatch)
+    keys = [bytes(97 + i // 26 ** j % 26 for j in range(4)) for i in range(60000)]
+    info = riff(b"LIST", b"INFO" + b"".join(k + struct.pack("<I", 2) + b"v\0" for k in keys)) if fmt == "wav" else b""
+    empty = b"ID3\x04\x00\x00" + syncsafe(0)
+    one = id3_tag([text(b"TXXX", b"k\0v")], 4)
+    chunk = riff(b"id3 ", empty) if fmt == "wav" else form_chunk(b"ID3 ", empty)
+    last = riff(b"id3 ", one) if fmt == "wav" else form_chunk(b"ID3 ", one)
+    p = tmp_path / ("a." + fmt)
+    p.write_bytes(with_chunks(fmt, info + chunk * 400 + last))
+    tags, took = timed(p)
+    assert took < 4 and tags["TAG"]["k"] == "v" and len(tags["TAG"]) == (60001 if fmt == "wav" else 1)
+
+
+def priv_frame(n):
+    # one compressed PRIV frame that holds n bytes of \x80, the escaped text is 4 times as long
+    body = zlib.compress(b"owner\0" + b"\x80" * n)
+    return id3_tag([id3_frame(b"PRIV", struct.pack(">I", n + 6) + body, 4, 9)], 4)
+
+
+def peak_of(path):
+    tracemalloc.start()
+    try:
+        tags = utils2.mediainfo(str(path)).get("TAG", {})
+        return tags, tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def test_a_big_priv_frame_is_not_made_four_times_as_big_in_a_wav(tmp_path, monkeypatch):
+    no_ffprobe(monkeypatch)
+    p = tmp_path / "a.wav"
+    p.write_bytes(with_chunks("wav", riff(b"id3 ", priv_frame(15 << 20))))
+    tags, peak = peak_of(p)
+    assert sum(map(len, tags.values())) <= utils2.LIMIT and peak < 50 << 20
+
+
+def test_a_big_priv_frame_is_not_made_four_times_as_big_in_an_mp3(tmp_path, monkeypatch, mp3_audio):
+    no_ffprobe(monkeypatch)
+    p = tmp_path / "a.mp3"
+    p.write_bytes(priv_frame(15 << 20) + mp3_audio)
+    tags, peak = peak_of(p)
+    assert sum(map(len, tags.values())) <= utils2.LIMIT and peak < 50 << 20
+
+
+def test_a_priv_frame_that_fits_is_escaped_like_before(tmp_path, monkeypatch):
+    no_ffprobe(monkeypatch)
+    n = 200000
+    p = tmp_path / "a.wav"
+    p.write_bytes(with_chunks("wav", riff(b"id3 ", priv_frame(n))))
+    assert utils2.mediainfo(str(p))["TAG"] == {"id3v2_priv.owner": "\\x80" * n}
+
+
+def test_id3_chunk_tag_order(tmp_path, monkeypatch):
+    # the order ffmpeg 6.1.1 gives, ffmpeg 9 puts the renamed keys first in some of these
+    no_ffprobe(monkeypatch)
+    tag = id3_tag([text(b"TIT2", b"Title"), text(b"TXXX", b"my key\0v")])
+    info = riff(b"LIST", b"INFO" + riff(b"INAM", b"Info title\0") + riff(b"IART", b"Info artist\0"))
+    two = id3_tag([text(b"TIT2", b"T2"), text(b"TALB", b"Al")])
+    priv = id3_tag([id3_frame(b"PRIV", b"owner\0ab"), text(b"TIT2", b"T")])
+    for chunks, want in (
+            (riff(b"id3 ", tag) + info, ["my key", "title", "artist"]),
+            (riff(b"id3 ", tag) + riff(b"id3 ", two), ["my key", "title", "album"]),
+            (riff(b"id3 ", priv) * 2, ["id3v2_priv.owner", "title"])):
+        p = tmp_path / "a.wav"
+        p.write_bytes(with_chunks("wav", chunks))
+        assert list(utils2.mediainfo_json(str(p))["format"]["tags"]) == want
