@@ -18,7 +18,6 @@ from warnings import warn
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import lru_cache, wraps
-from itertools import islice
 from bisect import bisect_right
 
 import _pydub2
@@ -791,22 +790,47 @@ def _wav_chunks(at):
         i += 8 + size + size % 2
 
 
-def _id3_chunk(at, i, end, out, idx, room):
-    # the id3 tag in a wav or aiff chunk, set one after the other like the text chunks
-    body = at(i, min(end - i, room))
-    for k, v in _id3_items(BytesIO(body), 0)[0] if len(out) < MAX_TAGS else ():
-        dict_set(out, idx, k, v)
-    return len(body)
+class _Span:
+    # a reader for the bytes of a file from i, up to size of them when there is a size
+    def __init__(self, at, i, size=None):
+        self.at, self.i, self.size, self.pos = at, i, size, 0
+
+    def seek(self, pos):
+        self.pos = pos
+
+    def read(self, n):
+        if self.size is not None:
+            n = min(n, self.size - self.pos)
+        b = self.at(self.i + self.pos, max(n, 0))
+        self.pos += len(b)
+        return b
+
+
+def _id3_chunk(at, i, size, out, idx, budget, priv=True):
+    # the id3 tag in a wav or aiff chunk, in the tags found so far like ffmpeg does. wav has no size (ffmpeg reads
+    # on past the chunk end), aiff reads up to the end of the chunk. budget is [bytes, frames] left for the whole file
+    out[:] = _id3_items(_Span(at, i, size), 0, out, budget, priv)[0]
+    idx.clear()
+    idx.update((k.lower(), n) for n, (k, _) in enumerate(out))
+
+
+def _id3_fits(at, i, size):
+    # ffmpeg refuses an aiff whose id3 tag is longer than its chunk, here the audio still loads and the chunk gives no tags
+    h = at(i, 10)
+    return h[:3] != b"ID3" or 10 + _syncsafe(h[6:10]) <= size
 
 
 def _wav_tags(at, spans):
-    out, idx, n, room = [], {}, 0, LIMIT
+    out, idx, n, budget = [], {}, 0, [LIMIT, MAX_FRAMES]
     for i, end, id3 in spans:
         if id3:
-            room -= _id3_chunk(at, i, end, out, idx, room)
+            budget[1] = min(budget[1], MAX_TAGS - n)
+            was = budget[1]
+            _id3_chunk(at, i, None, out, idx, budget)
+            n += was - budget[1]
             continue
-        body = at(i, min(end - i, room))
-        room -= len(body)
+        body = at(i, min(end - i, budget[0]))
+        budget[0] -= len(body)
         j = 0
         while j + 8 <= len(body) and n < MAX_TAGS:
             n += 1
@@ -939,10 +963,10 @@ def _inflate(d, dlen):
     return (out if z.eof else b""), len(out)
 
 
-def _id3v2_frames(f, end):
+def _id3v2_frames(f, end, budget):
     # (frame id, data) of the frames of all id3v2 tags at the start, one tag after the other like ffmpeg does
     # a frame it cant use gets empty data, so it still counts for the cap
-    pos, room = 0, LIMIT
+    pos = 0
     for _ in range(MAX_STEPS):
         end[0] = pos
         f.seek(pos)
@@ -952,8 +976,8 @@ def _id3v2_frames(f, end):
         ver, flags = h[3], h[5]
         size = _syncsafe(h[6:10])
         pos += 10 + size
-        b = f.read(min(size, room))
-        room -= len(b)
+        b = f.read(min(size, budget[0]))
+        budget[0] -= len(b)
         w, i = (6, 0) if ver == 2 else (10, 0)
         if ver not in (2, 3, 4) or ver == 2 and flags & 64:
             continue
@@ -991,8 +1015,8 @@ def _id3v2_frames(f, end):
                 if fl & 2 or flags & 128:
                     d = d.replace(b"\xff\x00", b"\xff")
                 if fl & 8:
-                    d, cost = _inflate(d, min(dlen, room))
-                    room -= cost
+                    d, cost = _inflate(d, min(dlen, budget[0]))
+                    budget[0] -= cost
             yield tag, d
 
 
@@ -1053,11 +1077,21 @@ def _mp3_tags(f, size):
     return {k.decode(errors="replace"): v.decode(errors="replace") for k, v in items}, _xing_encoder(f, end[0])
 
 
-def _id3_items(f, size):
-    items, idx, priv, end = [], {}, [], [0]
-    for tag, d in islice(_id3v2_frames(f, end), MAX_FRAMES):
-        if d:
-            _id3_frame(tag, d, items, idx, priv)
+def _id3_items(f, size, items=None, budget=None, keep_priv=True):
+    # items are the tags found before, a new tag sets its own keys only where there is none, and the renamed
+    # ones (TIT2 and so on) replace what is there. budget is [bytes, frames] and is used up by what is read
+    items = [] if items is None else items
+    budget = budget or [LIMIT, MAX_FRAMES]
+    idx = {k.lower(): n for n, (k, _) in enumerate(items)}
+    priv, end = [], [0]
+    frames = _id3v2_frames(f, end, budget)
+    while budget[1] > 0:
+        got = next(frames, None)
+        if got is None:
+            break
+        budget[1] -= 1
+        if got[1]:
+            _id3_frame(got[0], got[1], items, idx, priv)
     for names in _id3_names:
         new, idx = [], {}
         for k, v in items:
@@ -1075,7 +1109,7 @@ def _id3_items(f, size):
     if not items:
         for k, v in _id3v1(f, size):
             _put(items, idx, k, v)
-    for k, v in priv:
+    for k, v in priv if keep_priv else ():
         _put(items, idx, k, v)
     return items, end
 
@@ -1086,12 +1120,12 @@ AIFF_TAGS = {b"NAME": "title", b"AUTH": "author", b"(c) ": "copyright", b"ANNO":
 def _aiff_info(at):
     # codec, sample format, bits, raw bits, codec tag, frames in COMM and text chunks of a file the built in reader took
     comm = aiff_comm(at)
-    out, idx, room = [], {}, LIMIT
+    out, idx, budget = [], {}, [LIMIT, MAX_FRAMES]
     for cid, i, size in aiff_chunks(at):
         if cid in AIFF_TAGS:
             dict_set(out, idx, AIFF_TAGS[cid].encode(), at(i, min(size, 65536)).split(b"\0")[0], keep=True)
-        elif cid == b"ID3 ":
-            room -= _id3_chunk(at, i, i + size, out, idx, room)
+        elif cid == b"ID3 " and _id3_fits(at, i, size):
+            _id3_chunk(at, i, size, out, idx, budget, False)
     tags = {k.decode(): v.decode(errors="replace") for k, v in out}
     _, frames, bits, sub = comm
     tag = sub.decode("latin-1") if sub in AIFF_NATIVE else None
