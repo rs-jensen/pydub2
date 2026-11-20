@@ -4,6 +4,10 @@ What changed in each release.
 
 ## [Unreleased]
 
+### Added
+
+- `time_stretch(rate)` and `pitch_shift(semitones)` change the speed without the pitch and the pitch without the length.
+
 ### Fixed
 
 - `set_frame_rate` with a numpy integer of 2**31 or more raises `OverflowError` like pydub, not `TypeError`.

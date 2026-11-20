@@ -57,13 +57,16 @@ Ten minutes of 16 bit stereo:
 
 pydub's memory is its Python process. The ffmpeg it starts uses another 50 MiB on top. Not every call is faster: opus export, and reading 10 seconds out of the middle of an ogg file, take longer than in pydub. Every row and how it was measured is in [docs/comparison.md](https://github.com/rs-jensen/pydub2/blob/main/docs/comparison.md).
 
-It also does a few things pydub does not, like reading a long file in pieces, loudness in LUFS and finding speech with a built in Silero VAD model:
+It also does a few things pydub does not, like reading a long file in pieces, loudness in LUFS, time stretch and pitch shift, and finding speech with a built in Silero VAD model:
 
 ```python
 from pydub2 import silence
 
 for chunk in AudioSegment.stream("long.flac", chunk_ms=10000):  # one piece in memory at a time
     print(chunk.loudness(), silence.detect_speech(chunk))
+
+seg.time_stretch(1.25)  # faster, same pitch
+seg.pitch_shift(-3)     # three semitones down, same length
 ```
 
 ## What is different, and what is missing
@@ -85,7 +88,6 @@ Where pydub raises `audioop.error` or `wave.Error`, pydub2 raises `ValueError`. 
 Not there yet:
 
 - m4a, aac, wma, aiff and video files need ffmpeg.
-- No pitch shift or time stretch.
 - No type hints yet. There is no `py.typed`.
 
 pydub2 is young code. The first release was in November 2026 and one person maintains it, me. So far I have checked it like this:
