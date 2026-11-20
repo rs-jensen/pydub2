@@ -656,7 +656,12 @@ def test_temporary_files_variant_finds_a_comm_behind_a_long_sound_chunk(tmp_path
     path = write(tmp_path, data)
     got = AudioSegment.from_file_using_temporary_files(path)
     want = pydub.AudioSegment.from_file_using_temporary_files(path)
-    assert sig(got) == sig(want)
+    assert sig(got)[:4] == sig(want)[:4] == (8000, 1, 2, 40000)
+    # float to 16 bit is rounded, ffmpeg versions and cpus can land one step apart on a tie, a wrong COMM is far off
+    mine, theirs = array.array("h", got.raw_data), array.array("h", want.raw_data)
+    assert max(abs(a - b) for a, b in zip(mine, theirs)) <= 1
+    stored = struct.unpack(">40000f", values)
+    assert list(mine) == [max(-32768, min(32767, round(x * 32768))) for x in stored]
 
 
 @need_ffmpeg
