@@ -419,12 +419,57 @@ GAP = rb"(?:\s|\\|#[^\r\n.]*[\r\n])*"
 LONG_CHAIN = re.compile(rb"(?:\." + GAP + rb"[\w\x80-\xff]+" + GAP + rb"){17}")
 
 
+# with strings and comments cut out, a stretch of 1000 characters without , : = or ; may hold a deep expression
+STRINGS = re.compile(r"#[^\n]*|\"(?:[^\"\\\n]|\\.)*\"|'(?:[^'\\\n]|\\.)*'")
+STRETCH = re.compile(r"(?:\A|[,:=;])[^,:=;]{1000}")
+OPERATORS = {".", "(", "[", "{", "+", "-", "*", "/", "//", "%", "@", "**", "<<", ">>", "&", "|", "^", "~", "not", "if", "else"}
+MAX_NESTING = 1000
+
+
+def check_depth(source):
+    # the parser of Python 3.9 and 3.10 has no guard against deep nesting and crashes the process, and Python
+    # 3.13 does with a 1 MB stack. Each operator, call, subscript and bracket since the last , : = or ; adds
+    # a level, as in a.b().c() or a + b + c. 1000 levels is far above real code and far below the first
+    # crash (2500 calls on Python 3.13 with 1 MB)
+    try:
+        text = source if isinstance(source, str) else importlib.util.decode_source(source)
+        if not STRETCH.search(STRINGS.sub(" ", text)):
+            return
+        levels, depth = [0], 0
+        for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+            s, op = tok.string, tok.type == tokenize.OP
+            if tok.type == tokenize.NEWLINE or op and ("=" in s or s in (",", ":", ";")):
+                depth -= levels[-1]
+                levels[-1] = 0
+            elif op and s in (")", "]", "}"):
+                if len(levels) > 1:
+                    depth -= levels.pop()
+            elif s in OPERATORS and (op or tok.type == tokenize.NAME):
+                levels[-1] += 1
+                depth += 1
+                if s in ("(", "[", "{"):
+                    levels.append(0)
+                if depth > MAX_NESTING:
+                    raise RecursionError("expression nested too deeply")
+    except (SyntaxError, tokenize.TokenError, ValueError):
+        pass
+
+
 def parse(source):
     # deep nesting runs into a limit that depends on the platform: 1000 levels on Windows on arm with
     # Python 3.13, the size of the C stack on 3.14, and Python 3.9 and 3.10 crash on Windows where the
     # stack runs out. A long chain like a.b.c... is the usual cause, so those are cut short first
     short = short_chains(source) if LONG_CHAIN.search(source) else None
+    if short is None:
+        try:
+            check_depth(source)
+        except RecursionError:
+            # a chain the search did not see
+            short = short_chains(source)
+            if short is None:
+                raise
     if short is not None:
+        check_depth(short)
         return ast.parse(short)
     try:
         return ast.parse(source)

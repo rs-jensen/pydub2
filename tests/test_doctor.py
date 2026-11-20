@@ -232,6 +232,52 @@ def test_scan_chain_deeper_than_ast_parse_goes(tmp_path):
                    ("comments.py", 100004, "change"), ("accents.py", 1, "import"), ("accents.py", 2, "change")}
 
 
+SCAN_ON_SMALL_STACK = """
+import json, sys, threading
+from pydub2.__main__ import scan
+threading.stack_size(1 << 20)
+got = []
+t = threading.Thread(target=lambda: got.append(scan(sys.argv[1])))
+t.start()
+t.join()
+print(json.dumps(got[0]))
+"""
+
+# Python 3.9 and 3.10 crash on these in ast.parse, and 3.13 on some with a 1 MB stack. A new process, so a
+# crash fails this test and not the whole run
+DEEP = {
+    "calls": "a" + ".b()" * 100000,
+    "plus": "a" + " + a" * 100000,
+    "subscripts": "a" + "[0]" * 100000,
+    "not": "not " * 100000 + "a",
+    "conditional": "a if a else " * 100000 + "a",
+    "brackets": "[" * 100000 + "a" + "]" * 100000,
+    "calls with comments": "(a\n" + ".b()  # x, y.z\n" * 100000 + ")",
+    "strings": '"a, b" ' + '+ "c, d" ' * 100000,
+}
+
+
+@pytest.mark.parametrize("name", sorted(DEEP))
+def test_scan_deep_nesting(tmp_path, name):
+    (tmp_path / "deep.py").write_text("import pydub\nx = %s\nAudioSegment.ffmpeg = 1\n" % DEEP[name])
+    e = dict(os.environ, PYTHONPATH=os.path.dirname(os.path.dirname(os.path.abspath(pydub2.__file__))))
+    p = subprocess.run([sys.executable, "-c", SCAN_ON_SMALL_STACK, str(tmp_path)], capture_output=True, timeout=120, env=e)
+    assert p.returncode == 0, p.stderr
+    r = json.loads(p.stdout)
+    assert r["files"] == 1
+    # read, or listed with a reason
+    assert len(r["findings"]) == 2 or r["unreadable"][0]["why"].startswith("cant parse")
+
+
+def test_scan_attribute_chain_with_comment_dots(tmp_path):
+    (tmp_path / "dots.py").write_text("import pydub\nx = (a\n%s)\nAudioSegment.ffmpeg = 1\n" % (".b  # x.y\n" * 100000))
+    e = dict(os.environ, PYTHONPATH=os.path.dirname(os.path.dirname(os.path.abspath(pydub2.__file__))))
+    p = subprocess.run([sys.executable, "-c", SCAN_ON_SMALL_STACK, str(tmp_path)], capture_output=True, timeout=120, env=e)
+    assert p.returncode == 0, p.stderr
+    r = json.loads(p.stdout)
+    assert r["unreadable"] == [] and [f["line"] for f in r["findings"]] == [1, 100004]
+
+
 def test_scan_no_pydub(capsys, tmp_path):
     (tmp_path / "a.py").write_text("from pydub2 import AudioSegment\nAudioSegment.from_file('a.m4a')\n")
     code, out = run(capsys, "--scan", str(tmp_path))
