@@ -634,7 +634,7 @@ def squeezed(n, key):
 @pytest.mark.parametrize("fmt", ["wav", "aiff"])
 def test_id3_chunks_share_one_budget_for_inflating(tmp_path, monkeypatch, fmt):
     no_ffprobe(monkeypatch)
-    n = utils2.LIMIT - 65536
+    n = utils2.LIMIT // 2 - 65536
     p = tmp_path / ("a." + fmt)
     p.write_bytes(with_chunks(fmt, b"".join(chunk_of(fmt, squeezed(n, b"k%d" % i)) for i in range(30))))
     assert p.stat().st_size < 1 << 20
@@ -644,7 +644,7 @@ def test_id3_chunks_share_one_budget_for_inflating(tmp_path, monkeypatch, fmt):
         peak = tracemalloc.get_traced_memory()[1]
     finally:
         tracemalloc.stop()
-    # the first tag fits the 16 MiB for the file, the next ones find nothing left
+    # the first tag fits the text budget of the file, the next ones find too little left
     assert list(tags) == ["k0"] and len(tags["k0"]) == n
     assert peak < 80 << 20
 
@@ -693,3 +693,75 @@ def test_id3_chunk_tags_without_ffprobe(tmp_path, monkeypatch):
         p = tmp_path / ("a." + fmt)
         p.write_bytes(with_chunks(fmt, chunks))
         assert utils2.mediainfo(str(p)).get("TAG", {}) == tags
+
+
+def timed(path):
+    t = time.perf_counter()
+    info = utils2.mediainfo(str(path))
+    return info, time.perf_counter() - t
+
+
+@pytest.mark.parametrize("fmt", ["wav", "aiff"])
+def test_id3_chunks_that_chain_are_read_once(tmp_path, monkeypatch, fmt):
+    no_ffprobe(monkeypatch)
+    # each tag claims 8 bytes, which is the header of the next chunk, so a tag leads on through all the chunks after it
+    tag = b"ID3\x04\x00\x00" + syncsafe(8)
+    chunk = (b"id3 " + struct.pack("<I", 10) if fmt == "wav" else b"ID3 " + struct.pack(">I", 10)) + tag
+    p = tmp_path / ("a." + fmt)
+    p.write_bytes(with_chunks(fmt, chunk * 4000))
+    info, took = timed(p)
+    assert took < 4 and len(AudioSegment.from_file(str(p)).raw_data) == len(raw())
+
+
+@pytest.mark.parametrize("fmt", ["wav", "aiff"])
+def test_many_id3_chunks_cost_the_same_with_many_tags_before(tmp_path, monkeypatch, fmt):
+    no_ffprobe(monkeypatch)
+    keys = [bytes(97 + i // 26 ** j % 26 for j in range(4)) for i in range(60000)]
+    info = riff(b"LIST", b"INFO" + b"".join(k + struct.pack("<I", 2) + b"v\0" for k in keys)) if fmt == "wav" else b""
+    empty = b"ID3\x04\x00\x00" + syncsafe(0)
+    one = id3_tag([text(b"TXXX", b"k\0v")], 4)
+    chunk = riff(b"id3 ", empty) if fmt == "wav" else form_chunk(b"ID3 ", empty)
+    last = riff(b"id3 ", one) if fmt == "wav" else form_chunk(b"ID3 ", one)
+    p = tmp_path / ("a." + fmt)
+    p.write_bytes(with_chunks(fmt, info + chunk * 400 + last))
+    tags, took = timed(p)
+    assert took < 4 and tags["TAG"]["k"] == "v" and len(tags["TAG"]) == (60001 if fmt == "wav" else 1)
+
+
+def priv_frame(n):
+    # one compressed PRIV frame that holds n bytes of \x80, the escaped text is 4 times as long
+    body = zlib.compress(b"owner\0" + b"\x80" * n)
+    return id3_tag([id3_frame(b"PRIV", struct.pack(">I", n + 6) + body, 4, 9)], 4)
+
+
+def peak_of(path):
+    tracemalloc.start()
+    try:
+        tags = utils2.mediainfo(str(path)).get("TAG", {})
+        return tags, tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def test_a_big_priv_frame_is_not_made_four_times_as_big_in_a_wav(tmp_path, monkeypatch):
+    no_ffprobe(monkeypatch)
+    p = tmp_path / "a.wav"
+    p.write_bytes(with_chunks("wav", riff(b"id3 ", priv_frame(15 << 20))))
+    tags, peak = peak_of(p)
+    assert sum(map(len, tags.values())) <= utils2.LIMIT and peak < 50 << 20
+
+
+def test_a_big_priv_frame_is_not_made_four_times_as_big_in_an_mp3(tmp_path, monkeypatch, mp3_audio):
+    no_ffprobe(monkeypatch)
+    p = tmp_path / "a.mp3"
+    p.write_bytes(priv_frame(15 << 20) + mp3_audio)
+    tags, peak = peak_of(p)
+    assert sum(map(len, tags.values())) <= utils2.LIMIT and peak < 50 << 20
+
+
+def test_a_priv_frame_that_fits_is_escaped_like_before(tmp_path, monkeypatch):
+    no_ffprobe(monkeypatch)
+    n = 200000
+    p = tmp_path / "a.wav"
+    p.write_bytes(with_chunks("wav", riff(b"id3 ", priv_frame(n))))
+    assert utils2.mediainfo(str(p))["TAG"] == {"id3v2_priv.owner": "\\x80" * n}

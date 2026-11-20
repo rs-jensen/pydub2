@@ -807,11 +807,10 @@ class _Span:
 
 
 def _id3_chunk(at, i, size, out, idx, budget, priv=True):
-    # the id3 tag in a wav or aiff chunk, in the tags found so far like ffmpeg does. wav has no size (ffmpeg reads
-    # on past the chunk end), aiff reads up to the end of the chunk. budget is [bytes, frames] left for the whole file
-    out[:] = _id3_items(_Span(at, i, size), 0, out, budget, priv)[0]
-    idx.clear()
-    idx.update((k.lower(), n) for n, (k, _) in enumerate(out))
+    # the id3 tag in a wav or aiff chunk, added to the tags found so far like ffmpeg does. wav has no size (ffmpeg
+    # reads on past the chunk end), aiff reads up to the end of the chunk. budget is [bytes, frames, text] left for
+    # the whole file. Gives the offset where the reading stopped
+    return i + _id3_items(_Span(at, i, size), 0, out, idx, budget, priv)[0]
 
 
 def _id3_fits(at, i, size):
@@ -821,13 +820,15 @@ def _id3_fits(at, i, size):
 
 
 def _wav_tags(at, spans):
-    out, idx, n, budget = [], {}, 0, [LIMIT, MAX_FRAMES]
+    out, idx, n, budget, upto = [], {}, 0, [LIMIT, MAX_FRAMES, LIMIT], 0
     for i, end, id3 in spans:
         if id3:
-            budget[1] = min(budget[1], MAX_TAGS - n)
-            was = budget[1]
-            _id3_chunk(at, i, None, out, idx, budget)
-            n += was - budget[1]
+            # a tag that ran into the chunks after it has read them already
+            if i >= upto:
+                budget[1] = min(budget[1], MAX_TAGS - n)
+                was = budget[1]
+                upto = _id3_chunk(at, i, None, out, idx, budget)
+                n += was - budget[1]
             continue
         body = at(i, min(end - i, budget[0]))
         budget[0] -= len(body)
@@ -912,7 +913,19 @@ def _id3_str(d, i, enc):
     return s.decode(codec).encode(), min(e + 2, len(d))
 
 
-def _id3_frame(tag, d, items, idx, priv):
+def _charge(budget, *texts):
+    # the text that comes out of the frames counts against the budget, a value that does not fit is skipped
+    n = sum(map(len, texts))
+    if n > budget[2]:
+        return False
+    budget[2] -= n
+    return True
+
+
+def _id3_frame(tag, d, items, idx, priv, budget):
+    # decoding can double the size of a text, so a frame over half of what is left is skipped before it is decoded
+    if tag != b"PRIV" and len(d) * 2 > budget[2]:
+        return
     if tag[:1] == b"T":
         s, i = _id3_str(d, 1, d[0])
         if s is None:
@@ -928,11 +941,12 @@ def _id3_frame(tag, d, items, idx, priv):
                 return
         elif not s:
             return
-        _put(items, idx, key, s)
+        if _charge(budget, key, s):
+            _put(items, idx, key, s)
     elif tag in (b"COM", b"COMM", b"USLT") and len(d) > 3:
         k, i = _id3_str(d, 4, d[0])
         v, i = _id3_str(d, i, d[0]) if k is not None else (None, i)
-        if v is None:
+        if v is None or not _charge(budget, k, v):
             return
         if tag == b"USLT":
             dict_set(items, idx, b"lyrics-" + (k + b"-" if k else b"") + d[1:4].split(b"\0")[0], v, keep=True)
@@ -940,11 +954,20 @@ def _id3_frame(tag, d, items, idx, priv):
             _put(items, idx, k or b"comment", v)
     elif tag == b"PRIV":
         k, i = _id3_str(d, 0, 0)
-        # unicode_escape writes \n, \t and \\ where ffmpeg writes \x0a, \x09 and \x5c
-        v = d[i:].decode("latin-1").encode("unicode_escape")
-        for a, b in ((b"\\\\", b"\\x5c"), (b"\\n", b"\\x0a"), (b"\\r", b"\\x0d"), (b"\\t", b"\\x09")):
-            v = v.replace(a, b)
-        priv.append((b"id3v2_priv." + k, v))
+        # unicode_escape writes \n, \t and \\ where ffmpeg writes \x0a, \x09 and \x5c. It can make the text four
+        # times as long, so it goes a piece at a time and stops when the text does not fit
+        parts, room = [], budget[2] - len(k) - 12
+        for j in range(i, len(d), 65536):
+            v = d[j:j + 65536].decode("latin-1").encode("unicode_escape")
+            for a, b in ((b"\\\\", b"\\x5c"), (b"\\n", b"\\x0a"), (b"\\r", b"\\x0d"), (b"\\t", b"\\x09")):
+                v = v.replace(a, b)
+            room -= len(v)
+            if room < 0:
+                return
+            parts.append(v)
+        v = b"".join(parts)
+        if _charge(budget, k, v):
+            priv.append((b"id3v2_priv." + k, v))
 
 
 def _is_tag(b):
@@ -1073,17 +1096,16 @@ def _xing_encoder(f, start):
 
 
 def _mp3_tags(f, size):
-    items, end = _id3_items(f, size)
+    items, idx = [], {}
+    end = _id3_items(f, size, items, idx)
     return {k.decode(errors="replace"): v.decode(errors="replace") for k, v in items}, _xing_encoder(f, end[0])
 
 
-def _id3_items(f, size, items=None, budget=None, keep_priv=True):
-    # items are the tags found before, a new tag sets its own keys only where there is none, and the renamed
-    # ones (TIT2 and so on) replace what is there. budget is [bytes, frames] and is used up by what is read
-    items = [] if items is None else items
-    budget = budget or [LIMIT, MAX_FRAMES]
-    idx = {k.lower(): n for n, (k, _) in enumerate(items)}
-    priv, end = [], [0]
+def _id3_items(f, size, out, idx, budget=None, keep_priv=True):
+    # adds the tags of f to out and idx. Where there is a key already a new tag leaves it, only the renamed ones
+    # (TIT2 and so on) replace it. budget is [bytes, frames, text] and is used up by what is read. Gives [end]
+    budget = budget or [LIMIT, MAX_FRAMES, LIMIT]
+    items, nidx, priv, end, renamed = [], {}, [], [0], set()
     frames = _id3v2_frames(f, end, budget)
     while budget[1] > 0:
         got = next(frames, None)
@@ -1091,27 +1113,40 @@ def _id3_items(f, size, items=None, budget=None, keep_priv=True):
             break
         budget[1] -= 1
         if got[1]:
-            _id3_frame(got[0], got[1], items, idx, priv)
+            _id3_frame(got[0], got[1], items, nidx, priv, budget)
     for names in _id3_names:
-        new, idx = [], {}
+        new, nidx = [], {}
         for k, v in items:
-            dict_set(new, idx, names.get(k.lower(), k), v, keep=True)
+            name = names.get(k.lower())
+            if name:
+                renamed.add(name)
+            dict_set(new, nidx, name or k, v, keep=True)
         items = new
-    date = _date_part(items, idx, b"TYER", b"TYE")
+    date = _date_part(items, nidx, b"TYER", b"TYE")
     if date:
-        day = _date_part(items, idx, b"TDAT", b"TDA")
+        day = _date_part(items, nidx, b"TDAT", b"TDA")
         if day:
             date += b"-" + day[2:] + b"-" + day[:2]
-            hm = _date_part(items, idx, b"TIME", b"TIM")
+            hm = _date_part(items, nidx, b"TIME", b"TIM")
             if hm:
                 date += b" " + hm[:2] + b":" + hm[2:]
-        dict_set(items, idx, b"date", date)
+        dict_set(items, nidx, b"date", date)
+        renamed.add(b"date")
     if not items:
         for k, v in _id3v1(f, size):
-            _put(items, idx, k, v)
+            _put(items, nidx, k, v)
+    if not out:
+        out[:], items = items, []
+        idx.clear()
+        idx.update(nidx)
+    for k, v in items:
+        if k.lower() in renamed:
+            dict_set(out, idx, k, v, keep=True)
+        else:
+            _put(out, idx, k, v)
     for k, v in priv if keep_priv else ():
-        _put(items, idx, k, v)
-    return items, end
+        _put(out, idx, k, v)
+    return end
 
 
 AIFF_TAGS = {b"NAME": "title", b"AUTH": "author", b"(c) ": "copyright", b"ANNO": "comment"}
@@ -1120,39 +1155,13 @@ AIFF_TAGS = {b"NAME": "title", b"AUTH": "author", b"(c) ": "copyright", b"ANNO":
 def _aiff_info(at):
     # codec, sample format, bits, raw bits, codec tag, frames in COMM and text chunks of a file the built in reader took
     comm = aiff_comm(at)
-    out, idx, budget = [], {}, [LIMIT, MAX_FRAMES]
+    out, idx, budget = [], {}, [LIMIT, MAX_FRAMES, LIMIT]
     for cid, i, size in aiff_chunks(at):
         if cid in AIFF_TAGS:
             dict_set(out, idx, AIFF_TAGS[cid].encode(), at(i, min(size, 65536)).split(b"\0")[0], keep=True)
         elif cid == b"ID3 " and _id3_fits(at, i, size):
             _id3_chunk(at, i, size, out, idx, budget, False)
     tags = {k.decode(): v.decode(errors="replace") for k, v in out}
-    _, frames, bits, sub = comm
-    tag = sub.decode("latin-1") if sub in AIFF_NATIVE else None
-    if sub == b"sowt":
-        return "pcm_s16le", "s16", "16", "N/A", tag, frames, tags
-    if sub in (b"fl32", b"FL32"):
-        return "pcm_f32be", "flt", "32", "N/A", tag, frames, tags
-    if sub in (b"fl64", b"FL64"):
-        return "pcm_f64be", "dbl", "64", "N/A", tag, frames, tags
-    if bits <= 8:
-        return "pcm_s8", "u8", "8", "N/A", tag, frames, tags
-    if bits <= 16:
-        return "pcm_s16be", "s16", "16", "N/A", tag, frames, tags
-    n = 24 if bits <= 24 else 32
-    return "pcm_s%dbe" % n, "s32", str(n), str(n), tag, frames, tags
-
-
-AIFF_TAGS = {b"NAME": "title", b"AUTH": "author", b"(c) ": "copyright", b"ANNO": "comment"}
-
-
-def _aiff_info(at):
-    # codec, sample format, bits, raw bits, codec tag, frames in COMM and text chunks of a file the built in reader took
-    comm = aiff_comm(at)
-    tags = {}
-    for cid, i, size in aiff_chunks(at):
-        if cid in AIFF_TAGS:
-            tags[AIFF_TAGS[cid]] = at(i, min(size, 65536)).split(b"\0")[0].decode(errors="replace")
     _, frames, bits, sub = comm
     tag = sub.decode("latin-1") if sub in AIFF_NATIVE else None
     if sub == b"sowt":
