@@ -77,7 +77,7 @@ This works with no ffmpeg on `PATH`. Without the encoder package and without ffm
 
 ## ffmpeg and AudioSegment.converter
 
-pydub2 reads wav, flac, ogg, opus and mp3 without ffmpeg, and writes wav, flac, ogg and opus without it. Everything else still goes to ffmpeg: m4a and aac, wma, aiff, video files, and mp3 writing if you did not install the encoder package. pydub2 never needs ffprobe to read a file. It asks ffmpeg when it must.
+pydub2 reads wav, flac, ogg, opus, mp3 and aiff without ffmpeg, and writes wav, flac, ogg, opus and 16 bit aiff without it. Everything else still goes to ffmpeg: m4a and aac, wma, video files, aiff with ulaw, alaw or another compressed codec, and mp3 writing if you did not install the encoder package. pydub2 never needs ffprobe to read a file. It asks ffmpeg when it must.
 
 `AudioSegment.converter` is still there. Set it to a full path when ffmpeg is not on `PATH`:
 

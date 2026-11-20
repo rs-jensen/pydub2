@@ -6,6 +6,7 @@ What changed in each release.
 
 ### Added
 
+- aiff and aiff-c files with pcm or float samples load without ffmpeg, also with `start_second`, `duration`, `stream` and `mediainfo`. 16 bit aiff exports without ffmpeg too. ulaw, alaw and other compressed aiff-c files still use ffmpeg.
 - `PYDUB2_SYSTEM_LIBS=ON` builds against the codec libraries installed on the system, so the sdist builds without network access.
 - `time_stretch(rate)` and `pitch_shift(semitones)` change the speed without the pitch and the pitch without the length.
 

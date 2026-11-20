@@ -42,7 +42,7 @@ intro.export("intro.mp3", format="mp3", bitrate="192k")
 ## Why you might want it
 
 - It works on Python 3.13 and 3.14 as it is. pydub 0.25.1 fails to import there unless you also install `audioop-lts`.
-- wav, flac, ogg, opus and mp3 need no ffmpeg and no ffprobe. m4a, aac, wma, aiff and video files still go to ffmpeg, and `pip install "pydub2[ffmpeg]"` fetches one from PyPI if you have none.
+- wav, flac, ogg, opus, mp3 and aiff need no ffmpeg and no ffprobe. m4a, aac, wma and video files still go to ffmpeg, and `pip install "pydub2[ffmpeg]"` fetches one from PyPI if you have none.
 - A file is decoded straight from disk into the result, so loading needs about the size of the decoded audio and little more.
 - The sample loops are in C++, so the slow parts of pydub are a lot faster.
 
@@ -87,7 +87,7 @@ Where pydub raises `audioop.error` or `wave.Error`, pydub2 raises `ValueError`. 
 
 Not there yet:
 
-- m4a, aac, wma, aiff and video files need ffmpeg.
+- m4a, aac, wma and video files need ffmpeg, and so do aiff files with ulaw, alaw or another compressed codec.
 - No type hints yet. There is no `py.typed`.
 
 pydub2 is young code. The first release was in November 2026 and one person maintains it, me. So far I have checked it like this:

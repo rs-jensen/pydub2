@@ -23,6 +23,8 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 
 ### How the samples differ
 
+- aiff and aiff-c with pcm (`NONE`, `twos`, `sowt`) or float (`fl32`, `fl64`) samples load without ffmpeg and give the same samples as ffmpeg, also the odd ones: more than 8 bits are cut or padded the way pydub does, `sowt` is always 16 bit, and the frame count in the COMM chunk is not trusted. The chunks are walked like ffmpeg walks them, so a file with a wrong FORM size, a cut sound chunk or a missing COMM chunk loads or fails the same way. In about 3 of 1000 files with a few bytes flipped at random, the FORM size and a cut at the end make ffmpeg stop where pydub2 goes on, or the other way round. ulaw, alaw and other compressed aiff-c files go to ffmpeg.
+- An empty 24 bit aiff (no frames) loads here and fails in pydub with an `IndexError`, like an empty 24 bit wav. A double with a sample of exactly +1.0 or more is clipped to full scale like in a wav, an x86 ffmpeg 6.1 wraps it to the lowest value.
 - mp3 decodes to the same length as ffmpeg. A few samples in 1000 are off by 1 LSB (up to 1.5 in 100 against an x86 ffmpeg), because minimp3 does its float synthesis a little differently from ffmpeg's mp3float.
 - ogg vorbis has the same length as ffmpeg. Samples differ by under 1024 at 32 bit scale, from float rounding in a different decoder.
 - `from_file_using_temporary_files` of a 32 bit float wav rounds the samples to 32 bit and then to 16 bit. A quiet sample (under 128 at 16 bit scale) very close to halfway between two values can be 1 off from ffmpeg, which rounds once. Quiet noise has a few such samples in a million.
@@ -52,11 +54,11 @@ With `pydub2.strict = True` or `PYDUB2_STRICT=1` the sections "Reading files", "
 
 ### Stream info and tags without ffprobe
 
-- `utils.mediainfo` and `mediainfo_json` work without ffprobe for wav, flac, ogg, opus and mp3. They return a subset of what ffprobe gives (15 of about 37 keys).
+- `utils.mediainfo` and `mediainfo_json` work without ffprobe for wav, flac, ogg, opus, mp3 and aiff. They return a subset of what ffprobe gives (15 of about 37 keys).
 - The stream keys are `index`, `codec_name`, `codec_type`, `codec_tag_string`, `codec_tag`, `sample_fmt`, `sample_rate`, `channels`, `bits_per_sample`, `bits_per_raw_sample` and `duration`. The format keys are `nb_streams`, `format_name` and `size`, and `TAG` when there are tags.
 - Not there: `bit_rate`, `channel_layout`, `start_time`, `duration_ts`, `time_base`, `nb_frames`, `initial_padding`, `probe_score`, `codec_long_name`, `profile`, `disposition` and the rest.
 - All values are strings in `mediainfo`. `duration` is the decoded length. ffprobe's can be a bit longer for mp3 and opus.
-- Other files (m4a, wma, aiff and so on) use `ffmpeg -i`, the one from `AudioSegment.converter`. They only get `index`, `codec_type`, `codec_name`, `sample_fmt`, `bits_per_sample` and `bits_per_raw_sample`. There are no tags, and no `channels`, `sample_rate`, `duration` or `size`.
+- Other files (m4a, wma and so on) use `ffmpeg -i`, the one from `AudioSegment.converter`. They only get `index`, `codec_type`, `codec_name`, `sample_fmt`, `bits_per_sample` and `bits_per_raw_sample`. There are no tags, and no `channels`, `sample_rate`, `duration` or `size`.
 - For those files the two sample size keys come from the sample format ffmpeg prints. A compressed file gets 32 where ffprobe says 0 and N/A.
 - With ffprobe installed you get all of its keys.
 - The tag reader leaves out `METADATA_BLOCK_PICTURE`, because ffprobe shows it as a video stream. It keeps up to 16 MiB of tag text and 65536 tags, and skips a single value that does not fit.
