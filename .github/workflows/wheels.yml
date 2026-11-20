@@ -26,7 +26,7 @@ jobs:
   wheels:
     name: pydub2 ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.os == 'windows-11-arm' && 250 || startsWith(matrix.os, 'windows') && 150 || 140 }}
+    timeout-minutes: ${{ matrix.os == 'windows-11-arm' && 250 || startsWith(matrix.os, 'windows') && 150 || matrix.os == 'macos-15-intel' && 210 || 140 }}
     strategy:
       fail-fast: false
       matrix:
