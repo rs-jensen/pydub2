@@ -1143,6 +1143,32 @@ def _aiff_info(at):
     return "pcm_s%dbe" % n, "s32", str(n), str(n), tag, frames, tags
 
 
+AIFF_TAGS = {b"NAME": "title", b"AUTH": "author", b"(c) ": "copyright", b"ANNO": "comment"}
+
+
+def _aiff_info(at):
+    # codec, sample format, bits, raw bits, codec tag, frames in COMM and text chunks of a file the built in reader took
+    comm = aiff_comm(at)
+    tags = {}
+    for cid, i, size in aiff_chunks(at):
+        if cid in AIFF_TAGS:
+            tags[AIFF_TAGS[cid]] = at(i, min(size, 65536)).split(b"\0")[0].decode(errors="replace")
+    _, frames, bits, sub = comm
+    tag = sub.decode("latin-1") if sub in AIFF_NATIVE else None
+    if sub == b"sowt":
+        return "pcm_s16le", "s16", "16", "N/A", tag, frames, tags
+    if sub in (b"fl32", b"FL32"):
+        return "pcm_f32be", "flt", "32", "N/A", tag, frames, tags
+    if sub in (b"fl64", b"FL64"):
+        return "pcm_f64be", "dbl", "64", "N/A", tag, frames, tags
+    if bits <= 8:
+        return "pcm_s8", "u8", "8", "N/A", tag, frames, tags
+    if bits <= 16:
+        return "pcm_s16be", "s16", "16", "N/A", tag, frames, tags
+    n = 24 if bits <= 24 else 32
+    return "pcm_s%dbe" % n, "s32", str(n), str(n), tag, frames, tags
+
+
 def _native_info(f, source):
     try:
         d = _pydub2.Decoder(source)
