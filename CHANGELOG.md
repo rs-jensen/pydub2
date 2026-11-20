@@ -6,6 +6,7 @@ What changed in each release.
 
 ### Added
 
+- aiff and aiff-c files with pcm or float samples load without ffmpeg, also with `start_second`, `duration`, `stream` and `mediainfo`. 16 bit mono or stereo aiff exports without ffmpeg too, as long as there are no tags, cover, codec, bitrate or parameters. Of the aiff-c types only `NONE`, `twos`, `sowt`, `fl32` and `fl64` load built in, every other type goes to ffmpeg.
 - `PYDUB2_SYSTEM_LIBS=ON` builds against the codec libraries installed on the system, so the sdist builds without network access.
 - `time_stretch(rate)` and `pitch_shift(semitones)` change the speed without the pitch and the pitch without the length.
 

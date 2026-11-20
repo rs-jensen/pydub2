@@ -411,6 +411,8 @@ def native_format(head):
     # the choice detect() in src/decode.cpp makes, all else goes to the mp3 decoder
     if head[:4] in (b"RIFF", b"RF64") and head[8:12] == b"WAVE":
         return "wav"
+    if head[:4] == b"FORM" and head[8:12] in (b"AIFF", b"AIFC"):
+        return "aiff"
     if head[:4] == b"fLaC":
         return "flac"
     if head[:4] == b"OggS" and len(head) > 27:
@@ -441,6 +443,8 @@ def damaged(f, head, fmt):
         return False
     if fmt in ("ogg", "opus"):
         return not ogg_chained(f)
+    if fmt == "aiff":
+        return not aifc_for_ffmpeg(f)
     if fmt != "wav":
         return True
     for _, cid, n, data in chunks(f):
@@ -450,6 +454,48 @@ def damaged(f, head, fmt):
             # pcm and float are what pydub2 reads itself
             return len(tag) < 2 or struct.unpack("<H", tag)[0] in (1, 3)
     return True
+
+
+def aiff_chunks(at):
+    # (id, start of the body, size) the way the built in reader and ffmpeg walk them: a pad byte after
+    # every chunk but COMM. at(i, n) reads n bytes from i
+    i = 12
+    for _ in range(MAX_STEPS):
+        h = at(i, 8)
+        if len(h) < 8:
+            return
+        size = struct.unpack(">I", h[4:])[0]
+        yield h[:4], i + 8, size
+        i += 8 + size + (size & 1 if h[:4] != b"COMM" else 0)
+
+
+def aiff_comm(at):
+    # (channels, frames, bits, codec tag) of the last COMM chunk, the tag is b"" when there is none
+    comm = None
+    for cid, i, size in aiff_chunks(at):
+        if cid == b"COMM":
+            comm = at(i, 26).ljust(26, b"\0"), size
+    if comm is None:
+        return None
+    body, size = comm
+    channels, frames, bits = struct.unpack_from(">HIH", body)
+    return channels, frames, bits, body[18:22] if at(8, 4) == b"AIFC" and size >= 22 else b""
+
+
+def aifc_tag(f):
+    # the codec tag of an aiff file object, b"" when there is none
+    comm = aiff_comm(lambda i, n: (f.seek(i), f.read(n))[1])
+    return comm[3] if comm else b""
+
+
+def aifc_for_ffmpeg(f):
+    # True for a file with a codec ffmpeg reads and the built in reader leaves to it, like ulaw
+    tag = aifc_tag(f)
+    return len(tag) == 4 and tag not in AIFF_NATIVE
+
+
+FLOAT_TAGS = (b"fl32", b"FL32", b"fl64", b"FL64")
+AIFF_NATIVE = (b"NONE", b"twos", b"sowt", b"fl32", b"FL32", b"fl64", b"FL64")
 
 
 def ogg_chained(f):
@@ -1018,6 +1064,32 @@ def _mp3_tags(f, size):
     return {k.decode(errors="replace"): v.decode(errors="replace") for k, v in items}, _xing_encoder(f, end[0])
 
 
+AIFF_TAGS = {b"NAME": "title", b"AUTH": "author", b"(c) ": "copyright", b"ANNO": "comment"}
+
+
+def _aiff_info(at):
+    # codec, sample format, bits, raw bits, codec tag, frames in COMM and text chunks of a file the built in reader took
+    comm = aiff_comm(at)
+    tags = {}
+    for cid, i, size in aiff_chunks(at):
+        if cid in AIFF_TAGS:
+            tags[AIFF_TAGS[cid]] = at(i, min(size, 65536)).split(b"\0")[0].decode(errors="replace")
+    _, frames, bits, sub = comm
+    tag = sub.decode("latin-1") if sub in AIFF_NATIVE else None
+    if sub == b"sowt":
+        return "pcm_s16le", "s16", "16", "N/A", tag, frames, tags
+    if sub in (b"fl32", b"FL32"):
+        return "pcm_f32be", "flt", "32", "N/A", tag, frames, tags
+    if sub in (b"fl64", b"FL64"):
+        return "pcm_f64be", "dbl", "64", "N/A", tag, frames, tags
+    if bits <= 8:
+        return "pcm_s8", "u8", "8", "N/A", tag, frames, tags
+    if bits <= 16:
+        return "pcm_s16be", "s16", "16", "N/A", tag, frames, tags
+    n = 24 if bits <= 24 else 32
+    return "pcm_s%dbe" % n, "s32", str(n), str(n), tag, frames, tags
+
+
 def _native_info(f, source):
     try:
         d = _pydub2.Decoder(source)
@@ -1038,9 +1110,14 @@ def _native_info(f, source):
     raw = "N/A"
     bits = "0"
     tag = 0
+    tag_name = None
     tags, in_stream, enc = {}, False, None
     head = at(0, 22)
-    if head[:4] in (b"RIFF", b"RF64"):
+    if head[:4] == b"FORM":
+        name, fmt, bits, raw, tag_name, frames, tags = _aiff_info(at)
+        tag = int.from_bytes((tag_name or "").encode(), "little")
+        format_name = "aiff"
+    elif head[:4] in (b"RIFF", b"RF64"):
         chunk, lists = None, []
         for cid, i, n in _wav_chunks(at):
             if cid == b"fmt " and chunk is None:
@@ -1080,7 +1157,7 @@ def _native_info(f, source):
         tags, enc = _mp3_tags(f, size)
     stream = {
         "index": "0", "codec_name": name, "codec_type": "audio",
-        "codec_tag_string": "[%d][0][0][0]" % tag, "codec_tag": "0x%04x" % tag,
+        "codec_tag_string": tag_name or "[%d][0][0][0]" % tag, "codec_tag": "0x%04x" % tag,
         "sample_fmt": fmt, "sample_rate": str(rate), "channels": str(channels),
         "bits_per_sample": bits, "bits_per_raw_sample": raw,
         "duration": "%.6f" % (frames / rate),
@@ -1144,9 +1221,9 @@ def mediainfo_json(filepath, read_ahead_limit=-1):
             info = {"streams": [{k: v for k, v in stream.items() if v != "N/A"}], "format": dict(fmt, nb_streams=1)}
             extra_info = {0: [stream["sample_fmt"] + (" (%s bit)" % raw if raw != "N/A" else "")]}
         # refused by the reader means damaged, ffprobe gives {} too, but an ID3 tag can sit in front of anything
-        elif _ffmpeg.find(exe) is None and (sniff(head) in ("wav", "flac", "mp3", "ogg", "opus") and head[:3] != b"ID3"
+        elif _ffmpeg.find(exe) is None and (sniff(head) in ("wav", "flac", "mp3", "ogg", "opus", "aiff") and head[:3] != b"ID3"
                                              or isinstance(src, str)
-                                             and src.lower().endswith((".wav", ".flac", ".mp3", ".ogg", ".opus"))):
+                                             and src.lower().endswith((".wav", ".flac", ".mp3", ".ogg", ".opus", ".aiff", ".aif", ".aifc"))):
             return {}
         else:
             args, data = source(filepath, exe=_ffmpeg.find(exe))

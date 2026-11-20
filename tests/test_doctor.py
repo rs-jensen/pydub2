@@ -42,7 +42,7 @@ def test_report(capsys):
     assert out.startswith("pydub2 " + pydub2.__version__)
     code, out = run(capsys, "--json")
     r = json.loads(out)
-    assert r["ok"] and r["read_natively"] == ["wav", "flac", "ogg", "opus", "mp3"] and r["strict"] is False
+    assert r["ok"] and r["read_natively"] == ["wav", "flac", "ogg", "opus", "mp3", "aiff"] and r["strict"] is False
     assert r["pydub"]["resolves_to"] in (None, "pydub", "pydub2")
 
 
