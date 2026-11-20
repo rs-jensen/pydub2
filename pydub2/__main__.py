@@ -23,7 +23,7 @@ MIN_FFMPEG = (3, 3)
 FFMPEG_FIX = 'pip install "pydub2[ffmpeg]"'
 SKIP_DIRS = {"venv", "node_modules", "build", "dist", "site-packages", "__pycache__"}
 # formats pydub2 cant read or write by itself
-NEEDS_FFMPEG = {"m4a", "mp4", "aac", "wma", "aiff", "aif", "flv", "3gp", "webm", "mkv", "mov", "avi", "amr", "ac3", "wmv"}
+NEEDS_FFMPEG = {"m4a", "mp4", "aac", "wma", "flv", "3gp", "webm", "mkv", "mov", "avi", "amr", "ac3", "wmv"}
 SAMPLES_DIFFER = {"mp3", "ogg", "opus"}
 KINDS = [(stat.S_ISDIR, "a directory"), (stat.S_ISFIFO, "a fifo"), (stat.S_ISSOCK, "a socket"),
          (stat.S_ISCHR, "a device"), (stat.S_ISBLK, "a device"), (stat.S_ISLNK, "a symlink")]
@@ -100,7 +100,7 @@ def report():
         "python": platform.python_version(),
         "platform": platform.platform(),
         # strict mode reads and writes all but wav through ffmpeg
-        "read_natively": ["wav"] if pydub2.strict else ["wav", "flac", "ogg", "opus", "mp3"],
+        "read_natively": ["wav"] if pydub2.strict else ["wav", "flac", "ogg", "opus", "mp3", "aiff"],
         "write_natively": ["wav"] if pydub2.strict else ["wav", "flac", "ogg", "opus"] + (["mp3"] if mp3 else []),
         "pydub2_mp3": mp3,
         "ffmpeg": ffmpeg,
@@ -401,6 +401,8 @@ def call(node, name, add):
         add(node, "ffmpeg", "%s needs ffmpeg (pydub does too), pip install \"pydub2[ffmpeg]\" if none is installed" % fmt)
         if out and fmt in ("m4a", "aac"):
             add(node, "strict", "export to %s works here, pydub raises CouldntEncodeError, strict mode does as pydub" % fmt)
+    elif fmt in ("aiff", "aif") and out:
+        add(node, "ffmpeg", "aiff export is built in for 16 bit audio with one or two channels, anything else needs ffmpeg")
     elif fmt in SAMPLES_DIFFER and not out:
         add(node, "strict", "%s samples can differ a little from pydub, strict mode gives pydub's" % fmt)
     elif fmt == "mp3" and out:

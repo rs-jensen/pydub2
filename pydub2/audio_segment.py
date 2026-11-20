@@ -9,7 +9,7 @@ import subprocess
 import sys
 import struct
 import wave
-from .utils import dict_set, fsdecode, get_encoder_name, mediainfo_json, needs_ffmpeg, sniff
+from .utils import dict_set, fsdecode, get_encoder_name, mediainfo_json, needs_ffmpeg, sniff, aifc_tag
 from .logging_utils import log_conversion, log_subprocess_output
 import base64
 from decimal import Decimal
@@ -264,6 +264,19 @@ def riff_without_pad(wav):
     return wav[:4] + (int.from_bytes(wav[4:8], "little") - 1).to_bytes(4, "little") + wav[8:]
 
 
+def _aiff_head(pcm, rate, channels):
+    # what ffmpegs aiff muxer writes for 16 bit audio, the rate is an 80 bit float
+    e = rate.bit_length() - 1
+    comm = struct.pack(">4sIhIhHQ", b"COMM", 18, channels, len(pcm) // (2 * channels), 16, 16383 + e, rate << (63 - e))
+    return struct.pack(">4sI4s", b"FORM", 46 + len(pcm), b"AIFF") + comm + struct.pack(">4sIII", b"SSND", 8 + len(pcm), 0, 0)
+
+
+def _aiff_big_endian(pcm):
+    out = bytearray(pcm)
+    out[0::2], out[1::2] = pcm[1::2], pcm[0::2]
+    return out
+
+
 AUDIO_FILE_EXT_ALIASES = {
     "m4a": "mp4",
     "wave": "wav",
@@ -359,6 +372,9 @@ def _pcm_wav(data):
     if w.bits_per_sample not in (8, 16, 24, 32) or w.channels < 1 or w.sample_rate < 1:
         return None
     return h, w
+
+
+FLOAT_TAGS = (b"fl32", b"FL32", b"fl64", b"FL64")
 
 
 def _float_wav(head):
@@ -1003,7 +1019,7 @@ class AudioSegment(object):
         head = file.read(65536) if data is None else data[:65536]
         own = wav and _pydub_wav(head)
         # the native decoders give 32 bit for what ffmpeg converts to 16 bit, rounded from float and cut from integers
-        narrow = None if not tmp or own else "round" if sniff(head) in ("ogg", "opus") or _float_wav(head) else "cut"
+        narrow = None if not tmp or own else "round" if sniff(head) in ("ogg", "opus") or _float_wav(head) or aifc_tag(head) in FLOAT_TAGS else "cut"
         if close_file:
             file.close()
         # ffmpeg cuts vorbis by packet times that drift from the sample count, only ffmpeg lands on the same sample
@@ -1077,7 +1093,7 @@ class AudioSegment(object):
                         except Exception:
                             pass
 
-        own_formats = ("wav", "flac", "mp3", "ogg", "opus")
+        own_formats = ("wav", "flac", "mp3", "ogg", "opus", "aiff", "aif", "aifc")
         if tried and _ffmpeg.find(cls.converter) is None and (sniff(head) in own_formats or any(is_format(f) for f in own_formats)):
             with open(filename, "rb") if data is None else BytesIO(data) as f:
                 if not needs_ffmpeg(f, head):
@@ -1134,7 +1150,7 @@ class AudioSegment(object):
 
     @classmethod
     def stream(cls, file, chunk_ms=10000, start_second=None, duration=None):
-        """Yields the file in chunk_ms pieces. wav, flac, mp3, ogg and opus only. A path is not loaded whole, a file object or a fifo is."""
+        """Yields the file in chunk_ms pieces. wav, flac, mp3, ogg, opus and aiff only. A path is not loaded whole, a file object or a fifo is."""
         lim = limits()
         filename = None if hasattr(file, "read") else fsdecode(file)
         data = read_file(file, lim) if filename is None else None
@@ -1150,10 +1166,10 @@ class AudioSegment(object):
                 # a missing file or a folder raises its own OSError here
                 with open(filename, "rb") as f:
                     data = f.read(4096)
-            if sniff(data[:4096]) in ("wav", "flac", "mp3", "ogg", "opus") or \
-                    (named or "").lower().endswith((".wav", ".flac", ".mp3", ".ogg", ".opus")):
+            if sniff(data[:4096]) in ("wav", "flac", "mp3", "ogg", "opus", "aiff") or \
+                    (named or "").lower().endswith((".wav", ".flac", ".mp3", ".ogg", ".opus", ".aiff", ".aif", ".aifc")):
                 raise CouldntDecodeError("cant read this file")
-            raise CouldntDecodeError("stream only reads wav, flac, mp3, ogg and opus")
+            raise CouldntDecodeError("stream only reads wav, flac, mp3, ogg, opus and aiff")
         if filename is not None and lim[2] is not None:
             check_size(os.path.getsize(filename), lim)
 
@@ -1325,6 +1341,10 @@ class AudioSegment(object):
         if native and bitrate is not None and format != "wav":
             rate = _bits_per_second(bitrate, format, self.channels, self.converter)
             native = rate is not None
+        if format == "aiff" and own and parameters is None and tags is None and cover is None and not pydub2.strict and \
+                self.sample_width == 2 and 0 < self.frame_rate < 2 ** 31 and self.channels <= 2 and len(pcm) < 2 ** 31 - 64:
+            # 8, 24 and 32 bit audio is turned into 16 bit by ffmpeg, and it adds a channel layout chunk for more than two channels
+            return _write_out(out_f, _aiff_head(pcm, round(self.frame_rate), self.channels), _aiff_big_endian(pcm))
         if native:
             if format not in ("ogg", "opus"):
                 rate = 0

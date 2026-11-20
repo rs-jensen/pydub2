@@ -67,6 +67,16 @@ static size_t in_read(void *u, void *out, size_t n) {
     return n;
 }
 
+// ffmpegs double to s64, it saturates and nan is whatever the cpu does
+static int64_t to_s64(double x) {
+    x *= 9223372036854775808.0;
+    return x >= 9223372036854775808.0 ? INT64_MAX : x <= -9223372036854775808.0 ? INT64_MIN : llrint(x);
+}
+
+static uint32_t be32(const uint8_t *h) {
+    return (uint32_t)h[0] << 24 | (uint32_t)h[1] << 16 | (uint32_t)h[2] << 8 | h[3];
+}
+
 static uint32_t le32(const uint8_t *p) {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
@@ -186,11 +196,9 @@ struct Wav : Dec {
             k = drwav_read_raw(&w, n * frame, out);
             k -= k % frame; // a data size that is not a whole number of frames leaves stray bytes
             for (size_t i = 0; bits == 64 && i < k; i += 8) {
-                // ffmpegs double to s64, it saturates and nan is whatever the cpu does
                 double x;
                 memcpy(&x, out + i, 8);
-                x *= 9223372036854775808.0;
-                int64_t v = x >= 9223372036854775808.0 ? INT64_MAX : x <= -9223372036854775808.0 ? INT64_MIN : llrint(x);
+                int64_t v = to_s64(x);
                 memcpy(out + i, &v, 8);
             }
             if (bits == 8) {
@@ -217,6 +225,198 @@ struct Wav : Dec {
 
     void seek(uint64_t to) {
         drwav_seek_to_pcm_frame(&w, std::min(to, frames));
+    }
+};
+
+static const uint32_t AIFC_V1 = 0xa2805140;
+
+// uncompressed AIFF and AIFF-C. The chunks are walked the way ffmpeg walks them, so a damaged file
+// gives the same frames, and ulaw, alaw and other codecs throw and are left to ffmpeg
+struct Aiff : Dec {
+    uint64_t start = 0, end = 0, at = 0, pos = 0;
+    size_t bytes = 0; // per sample in the file
+    bool little = false, flt = false, eof = false, lost = false;
+    std::vector<uint8_t> tmp;
+
+    // big endian, zeros past the end of the file and an eof flag after a read that came up short
+    uint64_t get(size_t n) {
+        uint8_t b[8] = {0};
+        size_t got = pos < in.len && seek_to(&in, pos) ? in_read(&in, b, n) : 0;
+        eof = eof || got < n;
+        pos += got;
+        uint64_t v = 0;
+        for (size_t i = 0; i < n; i++) {
+            v = v << 8 | b[i];
+        }
+        return v;
+    }
+
+    // inside the file a skip leaves the eof as it is. ffmpeg reads on to get over a short skip, so one that
+    // runs off the end by less than its buffer is an error at the next chunk, a longer one is a seek
+    void skip(int64_t n) {
+        pos += n;
+        if (pos > in.len) {
+            lost = lost || pos - in.len <= 32768;
+            eof = false;
+        }
+    }
+
+    void init() {
+        if (get(4) != 0x464f524d) { // FORM
+            fail();
+        }
+        // ffmpeg keeps sizes in an int: one over 2 GB is read as 2 GB - 1 and the sums wrap
+        uint32_t form = (uint32_t)get(4);
+        form = (int32_t)form < 0 ? 0x7fffffff : form;
+        uint32_t version = get(4) == 0x41494643 ? AIFC_V1 : 0; // AIFC
+        int32_t left = (int32_t)(form - 4);
+        uint32_t sub = 0;
+        uint64_t data = 0, data_end = 0;
+        // a million chunks at most, past that it is junk
+        for (int i = 0; left > 0 && i < 1000000; i++) {
+            if (lost) {
+                fail();
+            }
+            uint64_t from = pos;
+            uint32_t tag = (uint32_t)get(4), size = (uint32_t)get(4);
+            // a header cut in two is a chunk of nothing and an error after it, no header at all is the end of the file
+            if (pos > from && pos - from < 8) {
+                lost = true;
+            } else if (eof) {
+                // the end of the file before the end of FORM is fine once the sound was seen
+                if (!data || !bytes) {
+                    fail();
+                }
+                break;
+            }
+            size = (int32_t)size < 0 ? 0x7fffffff : size;
+            left = (int32_t)((uint32_t)left - (size + 8));
+            if (tag == 0x434f4d4d) { // COMM
+                uint64_t n = size; // no pad byte after this one either
+                if (n < 18) {
+                    fail();
+                }
+                channels = (size_t)get(2);
+                uint32_t count = (uint32_t)get(4);
+                unsigned bits = (unsigned)get(2);
+                int exp = (int)get(2) - (16383 + 63);
+                uint64_t val = get(8);
+                if (exp < -63 || exp > 63 || count > 0x7fffffff) { // ffmpeg refuses 2^31 frames and more
+                    fail();
+                }
+                // the rate is kept in 32 bits and has to be positive there
+                uint64_t r = exp >= 0 ? val << exp : (val + (1ull << (-exp - 1))) >> -exp;
+                if ((int32_t)(uint32_t)r < 1) {
+                    fail();
+                }
+                rate = (int)(uint32_t)r;
+                n -= 18;
+                if (n < 4) {
+                    version = 0;
+                } else if (version == AIFC_V1) {
+                    sub = (uint32_t)get(4);
+                    n -= 4;
+                }
+                skip((int64_t)n);
+                // plain pcm has its width from the bits, aifc from the tag
+                bool plain = version != AIFC_V1 || sub == 0x4e4f4e45 || sub == 0x74776f73; // NONE twos
+                little = !plain && sub == 0x736f7774;                                        // sowt
+                bool f32 = sub == 0x666c3332 || sub == 0x464c3332, f64 = sub == 0x666c3634 || sub == 0x464c3634;
+                flt = !plain && (f32 || f64);
+                if (plain) {
+                    bytes = bits > 32 ? 0 : bits <= 8 ? 1 : bits <= 16 ? 2 : bits <= 24 ? 3 : 4;
+                } else if (little) {
+                    bytes = 2; // whatever the bits say
+                } else if (flt) {
+                    bytes = f32 ? 4 : 8;
+                } else {
+                    fail();
+                }
+                if (!bytes || !channels) {
+                    fail();
+                }
+                width = flt ? bytes : bytes == 3 ? 4 : bytes;
+                // ffmpeg takes 512 channels of 16 bit and 64 of anything else, it refuses more
+                if (channels > (width == 2 ? 512 : 64)) {
+                    fail();
+                }
+            } else if (tag == 0x46564552) { // FVER
+                version = (uint32_t)get(4);
+            } else if (tag == 0x4348414e) { // CHAN
+                if (size < 12) {
+                    fail();
+                }
+                skip((int64_t)size + (size & 1));
+            } else if (tag == 0x53534e44) { // SSND, no pad byte after this one
+                if (size < 8) {
+                    fail();
+                }
+                data_end = pos + size;
+                uint64_t off = get(4);
+                get(4);
+                data = pos + off;
+                skip((int64_t)size - 8);
+            } else {
+                skip((int64_t)size + (size & 1));
+            }
+        }
+        if (!bytes || !channels) {
+            fail();
+        }
+        start = at = data;
+        end = std::min(data_end, in.len);
+        frames = end > start ? (end - start) / (bytes * channels) : 0;
+        exact = true;
+    }
+
+    size_t read(char *out, size_t n) {
+        size_t fw = bytes * channels, done = 0;
+        n = (size_t)std::min<uint64_t>(n, at < end ? (end - at) / fw : 0);
+        tmp.resize(std::max<size_t>(fw, 1 << 14));
+        while (done < n) {
+            size_t k = std::min(n - done, tmp.size() / fw), c = k * channels;
+            if (!seek_to(&in, at) || in_read(&in, tmp.data(), k * fw) < k * fw) {
+                break;
+            }
+            at += k * fw;
+            const uint8_t *p = tmp.data();
+            char *o = out + done * channels * width;
+            for (size_t i = 0; i < c; i++, p += bytes) {
+                if (flt && bytes == 4) {
+                    uint32_t u = be32(p);
+                    float f;
+                    memcpy(&f, &u, 4);
+                    put(o + i * 4, &f, 1, 4);
+                } else if (flt) {
+                    uint64_t u = (uint64_t)be32(p) << 32 | be32(p + 4);
+                    double x;
+                    memcpy(&x, &u, 8);
+                    int64_t v = to_s64(x);
+                    memcpy(o + i * 8, &v, 8);
+                } else if (bytes == 1) {
+                    o[i] = (char)p[0];
+                } else if (bytes == 2) {
+                    o[i * 2] = (char)p[little ? 0 : 1];
+                    o[i * 2 + 1] = (char)p[little ? 1 : 0];
+                } else if (bytes == 3) {
+                    // pydub pads the low byte with 00 or ff, not zeros
+                    o[i * 4] = (int8_t)p[0] < 0 ? '\xff' : '\0';
+                    o[i * 4 + 1] = (char)p[2];
+                    o[i * 4 + 2] = (char)p[1];
+                    o[i * 4 + 3] = (char)p[0];
+                } else {
+                    for (int j = 0; j < 4; j++) {
+                        o[i * 4 + j] = (char)p[3 - j];
+                    }
+                }
+            }
+            done += k;
+        }
+        return done * channels * width;
+    }
+
+    void seek(uint64_t to) {
+        at = start + std::min(to, frames) * bytes * channels;
     }
 };
 
@@ -304,10 +504,6 @@ struct Flac : Dec {
         held = lost = false;
     }
 };
-
-static uint32_t be32(const uint8_t *h) {
-    return (uint32_t)h[0] << 24 | (uint32_t)h[1] << 16 | (uint32_t)h[2] << 8 | h[3];
-}
 
 // ffmpegs header check. its parser takes no free format frames
 static bool mp3_head(const uint8_t *h) {
@@ -1236,6 +1432,8 @@ static std::unique_ptr<Decoder> detect(Input in) {
     std::unique_ptr<Dec> d;
     if (len >= 12 && (!memcmp(h, "RIFF", 4) || !memcmp(h, "RF64", 4)) && !memcmp(h + 8, "WAVE", 4)) {
         d.reset(new Wav);
+    } else if (len >= 12 && !memcmp(h, "FORM", 4) && (!memcmp(h + 8, "AIFF", 4) || !memcmp(h + 8, "AIFC", 4))) {
+        d.reset(new Aiff);
     } else if (len >= 4 && !memcmp(h, "fLaC", 4)) {
         d.reset(new Flac);
     } else if (ogg_has(h, len, "OpusHead", 8)) {
